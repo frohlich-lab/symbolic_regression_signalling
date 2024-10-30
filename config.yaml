@@ -1,0 +1,23 @@
+# config.yaml
+data_type: "dynamic"  # Options: "dynamic" or "static"
+
+# Feature lists for static and dynamic datasets
+features:
+  static: "k_off,k_D,k_cat,tK,P_u"  # Comma-separated list of features for static data
+  dynamic: "k_off,k_D,k_cat,tK,P_u,k_inact"  # Comma-separated list of features for dynamic data
+
+# Target feature for the dataset
+target_feature: "kcatcg"  # Target feature to be placed as the last column of the dataset
+
+# Timeout duration in seconds (e.g., 600 seconds = 10 minutes)
+timeout_duration: 600
+
+# Dataset sizes for each method
+dataset_sizes:
+  pysindy: 1000       # PySINDy needs around 100-1000 samples
+  aifeynman: 5000     # AI Feynman needs around 500-5000 samples
+  dso: 10000          # DSO needs around 2000-10000 samples
+  kan: 10000          # KAN needs around 2000-10000 samples
+  pysr: 10000         # PySR needs around 1000-10000 samples
+
+data_proportion: 0.2  # Proportion of data to be used for integrator and plot method

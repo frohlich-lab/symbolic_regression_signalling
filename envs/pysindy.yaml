@@ -1,0 +1,10 @@
+name: pysindy_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.9
+  - numpy
+  - pandas
+  - sympy
+  - tqdm
+  - pysindy

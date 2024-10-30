@@ -1,0 +1,13 @@
+name: base_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.9
+  - numpy
+  - pandas
+  - sympy
+  - matplotlib
+  - pip
+  - pip:
+      - jax
+      - diffrax
