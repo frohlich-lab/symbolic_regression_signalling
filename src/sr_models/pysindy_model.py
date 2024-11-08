@@ -5,8 +5,13 @@ import argparse
 import pysindy as ps
 from tqdm import tqdm
 
+
+# Parameters for trajectory selected from data
+N_SAMPLE = 0
+N_TIME_STEPS = 22
 # Hyperparameters for SINDy-PI
 N_ITERATIONS = 100
+ALPHA = 0.1
 
 def load_dataset(file_path, dataset_size=None, features=None):
     """Load dataset from a CSV file, sample it if a dataset size is specified, and select specific features if provided."""
@@ -38,17 +43,20 @@ def convert_to_symbolic(model, input_features):
 def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
     """Run SINDy-PI to find the best formula, saving progress periodically and converting the output to symbolic form."""
     # Split data into inputs (X) and labels (y)
-    X = data.iloc[:, :-1].values
-    y = data.iloc[:, -1].values
+    sample = data.iloc[N_SAMPLE*N_TIME_STEPS:(N_SAMPLE+1)*N_TIME_STEPS, :].reset_index()
+    X = sample.iloc[:, :-1].values
+    y = sample.iloc[:, -1].values
+
+    t = np.log(np.array(data.index[:-1]) + 1)
 
     # Initialize the SINDy-PI model
     pde_lib = ps.PDELibrary(
-        function_library=ps.PolynomialLibrary(),
+        library_functions=ps.PolynomialLibrary(),
         temporal_grid=t,
         derivative_order=1,
         implicit_terms=True,
     )
-    optimizer = ps.STLSQ(threshold=alpha)
+    optimizer = ps.STLSQ(threshold=ALPHA)
     model = ps.SINDy(feature_library=pde_lib, 
                     optimizer=optimizer, 
                     feature_names=['P_p', 'tK', 'P_u'],

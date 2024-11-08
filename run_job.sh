@@ -10,6 +10,7 @@
 # Load any modules or activate your environment here
 ml Anaconda3
 ml snakemake
+ml Coreutils
 
 # Disable SSL verification for Git
 export GIT_SSL_NO_VERIFY=1

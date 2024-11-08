@@ -1,3 +1,11 @@
 data/
 .snakemake/
 model/
+error_file.err
+output_file.out
+results/
+args.dat
+mystery.dat
+results_gen_sym.dat
+results.dat
+qaz.dat

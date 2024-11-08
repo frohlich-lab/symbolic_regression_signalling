@@ -20,10 +20,10 @@ K = 3  # Degree of the polynomial features
 THRESHOLD = 0.01  # Threshold for pruning the KAN model
 
 # Training Configuration
-OPTIMIZER = "BFGS"  # Optimizer used for training the KAN model
+OPTIMIZER = "LBFGS"  # Optimizer used for training the KAN model
 STEPS = 20  # Number of optimization steps to take during training
-LAMB = 0.1  # Regularization parameter for the KAN model
-LAMB_ENTROPY = 10  # Entropy regularization parameter for the KAN model
+LAMB = 0.01  # Regularization parameter for the KAN model
+LAMB_ENTROPY = 10.  # Entropy regularization parameter for the KAN model
 
 # Function Library
 LIBRARY = ['x', 'x^2', 'x^3', 'exp', 'log', 'abs']  # Library of functions to use in the KAN model
@@ -89,22 +89,33 @@ def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
                 seed=SEED)
 
     with tqdm(total=n_iterations, desc="KAN Model Training Progress") as pbar:
-        for iterations in range(N_ITERATIONS):
-            model.fit(dataset_dict, 
-                      opt=OPTIMIZER, 
-                      steps=STEPS, 
-                      lamb=LAMB,
-                      lamb_entropy=LAMB_ENTROPY)  # Perform a training step
+        for iteration in range(N_ITERATIONS):
+            # Perform a training step
+            results = model.fit(
+                dataset_dict,
+                opt=OPTIMIZER,
+                steps=STEPS,
+                lamb=LAMB,
+                lamb_entropy=LAMB_ENTROPY
+            )
             
-            model = model.prune(threshold=THRESHOLD)  # Prune the model to remove unnecessary terms
-            
-            pbar.update(1)
+            # Prune the model to remove unnecessary terms
+            model = model.prune(node_th=THRESHOLD, edge_th=THRESHOLD)
 
-    model.auto_symbolic(lib=LIBRARY)
-    best_formula = model.symbolic_formula(3)[0][0]
-    # Final save of the best formula after all epochs
-    with open(temp_file, 'w') as f:
-        f.write(str(best_formula))
+            # Extract the symbolic formula
+            model.auto_symbolic(lib=LIBRARY)
+            print("Output of symbolic_formula:", model.symbolic_formula())
+            current_formula = model.symbolic_formula()[0][0]
+            loss_value = results['test_loss'][-1]
+            
+            # Save the current formula to the temporary file
+            with open(temp_file, 'a') as f:
+                f.write(f"Iteration {iteration + 1}:\n")
+                f.write(f"Formula: {current_formula}\n")
+                f.write(f"Loss: {loss_value}\n\n")
+            
+            # Update the progress bar
+            pbar.update(1)
 
 def main():
     parser = argparse.ArgumentParser(description='Find the best formula using KAN')

@@ -3,15 +3,16 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.9
+  - python=3.10
   - numpy
   - pandas
   - tqdm
-  - pytorch>=1.4.0
   - matplotlib
+  - pytorch>=1.4.0
   - scipy
   - sortedcontainers
   - gfortran
   - pip
+  - scikit-learn
   - pip:
-      - sympy==1.4
+      - sympy

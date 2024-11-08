@@ -1,15 +1,18 @@
 import numpy as np
-import pandas as pd
 import argparse
+import pandas as pd
 from aifeynman import S_run_aifeynman
 import os
+import shutil
 
 # Hyperparameters for AI Feynman
+OPERATORS = '+*-D~ILEA'  # Operators used in the symbolic regression
 BF_TRY_TIME = 30  # Maximum time (in seconds) allowed for the brute-force search step
 POLYFIT_DEGREE = 4  # Degree of the polynomial used in the polynomial fitting stage
 NN_EPOCHS = 40  # Number of training epochs for the neural network regression stage
-DATA_PATHDIR = './'  # Path to the directory containing the text format dataset
+DATA_PATHDIR = './data/datasets/'  # Path to the directory containing the text format dataset
 TEST_PERCENTAGE = 20  # Percentage of data to use for testing
+FILENAME = 'mystery.txt'  # Name of the dataset file
 
 def load_dataset(file_path, dataset_size=None, features=None):
     """Load dataset from a CSV file, sample it if a dataset size is specified, and select specific features if provided."""
@@ -33,15 +36,20 @@ def find_best_formula(data, temp_file, features):
     y = data.iloc[:, -1].values
 
     data_array = np.concatenate((X, y[:, np.newaxis]), axis=1)
-    np.savetxt(DATA_PATHDIR + 'mystery_mm.txt', data_array)
+    np.savetxt(DATA_PATHDIR + 'mystery.txt', data_array)
+    np.savetxt(DATA_PATHDIR + '7ops.txt', np.array([OPERATORS]), fmt='%s')
+
+    # Clear any existing temporary results files
+    open('./data/temp_results/temp_formula_aifeynman_dynamic.txt', 'w').close()
+    open('./data/temp_results/temp_formula_aifeynman_static.txt', 'w').close()
 
     feature_list = features.split(',')
 
     try:
-        # Run the AI Feynman process and save progress to the specified temporary file
+        # Run the AI Feynman process
         S_run_aifeynman.run_aifeynman(
             pathdir=DATA_PATHDIR,
-            filename=temp_file,  # Use the temporary file specified by Snakemake
+            filename=FILENAME,  
             BF_try_time=BF_TRY_TIME,
             BF_ops_file_type='7ops.txt',
             polyfit_deg=POLYFIT_DEGREE,
@@ -50,8 +58,21 @@ def find_best_formula(data, temp_file, features):
             test_percentage=TEST_PERCENTAGE,
         )
         
+        # Copy the solution file to the specified temp file
+        copy_solution_to_temp('results/solution_'+FILENAME, temp_file)
+
     except TimeoutError:
         print("AI Feynman process timed out.")
+
+def copy_solution_to_temp(solution_file, temp_file):
+    """Copy the solution file to the specified temp file."""
+    try:
+        shutil.copy(solution_file, temp_file)
+        print(f"Solution file copied to {temp_file}")
+    except FileNotFoundError:
+        print("Solution file not found. Ensure AI Feynman completed successfully.")
+    except Exception as e:
+        print(f"An error occurred while copying the file: {e}")
 
 def main():
     parser = argparse.ArgumentParser(description='Find the best formula using AI Feynman')

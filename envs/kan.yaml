@@ -10,8 +10,8 @@ dependencies:
   - numpy
   - pandas
   - sympy
-  - tqdm
   - pyyaml
+  - tqdm
   - matplotlib
   - pip  # Use pip only for packages that are unavailable in conda
   - pip:

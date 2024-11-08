@@ -7,4 +7,6 @@ dependencies:
   - pandas
   - sympy
   - tqdm
-  - pysindy
+  - pip
+  - pip:
+    - pysindy==1.7.5

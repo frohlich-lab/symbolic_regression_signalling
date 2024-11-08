@@ -1,20 +1,25 @@
 # Global configuration for feature selection, data type, dataset sizes, and timeout duration
 configfile: "config.yaml"
 
-# get the specific data type from the configuration file
-data_type = config["data_type"]  # Example: data_type: 'static'
+# Define data type from configuration
+data_type = config["data_type"]  # Example: data_type: 'dynamic'
+models = config["models"] # Example: models: ['pysindy', 'aifeynman', 'dso', 'kan', 'pysr']
+output_extension = config["output_extension"]  # Example: output_extension: {'pysindy': 'txt', 'aifeynman': 'txt', 'dso': 'txt', 'kan': 'txt', 'pysr': 'csv'}
+features = config["features"][data_type]  
 
+# Precompute input and output paths with the correct file extensions
+temp_files = [f"data/temp_results/temp_formula_{model}_{data_type}.{output_extension[model]}" for model in models]
+formula_files = [f"data/results/formula_{model}_{data_type}.txt" for model in models]
+
+# Define the output files expected by the workflow
 rule all:
     input:
-        f"data/results/formula_pysindy_{data_type}.txt",
-        f"data/results/formula_aifeynman_{data_type}.txt",
-        f"data/results/formula_dso_{data_type}.txt",
-        f"data/results/formula_kan_{data_type}.txt",
-        f"data/results/formula_pysr_{data_type}.txt",
+        temp_files,
         "data/plots/results_plot.png",
         "data/plots/integrated_results_plot.png",
         "data/results/loss_comparison.csv"
 
+# Preprocessing rule to merge datasets
 rule preprocessing:
     input:
         train=f"../base_models/two_step_enzyme/output_simu_data/train_{data_type}_data.csv",
@@ -29,163 +34,130 @@ rule preprocessing:
     shell:
         "python src/preprocessing.py --train {input.train} --test {input.test} --valid {input.valid} --output {output} --target_feature {params.target_feature}"
 
+# Function to generate shell command with timeout and additional installations
+def symbolic_regression_rule(model, dataset, dataset_size, features, temp_file):
+    install_cmds = {
+        "aifeynman": "pip install --no-deps aifeynman",
+        "dso": (
+            "pip install absl-py==0.7.0 && "
+            "pip install numpy==1.18 && "
+            "pip install --no-deps 'git+https://github.com/dso-org/deep-symbolic-optimization.git@master#egg=dso&subdirectory=dso/'"
+        ),
+    }
+    install_command = install_cmds.get(model, "")
+    separator = ";" if install_command else ""
+    return f"""
+        {install_command}{separator} gtimeout {config["timeout_duration"]} python src/sr_models/{model}_model.py --dataset {dataset} --dataset_size {dataset_size} --features {features} --temp_file {temp_file} || true
+    """
+
+# PySINDy rule for symbolic regression
 rule pysindy:
     input:
         f"data/datasets/{data_type}_merged.csv"
     output:
-        save=f"data/results/formula_pysindy_{data_type}.txt",
         temp_file=temporary(f"data/temp_results/temp_formula_pysindy_{data_type}.txt")
     conda:
         "envs/pysindy.yaml"
     params:
         dataset_size=config["dataset_sizes"]["pysindy"],
-        features=config["features"][data_type]
-    resources:
-        time=config["timeout_duration"]
+        features=features
     shell:
-        """
-        # Run the PySINDy model with specified parameters and save the best formula to a temporary file
-        python src/sr_models/pysindy_model.py --dataset {input} --dataset_size {params.dataset_size} --features {params.features} --temp_file {output.temp_file}
+        symbolic_regression_rule("pysindy", "{input}", "{params.dataset_size}", "{params.features}", "{output.temp_file}")
 
-        # get the best formula specific to PySINDy from the temporary file
-        python src/get_best_formula.py --hall_of_fame {output.temp_file} --save {output.save} --method pysindy
-        """
-
+# Repeat similar rule structure for other models
 rule aifeynman:
     input:
         f"data/datasets/{data_type}_merged.csv"
     output:
-        save=f"data/results/formula_aifeynman_{data_type}.txt",
         temp_file=temporary(f"data/temp_results/temp_formula_aifeynman_{data_type}.txt")
     conda:
         "envs/aifeynman.yaml"
     params:
         dataset_size=config["dataset_sizes"]["aifeynman"],
-        features=config["features"][data_type],
-        timeout=config["timeout_duration"]
+        features=features
     shell:
-        """
-        # Install the AI Feynman model from PyPI without dependencies
-        pip install --no-deps aifeynman
-
-        # Run the AI Feynman model with a timeout using the 'timeout' command
-        timeout {params.timeout} python src/sr_models/aifeynman_model.py --dataset {input} --dataset_size {params.dataset_size} --features {params.features} --temp_file {output.temp_file} || true
-
-        # get the best formula specific to AI Feynman from the temporary file
-        python src/get_best_formula.py --hall_of_fame {output.temp_file} --save {output.save} --method aifeynman
-        """
+        symbolic_regression_rule("aifeynman", "{input}", "{params.dataset_size}", "{params.features}", "{output.temp_file}")
 
 rule dso:
     input:
         f"data/datasets/{data_type}_merged.csv"
     output:
-        save=f"data/results/formula_dso_{data_type}.txt",
-        temp_file=temporary(f"data/temp_results/dso_ExperimnetName_0_hof.csv")
+        temp_file=temporary(f"data/temp_results/temp_formula_dso_{data_type}.txt")
     conda:
         "envs/dso.yaml"
     params:
         dataset_size=config["dataset_sizes"]["dso"],
-        features=config["features"][data_type],
-        timeout=config["timeout_duration"]
+        features=features
     shell:
-        """
-        # Install the DSO model from the GitHub repository 
-        pip install absl-py==0.7.0
-        pip install numpy==1.18
-        pip install --no-deps "git+https://github.com/dso-org/deep-symbolic-optimization.git@master#egg=dso&subdirectory=dso/"
-        python -c "from dso.task import set_task"
-        # Run the DSO model with a timeout using the 'timeout' command
-        timeout {params.timeout} python src/sr_models/dso_model.py --dataset {input} --dataset_size {params.dataset_size} --features {params.features} --temp_file {output.temp_file} || true
-
-        # get the best formula specific to DSO from the temporary file
-        python src/get_best_formula.py --hall_of_fame {output.temp_file} --save {output.save} --method dso
-        """
+        symbolic_regression_rule("dso", "{input}", "{params.dataset_size}", "{params.features}", "{output.temp_file}")
 
 rule kan:
     input:
         f"data/datasets/{data_type}_merged.csv"
     output:
-        save=f"data/results/formula_kan_{data_type}.txt",
         temp_file=temporary(f"data/temp_results/temp_formula_kan_{data_type}.txt")
     conda:
         "envs/kan.yaml"
     params:
         dataset_size=config["dataset_sizes"]["kan"],
-        features=config["features"][data_type],
-        timeout=config["timeout_duration"]
+        features=features
     shell:
-        """
-        # Run the KAN model with a timeout using the 'timeout' command
-        timeout {params.timeout} python src/sr_models/kan_model.py --dataset {input} --dataset_size {params.dataset_size} --features {params.features} --temp_file {output.temp_file} || true
+        symbolic_regression_rule("kan", "{input}", "{params.dataset_size}", "{params.features}", "{output.temp_file}")
 
-        # get the best formula specific to KAN from the temporary file
-        python src/get_best_formula.py --hall_of_fame {output.temp_file} --save {output.save} --method kan
-        """
-        
 rule pysr:
     input:
         f"data/datasets/{data_type}_merged.csv"
     output:
-        save=f"data/results/formula_pysr_{data_type}.txt",
-        temp_file=temporary(f"data/temp_results/temp_formula_pysr_{data_type}.txt")
+        temp_file=temporary(f"data/temp_results/temp_formula_pysr_{data_type}.csv")
     conda:
         "envs/pysr.yaml"
     params:
         dataset_size=config["dataset_sizes"]["pysr"],
-        features=config["features"][data_type],
-        timeout=config["timeout_duration"]
+        features=features
+    shell:
+        symbolic_regression_rule("pysr", "{input}", "{params.dataset_size}", "{params.features}", "{output.temp_file}")
+
+# Rule to get the best formula from the temporary files for all models
+rule get_best_formula:
+    input:
+        temp_files=temp_files
+    output:
+        formula_files=formula_files
+    conda:
+        "envs/base.yaml"
     shell:
         """
-        # Run the PySR model with a timeout using the 'timeout' command
-        timeout {params.timeout} python src/sr_models/pysr_model.py --dataset {input} --dataset_size {params.dataset_size} --features {params.features} --temp_file {output.temp_file} || true
-
-        # get the best formula specific to PySR from the temporary file
-        python src/get_best_formula.py --hall_of_fame {output.temp_file} --save {output.save} --method pysr
+        python src/get_best_formula.py --method {models} --hall_of_fame {input} --save {output} --features {features}
         """
 
+# Rule to integrate and plot results from all models
 rule integrate_and_plot_results:
     input:
-        dataset=f"data/datasets/{data_type}_merged.csv",
-        formulas=[
-            f"data/results/formula_pysindy_{data_type}.txt",
-            f"data/results/formula_aifeynman_{data_type}.txt",
-            f"data/results/formula_dso_{data_type}.txt",
-            f"data/results/formula_kan_{data_type}.txt",
-            f"data/results/formula_pysr_{data_type}.txt"
-        ]
+        dataset=lambda wildcards: f"data/datasets/{data_type}_merged.csv" if data_type == "dynamic" else None,
+        formulas=formula_files if data_type == "dynamic" else None
     output:
         csv="data/results/loss_comparison.csv",
         plot="data/plots/integrated_results_plot.png"
+    conda:
+        "envs/base.yaml"
     params:
         methods=["pysindy", "aifeynman", "dso", "kan", "pysr"],
         data_proportion=config["data_proportion"],
-        features=config["features"][config["data_type"]],
-        trajectory_column="trajectory_id",
-    run:
-        shell(
-            "python src/integrate_and_plot_methods.py "
-            "--dataset {input.dataset} "
-            "--formulas {input.formulas} "
-            "--methods {params.methods} "
-            "--data_proportion {params.data_proportion} "
-            "--trajectory_column {params.trajectory_column} "
-            "--output {output.csv} "
-            "--plot {output.plot}"
-        )
+        features=features,
+        trajectory_column="trajectory_id"
+    shell:
+        """
+        python src/integrate_and_plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --methods {params.methods} --data_proportion {params.data_proportion} --trajectory_column {params.trajectory_column} --output {output.csv} --plot {output.plot}
+        """
 
+# Rule to generate a comparison plot of all methods
 rule plot_methods:
     input:
         dataset=f"data/datasets/{data_type}_merged.csv",
-        formulas=[
-            f"data/results/formula_pysindy_{data_type}.txt",
-            f"data/results/formula_aifeynman_{data_type}.txt",
-            f"data/results/formula_dso_{data_type}.txt",
-            f"data/results/formula_kan_{data_type}.txt",
-            f"data/results/formula_pysr_{data_type}.txt"
-        ]
-    conda:
-        "envs/base.yaml"
+        formulas=formula_files
     output:
         "data/plots/results_plot.png"
+    conda:
+        "envs/base.yaml"
     shell:
         "python src/plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --output {output}"

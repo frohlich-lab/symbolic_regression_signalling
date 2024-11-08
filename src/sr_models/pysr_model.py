@@ -58,7 +58,7 @@ def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
             elementwise_loss=LOG_SPACE_LOSS,
             equation_file=temp_file  # PySR saves its best formulas in this file
         )
-        model.fit(X, y, progress=True)
+        model.fit(X, y)
 
     except TimeoutError:
         print("PySR process timed out.")

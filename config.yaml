@@ -1,6 +1,17 @@
 # config.yaml
 data_type: "dynamic"  # Options: "dynamic" or "static"
 
+# Model selection
+models: ["aifeynman"] # ["pysindy", "aifeynman", "dso", "kan", "pysr"]
+
+output_extension: {
+    "pysindy": "txt",
+    "aifeynman": "txt",
+    "dso": "txt",
+    "kan": "txt",
+    "pysr": "csv"  # pysr specifically uses csv
+}
+
 # Feature lists for static and dynamic datasets
 features:
   static: "k_off,k_D,k_cat,tK,P_u"  # Comma-separated list of features for static data
@@ -9,8 +20,8 @@ features:
 # Target feature for the dataset
 target_feature: "kcatcg"  # Target feature to be placed as the last column of the dataset
 
-# Timeout duration in seconds (e.g., 600 seconds = 10 minutes)
-timeout_duration: 600
+# Timeout duration in seconds (e.g., 2 min * 60 = 120 seconds)
+timeout_duration: 280
 
 # Dataset sizes for each method
 dataset_sizes:
