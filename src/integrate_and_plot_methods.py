@@ -1,3 +1,5 @@
+"""This module provides methods for integrating ODE systems and calculating loss for symbolic regression in signaling pathways."""
+
 import numpy as np
 import jax.numpy as jnp
 import pandas as pd
@@ -24,6 +26,18 @@ solver = Kvaerno3()
 solver2 = Kvaerno3()
 
 def load_dataset(file_path, features=None, trajectory_column=None, data_proportion=1.0):
+    """
+    Load dataset from a CSV file.
+
+    Args:
+        file_path (str): Path to the CSV file.
+        features (str, optional): Comma-separated list of features to use. Defaults to None.
+        trajectory_column (str, optional): Column name that identifies different trajectories. Defaults to None.
+        data_proportion (float, optional): Proportion of the dataset to use. Defaults to 1.0.
+
+    Returns:
+        pd.DataFrame: Loaded dataset.
+    """
     print("Loading dataset...")
     data = pd.read_csv(file_path)
 
@@ -37,6 +51,18 @@ def load_dataset(file_path, features=None, trajectory_column=None, data_proporti
     return data
 
 def integrate_steady_state(ode_term, initial_values, params, solver):
+    """
+    Integrate the ODE system to steady state.
+
+    Args:
+        ode_term (ODETerm): ODE term representing the system.
+        initial_values (jnp.array): Initial values for the ODE system.
+        params (tuple): Parameters for the ODE system.
+        solver (Kvaerno3): Solver to use for integration.
+
+    Returns:
+        Solution or None: Solution object if successful, None otherwise.
+    """
     print("Integrating steady state...")
     try:
         solution_ss = diffeqsolve(
@@ -63,6 +89,19 @@ def integrate_steady_state(ode_term, initial_values, params, solver):
         return None
 
 def integrate_simulation(ode_term, initial_values, params, solver, ts):
+    """
+    Integrate the ODE system for simulation.
+
+    Args:
+        ode_term (ODETerm): ODE term representing the system.
+        initial_values (jnp.array): Initial values for the ODE system.
+        params (tuple): Parameters for the ODE system.
+        solver (Kvaerno3): Solver to use for integration.
+        ts (jnp.array): Time points for the simulation.
+
+    Returns:
+        Solution or None: Solution object if successful, None otherwise.
+    """
     print("Integrating simulation...")
     try:
         solution_simu = diffeqsolve(
@@ -84,7 +123,55 @@ def integrate_simulation(ode_term, initial_values, params, solver, ts):
         print("Simulation integration failed.")
         return None
 
+def calculate_loss(groundtruth, predictions):
+    """
+    Calculate the loss between ground truth and predictions.
+
+    Args:
+        groundtruth (list): List of ground truth arrays.
+        predictions (jnp.array): Array of predictions.
+
+    Returns:
+        list: List of loss values for each variable.
+    """
+    loss = []
+    for gt, pred in zip(groundtruth, predictions.T):
+        mse = jnp.mean((gt - pred) ** 2)
+        log_mse = jnp.log(mse + 1e-10)
+        loss.append(log_mse)
+    return loss
+
+def plot_log_mse(loss_results, plot_path):
+    """
+    Plot the log MSE for each method.
+
+    Args:
+        loss_results (dict): Dictionary of method names and their log MSE values.
+        plot_path (str): Path to save the plot.
+    """
+    methods = list(loss_results.keys())
+    log_mse_values = list(loss_results.values())
+
+    plt.figure(figsize=(10, 6))
+    plt.bar(methods, log_mse_values, color='skyblue')
+    plt.xlabel('Methods')
+    plt.ylabel('Log MSE')
+    plt.title('Log MSE for Different Methods')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(plot_path)
+    plt.close()
+
 def integrate_and_calculate_loss(data, formulas, output_path, plot_path):
+    """
+    Integrate ODE systems and calculate loss for multiple methods.
+
+    Args:
+        data (pd.DataFrame): Dataset containing the conditions and initial values.
+        formulas (dict): Dictionary of method names and their corresponding formula file paths.
+        output_path (str): Path to save the loss results.
+        plot_path (str): Path to save the generated plot.
+    """
     print("Starting integration and loss calculation for all methods...")
     loss_results = {}
 
@@ -172,6 +259,9 @@ def integrate_and_calculate_loss(data, formulas, output_path, plot_path):
     print("Integration and loss calculation completed for all methods.")
 
 def main():
+    """
+    Main function to parse arguments and run the integration and loss calculation.
+    """
     parser = argparse.ArgumentParser(description='Integrate ODE system, calculate loss, and plot results using multiple formulas.')
     parser.add_argument('--dataset', required=True, help='Path to the dataset CSV file')
     parser.add_argument('--features', type=str, help='Comma-separated list of features to use from the dataset')

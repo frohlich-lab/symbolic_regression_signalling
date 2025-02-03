@@ -1,8 +1,22 @@
+"""This module provides functionality to merge and preprocess train, test, and validation datasets."""
+
 import argparse
 import pandas as pd
 
 def merge_and_preprocess_datasets(train_path, test_path, valid_path, output_path, target_feature):
-    """Merge train, test, and validation datasets into a single file, preprocess the data, and move the target feature to the last column."""
+    """
+    Merge train, test, and validation datasets into a single file, preprocess the data, and move the target feature to the last column.
+
+    Parameters:
+    train_path (str): Path to the train dataset CSV file.
+    test_path (str): Path to the test dataset CSV file.
+    valid_path (str): Path to the validation dataset CSV file.
+    output_path (str): Path to the output merged dataset CSV file.
+    target_feature (str): Name of the target feature to move to the last column.
+
+    Returns:
+    None
+    """
     # Load the datasets
     train_data = pd.read_csv(train_path)
     test_data = pd.read_csv(test_path)
@@ -12,7 +26,7 @@ def merge_and_preprocess_datasets(train_path, test_path, valid_path, output_path
     merged_data = pd.concat([train_data, test_data, valid_data])
 
     # Rename columns based on the given mapping
-    merged_data = merged_data.rename({
+    column_mapping = {
         'K(p=None)': 'K',
         "P(phospho='u', k=None)": 'P_u',
         "P(phospho='p', k=None)": 'P_p',
@@ -21,13 +35,10 @@ def merge_and_preprocess_datasets(train_path, test_path, valid_path, output_path
         "kD_substrate": "k_D",
         "kcat": "k_cat",
         "kinact": "k_inact",
-        'K(p=None)': 'K',
-        "P(phospho='u', k=None)":'P_u',
-        "P(phospho='p', k=None)":'P_phospho_p_k_none',
-        "K(p=1) % P(phospho='u', k=1)":'KPu',
-        "dP()":'dP',
-        "dK()":'dK',
-    }, axis=1)
+        "dP()": 'dP',
+        "dK()": 'dK',
+    }
+    merged_data = merged_data.rename(column_mapping, axis=1)
 
     # Create a new column 'tK' as the sum of 'K' and 'KPu'
     if 'K' in merged_data.columns and 'KPu' in merged_data.columns:
@@ -43,6 +54,15 @@ def merge_and_preprocess_datasets(train_path, test_path, valid_path, output_path
     merged_data.to_csv(output_path, index=False)
 
 def main():
+    """
+    Main function to parse command-line arguments and call the merge_and_preprocess_datasets function.
+
+    Parameters:
+    None
+
+    Returns:
+    None
+    """
     parser = argparse.ArgumentParser(description='Merge and preprocess train, test, and validation datasets')
     parser.add_argument('--train', required=True, help='Path to the train dataset CSV file')
     parser.add_argument('--test', required=True, help='Path to the test dataset CSV file')

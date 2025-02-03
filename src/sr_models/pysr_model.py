@@ -1,3 +1,11 @@
+"""
+This module provides functionality for symbolic regression using the PySR algorithm.
+It includes functions to load datasets, find the best formula, and run the main function for command-line execution.
+
+Usage:
+    python pysr_model.py --dataset <path_to_dataset> --dataset_size <size> --features <feature_list> --temp_file <path_to_temp_file>
+"""
+
 import numpy as np
 import pandas as pd
 import sympy as sp
@@ -23,7 +31,17 @@ BINARY_OPERATORS = ["+", "*", "/", "-"]  # Binary operators used in the symbolic
 UNARY_OPERATORS = ["exp", "log", "abs", "neg"]  # Unary operators used in the symbolic expressions
 
 def load_dataset(file_path, dataset_size=None, features=None):
-    """Load dataset from a CSV file, sample it if a dataset size is specified, and select specific features if provided."""
+    """
+    Load dataset from a CSV file, sample it if a dataset size is specified, and select specific features if provided.
+
+    Args:
+        file_path (str): Path to the CSV file containing the dataset.
+        dataset_size (int, optional): Number of samples to use from the dataset. Defaults to None.
+        features (str, optional): Comma-separated list of features to use from the dataset. Defaults to None.
+
+    Returns:
+        pd.DataFrame: Loaded and optionally filtered/sampled dataset.
+    """
     data = pd.read_csv(file_path)
 
     # Filter dataset columns based on features
@@ -39,6 +57,14 @@ def load_dataset(file_path, dataset_size=None, features=None):
     return data
 
 def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
+    """
+    Find the best symbolic regression formula using PySR.
+
+    Args:
+        data (pd.DataFrame): The dataset containing input features and target labels.
+        temp_file (str): Path to the temporary file to save intermediate results.
+        n_iterations (int, optional): Number of iterations for training the model. Defaults to N_ITERATIONS.
+    """
     # Split data into inputs (X) and labels (y)
     X = data.iloc[:, :-1].values
     y = data.iloc[:, -1].values
@@ -63,10 +89,10 @@ def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
     except TimeoutError:
         print("PySR process timed out.")
 
-    
-
-
 def main():
+    """
+    Main function to parse arguments and find the best formula using PySR.
+    """
     parser = argparse.ArgumentParser(description='Find the best formula using PySR')
     parser.add_argument('--dataset', required=True, help='Path to the dataset CSV file')
     parser.add_argument('--dataset_size', type=int, help='Number of samples to use from the dataset')
