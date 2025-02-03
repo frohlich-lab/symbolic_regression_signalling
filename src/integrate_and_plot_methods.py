@@ -1,3 +1,5 @@
+"""This module provides methods for integrating ODE systems and calculating loss for symbolic regression in signaling pathways."""
+
 import numpy as np
 import jax.numpy as jnp
 import pandas as pd
@@ -23,7 +25,19 @@ SIMULATION_MAX_STEPS = 2**22
 solver = Kvaerno3()
 
 def load_dataset(file_path, features=None, trajectory_column=None, data_proportion=1.0):
-    print("Loading dataset from:", file_path)
+    """
+    Load dataset from a CSV file.
+
+    Args:
+        file_path (str): Path to the CSV file.
+        features (str, optional): Comma-separated list of features to use. Defaults to None.
+        trajectory_column (str, optional): Column name that identifies different trajectories. Defaults to None.
+        data_proportion (float, optional): Proportion of the dataset to use. Defaults to 1.0.
+
+    Returns:
+        pd.DataFrame: Loaded dataset.
+    """
+    print("Loading dataset...")
     data = pd.read_csv(file_path)
 
     # Filtering columns if specified
@@ -41,9 +55,20 @@ def load_dataset(file_path, features=None, trajectory_column=None, data_proporti
     print("Dataset loaded and preprocessed successfully.")
     return data
 
-def integrate_steady_state(ode_term, initial_values, params):
-    print("Starting steady state integration with initial values:", initial_values)
-    print("Using parameters:", params)
+def integrate_steady_state(ode_term, initial_values, params, solver):
+    """
+    Integrate the ODE system to steady state.
+
+    Args:
+        ode_term (ODETerm): ODE term representing the system.
+        initial_values (jnp.array): Initial values for the ODE system.
+        params (tuple): Parameters for the ODE system.
+        solver (Kvaerno3): Solver to use for integration.
+
+    Returns:
+        Solution or None: Solution object if successful, None otherwise.
+    """
+    print("Integrating steady state...")
     try:
         solution_ss = diffeqsolve(
             ode_term,
@@ -68,10 +93,21 @@ def integrate_steady_state(ode_term, initial_values, params):
         print(f"Error during steady state integration: {e}")
         return None
 
-def integrate_simulation(ode_term, initial_values, params, ts):
-    print("Starting forward simulation with initial values:", initial_values)
-    print("Using parameters:", params)
-    print("Time steps:", ts)
+def integrate_simulation(ode_term, initial_values, params, solver, ts):
+    """
+    Integrate the ODE system for simulation.
+
+    Args:
+        ode_term (ODETerm): ODE term representing the system.
+        initial_values (jnp.array): Initial values for the ODE system.
+        params (tuple): Parameters for the ODE system.
+        solver (Kvaerno3): Solver to use for integration.
+        ts (jnp.array): Time points for the simulation.
+
+    Returns:
+        Solution or None: Solution object if successful, None otherwise.
+    """
+    print("Integrating simulation...")
     try:
         solution_simu = diffeqsolve(
             terms=ode_term,
@@ -117,7 +153,16 @@ def plot_log_mse(loss_results, plot_path):
     plt.close()
 
 def integrate_and_calculate_loss(data, formulas, output_path, plot_path):
-    print("Starting integration and loss calculation for all methods.")
+    """
+    Integrate ODE systems and calculate loss for multiple methods.
+
+    Args:
+        data (pd.DataFrame): Dataset containing the conditions and initial values.
+        formulas (dict): Dictionary of method names and their corresponding formula file paths.
+        output_path (str): Path to save the loss results.
+        plot_path (str): Path to save the generated plot.
+    """
+    print("Starting integration and loss calculation for all methods...")
     loss_results = {}
 
     for method, formula_path in formulas.items():
@@ -213,6 +258,9 @@ def integrate_and_calculate_loss(data, formulas, output_path, plot_path):
     print("Integration and loss calculation completed for all methods.")
 
 def main():
+    """
+    Main function to parse arguments and run the integration and loss calculation.
+    """
     parser = argparse.ArgumentParser(description='Integrate ODE system, calculate loss, and plot results using multiple formulas.')
     parser.add_argument('--dataset', required=True, help='Path to the dataset CSV file')
     parser.add_argument('--features', type=str, help='Comma-separated list of features to use from the dataset')

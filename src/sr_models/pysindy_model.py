@@ -1,3 +1,12 @@
+"""
+This module provides functionality for symbolic regression using the SINDy-PI algorithm.
+It includes functions to load datasets, convert models to symbolic form, and find the best formula
+through iterative training. The main function allows for command-line execution.
+
+Usage:
+    python pysindy_model.py --dataset <path_to_dataset> --dataset_size <size> --features <feature_list> --temp_file <path_to_temp_file>
+"""
+
 import numpy as np
 import pandas as pd
 import sympy as sp

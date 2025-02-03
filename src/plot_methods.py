@@ -1,3 +1,9 @@
+"""
+This module provides methods for loading symbolic formulas, computing log-space MSE loss,
+calculating formula complexity, and generating scatter plots of log-space MSE loss against
+formula complexity.
+"""
+
 import sympy as sp
 import numpy as np
 import pandas as pd
@@ -6,7 +12,15 @@ import argparse
 import os
 
 def load_formulas_from_file(file_path):
-    """Load formulas from a specified file, returning them as a list of strings."""
+    """
+    Load formulas from a specified file.
+
+    Parameters:
+    file_path (str): Path to the file containing formulas.
+
+    Returns:
+    list: A list of formulas as strings.
+    """
     with open(file_path, 'r') as file:
         formulas = file.readlines()
     return [formula.strip() for formula in formulas]
@@ -54,6 +68,9 @@ def scatter_plot_formulas(formulas, dataset, output_file):
     plt.close()
 
 def main():
+    """
+    Main function to parse arguments and generate the scatter plot.
+    """
     parser = argparse.ArgumentParser(description='Plot Log-Space MSE Loss against Formula Complexity')
     parser.add_argument('--formulas', nargs='+', required=True, help='List of formulas or a file path containing formulas')
     parser.add_argument('--dataset', required=True, help='File path to a CSV dataset')

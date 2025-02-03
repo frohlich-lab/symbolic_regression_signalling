@@ -1,3 +1,11 @@
+"""
+This module provides functionality for symbolic regression using the PySR algorithm.
+It includes functions to load datasets, find the best formula, and run the main function for command-line execution.
+
+Usage:
+    python pysr_model.py --dataset <path_to_dataset> --dataset_size <size> --features <feature_list> --temp_file <path_to_temp_file>
+"""
+
 import numpy as np
 import pandas as pd
 import argparse
@@ -67,6 +75,9 @@ def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
         print(f"An error occurred during PySR training: {e}")
 
 def main():
+    """
+    Main function to parse arguments and find the best formula using PySR.
+    """
     parser = argparse.ArgumentParser(description='Find the best formula using PySR')
     parser.add_argument('--dataset', required=True, help='Path to the dataset CSV file')
     parser.add_argument('--dataset_size', type=int, help='Maximum number of samples to load from the dataset')

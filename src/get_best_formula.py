@@ -1,3 +1,5 @@
+"""This module provides functions to extract the best formula from various symbolic regression methods' hall of fame files."""
+
 import argparse
 import os
 import pandas as pd

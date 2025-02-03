@@ -1,3 +1,11 @@
+"""
+This module loads a dataset, trains a KAN model to find the best symbolic formula,
+and saves the intermediate results to a temporary file.
+
+Usage:
+    python kan_model.py --dataset <path_to_dataset> --temp_file <path_to_temp_file> [--dataset_size <size>] [--features <feature_list>]
+"""
+
 import numpy as np
 import pandas as pd
 import sympy as sp

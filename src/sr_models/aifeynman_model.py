@@ -1,3 +1,11 @@
+"""
+This modules leverages the AI Feynman library to perform symbolic regression on a given dataset.
+It allows for dataset sampling, feature selection, and saves intermediate results to a specified file.
+
+Usage:
+    python aifeynman_model.py --dataset <path_to_dataset> --dataset_size <size> --features <feature_list> --temp_file <path_to_temp_file>
+"""
+
 import numpy as np
 import argparse
 import pandas as pd
