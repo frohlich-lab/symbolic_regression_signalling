@@ -3,10 +3,14 @@ channels:
   - conda-forge
 dependencies:
   - python=3.9
-  - numpy
+  - numpy<2.0
   - pandas
   - sympy
   - tqdm
-  - pip
-  - pip:
-    - pysindy==1.7.5
+  - cvxpy # unspecified requirement for pysindy
+  - tensorflow # unspecified requirement for pysindy
+  - scikit-learn=1.5.2
+  - scipy<1.11.0
+  # - pip
+  # - pip:
+  #   - pysindy==1.7.5

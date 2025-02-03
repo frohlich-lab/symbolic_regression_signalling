@@ -2,7 +2,7 @@
 data_type: "dynamic"  # Options: "dynamic" or "static"
 
 # Model selection
-models: ["aifeynman"] # ["pysindy", "aifeynman", "dso", "kan", "pysr"]
+models: ["pysindy"] #, "aifeynman", "dso", "kan", "pysr"]
 
 output_extension: {
     "pysindy": "txt",
@@ -14,11 +14,11 @@ output_extension: {
 
 # Feature lists for static and dynamic datasets
 features:
-  static: "k_off,k_D,k_cat,tK,P_u"  # Comma-separated list of features for static data
-  dynamic: "k_off,k_D,k_cat,tK,P_u,k_inact"  # Comma-separated list of features for dynamic data
+  static: "k_off,k_D,k_cat,tK,P_u,kcat_cg"  # Comma-separated list of features for static data
+  dynamic: "k_off,k_D,k_cat,tK,P_u,k_inact,kcat_cg"  # Comma-separated list of features for dynamic data
 
 # Target feature for the dataset
-target_feature: "kcatcg"  # Target feature to be placed as the last column of the dataset
+target_feature: "kcat_cg"  # Target feature to be placed as the last column of the dataset
 
 # Timeout duration in seconds (e.g., 2 min * 60 = 120 seconds)
 timeout_duration: 280

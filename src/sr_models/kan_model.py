@@ -8,73 +8,56 @@ from tqdm import tqdm
 import os
 
 # Hyperparameters
-# Data Configuration
-TRAIN_SIZE = 0.8  # Percentage of the dataset to use for training
+TRAIN_SIZE = 0.8  # Training set size as a percentage of the dataset
 SEED = 1  # Random seed for reproducibility
 
 # Model Settings
-N_ITERATIONS = 3  # Number of iterations to run the KAN model
-WIDTH = [5, 5, 5, 1]  # Width of the neural network layers
-GRID = 35  # Grid size for the KAN model
-K = 3  # Degree of the polynomial features
-THRESHOLD = 0.01  # Threshold for pruning the KAN model
+N_ITERATIONS = 3  # Number of KAN model iterations
+WIDTH = [5, 5, 5, 1]  # Width of neural network layers
+GRID = 35  # Grid size for KAN
+K = 3  # Degree of polynomial features
+THRESHOLD = 0.01  # Pruning threshold
 
 # Training Configuration
-OPTIMIZER = "LBFGS"  # Optimizer used for training the KAN model
-STEPS = 20  # Number of optimization steps to take during training
-LAMB = 0.01  # Regularization parameter for the KAN model
-LAMB_ENTROPY = 10.  # Entropy regularization parameter for the KAN model
+OPTIMIZER = "LBFGS"  # Optimizer for KAN training
+STEPS = 20  # Optimization steps per iteration
+LAMB = 0.01  # Regularization parameter
+LAMB_ENTROPY = 10.0  # Entropy regularization
 
-# Function Library
-LIBRARY = ['x', 'x^2', 'x^3', 'exp', 'log', 'abs']  # Library of functions to use in the KAN model
+# Function Library for Symbolic Representation
+LIBRARY = ['x', 'x^2', 'x^3', 'exp', 'log', 'abs']  # KAN function library
 
 def load_dataset(file_path, dataset_size=None, features=None):
-    """Load dataset from a CSV file, sample it if a dataset size is specified, and select specific features if provided."""
+    """
+    Load dataset from a CSV file, sample it if specified, 
+    and select specific columns if features are provided.
+    """
     data = pd.read_csv(file_path)
-
-    # Filter dataset columns based on features
     if features and features != "all":
-        feature_list = features.split(',')
-        data = data[feature_list]
-
-    # Sample the dataset if dataset size is specified
+        data = data[features.split(',')]
     if dataset_size:
-        dataset_size = min(dataset_size, len(data))  # Ensure we don't exceed dataset size
-        data = data.sample(n=dataset_size)
-
+        data = data.sample(n=min(dataset_size, len(data)))
     return data
 
-def convert_to_symbolic(expression):
-    """Convert a KAN model expression to symbolic form."""
-    # Assuming the expression is provided as a KAN model's internal representation, convert it to a SymPy expression.
-    # You would replace this placeholder logic with the actual conversion logic provided by KAN.
-    symbolic_expression = sp.sympify(expression)
-    return symbolic_expression
-
 def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
-    """Run KAN to find the best formula, saving progress periodically and converting the output to symbolic form."""
-    # Convert data to tensors suitable for KAN
-    dataset_size = len(data)
+    """
+    Run KAN model to find the best formula, saving results 
+    periodically and converting output to symbolic form.
+    """
+    # Convert data to torch tensors
+    dataset = torch.tensor(data.values, dtype=torch.float32)
+    dataset_size = len(dataset)
     test_size = int((1 - TRAIN_SIZE) * dataset_size)
     train_size = dataset_size - test_size
 
-    # Convert data to torch tensors
-    dataset = torch.tensor(data.values, dtype=torch.float32)
-    
     train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
-
-    # Extracting data from these subsets
-    train_tensor = dataset[train_dataset.indices]
-    test_tensor = dataset[test_dataset.indices]
-
-    # Now split these tensors into inputs and labels
-    train_input = train_tensor[:, :-1]
-    train_label = train_tensor[:, -1].unsqueeze(1)  # Reshape for consistency as 2D
-
-    test_input = test_tensor[:, :-1]
-    test_label = test_tensor[:, -1].unsqueeze(1)  # Reshape for consistency as 2D
-
-    # Now you can create the dataset dictionary
+    # Verify feature and label dimensions match the dataset length
+    train_input = torch.stack([train_dataset[i][:-1] for i in range(len(train_dataset))])
+    train_label = torch.stack([train_dataset[i][-1] for i in range(len(train_dataset))]).unsqueeze(1)
+    test_input = torch.stack([test_dataset[i][:-1] for i in range(len(test_dataset))])
+    test_label = torch.stack([test_dataset[i][-1] for i in range(len(test_dataset))]).unsqueeze(1)
+    
+    # Prepare dataset dictionary
     dataset_dict = {
         'train_input': train_input,
         'train_label': train_label,
@@ -82,47 +65,45 @@ def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
         'test_label': test_label
     }
 
-    # Initialize the KAN model
-    model = KAN(width=WIDTH, 
-                grid=GRID, 
-                k=K, 
-                seed=SEED)
+    # Initialize KAN model
+    model = KAN(width=WIDTH, grid=GRID, k=K, seed=SEED)
 
-    with tqdm(total=n_iterations, desc="KAN Model Training Progress") as pbar:
-        for iteration in range(N_ITERATIONS):
-            # Perform a training step
-            results = model.fit(
-                dataset_dict,
-                opt=OPTIMIZER,
-                steps=STEPS,
-                lamb=LAMB,
-                lamb_entropy=LAMB_ENTROPY
-            )
-            
-            # Prune the model to remove unnecessary terms
-            model = model.prune(node_th=THRESHOLD, edge_th=THRESHOLD)
+    with tqdm(total=n_iterations, desc="KAN Model Training") as pbar:
+        for iteration in range(n_iterations):
+            try:
+                # Train model
+                results = model.fit(
+                    dataset_dict,
+                    opt=OPTIMIZER,
+                    steps=STEPS,
+                    lamb=LAMB,
+                    lamb_entropy=LAMB_ENTROPY
+                )
+                
+                # Prune the model and extract the formula
+                model.prune(edge_th=THRESHOLD)
+                model.auto_symbolic(lib=LIBRARY)
+                current_formula = model.symbolic_formula()[0][0]
+                loss_value = results['test_loss'][-1]
+                
+                # Save progress
+                with open(temp_file, 'a') as f:
+                    f.write(f"Iteration {iteration + 1}:\n")
+                    f.write(f"Formula: {current_formula}\n")
+                    f.write(f"Loss: {loss_value}\n\n")
+                
+                pbar.update(1)
 
-            # Extract the symbolic formula
-            model.auto_symbolic(lib=LIBRARY)
-            print("Output of symbolic_formula:", model.symbolic_formula())
-            current_formula = model.symbolic_formula()[0][0]
-            loss_value = results['test_loss'][-1]
-            
-            # Save the current formula to the temporary file
-            with open(temp_file, 'a') as f:
-                f.write(f"Iteration {iteration + 1}:\n")
-                f.write(f"Formula: {current_formula}\n")
-                f.write(f"Loss: {loss_value}\n\n")
-            
-            # Update the progress bar
-            pbar.update(1)
+            except Exception as e:
+                print(f"Error in iteration {iteration + 1}: {e}")
+                continue
 
 def main():
-    parser = argparse.ArgumentParser(description='Find the best formula using KAN')
+    parser = argparse.ArgumentParser(description='Run KAN for Symbolic Regression')
     parser.add_argument('--dataset', required=True, help='Path to the dataset CSV file')
-    parser.add_argument('--dataset_size', type=int, help='Number of samples to use from the dataset')
-    parser.add_argument('--features', type=str, help='Comma-separated list of features to use from the dataset')
-    parser.add_argument('--temp_file', required=True, help='Path to the temporary file to save intermediate results')
+    parser.add_argument('--dataset_size', type=int, help='Max number of samples from the dataset')
+    parser.add_argument('--features', type=str, help='Comma-separated list of features to use')
+    parser.add_argument('--temp_file', required=True, help='Path to save intermediate results')
 
     args = parser.parse_args()
     data = load_dataset(args.dataset, args.dataset_size, args.features)

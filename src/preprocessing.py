@@ -1,5 +1,6 @@
 import argparse
 import pandas as pd
+import numpy as np
 
 def merge_and_preprocess_datasets(train_path, test_path, valid_path, output_path, target_feature):
     """Merge train, test, and validation datasets into a single file, preprocess the data, and move the target feature to the last column."""
@@ -31,7 +32,7 @@ def merge_and_preprocess_datasets(train_path, test_path, valid_path, output_path
 
     # Create a new column 'tK' as the sum of 'K' and 'KPu'
     if 'K' in merged_data.columns and 'KPu' in merged_data.columns:
-        merged_data['tK'] = merged_data['K'] + merged_data['KPu']
+        merged_data['tK'] = np.log(np.exp(merged_data['K']) + np.exp(merged_data['KPu']))
 
     # Ensure the target feature is the last column in the dataset
     if target_feature in merged_data.columns:

@@ -4,40 +4,39 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import argparse
 import os
-import csv
 
 def load_formulas_from_file(file_path):
+    """Load formulas from a specified file, returning them as a list of strings."""
     with open(file_path, 'r') as file:
         formulas = file.readlines()
     return [formula.strip() for formula in formulas]
 
 def compute_log_mse_loss(formula, dataset):
-    # Generate symbols dynamically for each feature column (excluding the last column)
-    feature_columns = dataset.columns[:-1]  # All except the last column
-    feature_symbols = sp.symbols(feature_columns.tolist())  # Convert column names to sympy symbols
-    target_column = dataset.columns[-1]  # The last column is the target
+    """Compute the mean squared error (MSE) loss between predictions of the formula and the target in log-space data."""
+    formula_symbols = formula.free_symbols
+    formula_variable_names = [str(symbol) for symbol in formula_symbols]  # Extract variable names in formula
+    relevant_columns = [col for col in dataset.columns if col in formula_variable_names]
 
-    # Create a lambda function that can operate on pandas DataFrame columns
-    formula_func = sp.lambdify(feature_symbols, formula, 'numpy')
+    feature_symbols = sp.symbols(relevant_columns)
+    target_column = dataset.columns[-1]  # Assuming the last column is the target
 
-    # Apply the formula to the DataFrame
-    predicted_values = formula_func(*[dataset[col] for col in feature_columns])
+    # Lambdify the formula function for relevant columns only
+    formula_func = sp.lambdify(feature_symbols, formula, modules=['numpy', 'sympy'])
 
-    # Compute log-space MSE
-    log_predicted_values = np.log(predicted_values.clip(lower=1e-10))  # Avoid log(0) by clipping
-    log_actual_values = np.log(dataset[target_column].clip(lower=1e-10))
+    # Calculate predictions
+    predicted_values = formula_func(*[dataset[col].astype(float) for col in relevant_columns])
 
-    # Calculate MSE
-    loss = np.mean((log_predicted_values - log_actual_values) ** 2)
-
+    # Compute MSE directly
+    loss = np.mean((predicted_values - dataset[target_column]) ** 2)
     return loss
 
 def calculate_complexity(formula):
+    """Calculate the complexity of a formula based on the number of elements."""
     return len(formula.atoms(sp.Symbol, sp.Number)) + len(formula.atoms(sp.Add, sp.Mul, sp.Pow, sp.Function))
 
 def scatter_plot_formulas(formulas, dataset, output_file):
-    complexities = []
-    losses = []
+    """Generate a scatter plot of log-space MSE loss versus formula complexity and save it to a file."""
+    complexities, losses = [], []
 
     for formula in formulas:
         complexity = calculate_complexity(formula)
@@ -57,23 +56,24 @@ def scatter_plot_formulas(formulas, dataset, output_file):
 def main():
     parser = argparse.ArgumentParser(description='Plot Log-Space MSE Loss against Formula Complexity')
     parser.add_argument('--formulas', nargs='+', required=True, help='List of formulas or a file path containing formulas')
-    parser.add_argument('--dataset', required=True, help='File path to a CSV file')
+    parser.add_argument('--dataset', required=True, help='File path to a CSV dataset')
     parser.add_argument('--output', required=True, help='File path to save the generated plot')
 
     args = parser.parse_args()
 
-    # Load formulas from file if a file path is provided
+    # Determine if formulas are in a file or provided directly
     if os.path.isfile(args.formulas[0]):
         formulas = load_formulas_from_file(args.formulas[0])
     else:
         formulas = args.formulas
 
-    # Convert formula strings to sympy expressions
+    # Convert formulas to sympy expressions
     formulas = [sp.sympify(formula) for formula in formulas]
 
-    # Load dataset from CSV file or provided points
+    # Load dataset from CSV file
     dataset = pd.read_csv(args.dataset)
 
+    # Generate and save the scatter plot
     scatter_plot_formulas(formulas, dataset, args.output)
 
 if __name__ == '__main__':

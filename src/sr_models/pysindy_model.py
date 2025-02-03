@@ -5,94 +5,144 @@ import argparse
 import pysindy as ps
 from tqdm import tqdm
 
-
-# Parameters for trajectory selected from data
-N_SAMPLE = 0
+# Parameters
+N_SAMPLES = 30
 N_TIME_STEPS = 22
-# Hyperparameters for SINDy-PI
 N_ITERATIONS = 100
-ALPHA = 0.1
+ALPHA = 1e-3
+THRESHOLD = 1e-20
 
-def load_dataset(file_path, dataset_size=None, features=None):
-    """Load dataset from a CSV file, sample it if a dataset size is specified, and select specific features if provided."""
+# Define custom library functions for SINDy-PI
+LIBRARY_FUNCTIONS = [
+    lambda x: 1,
+    lambda x: x,
+    lambda x: x**(-1),
+    lambda x, y: x * y,
+    lambda x, y: x**(-1) * y**(-1),
+    lambda x, y: x * y**(-1),
+    lambda x, y, z: x * y * z,
+    lambda x, y, z: x * y * z**(-1),
+    lambda x, y, z: x * y**(-1) * z**(-1),
+    lambda x, y, z: x**(-1) * y**(-1) * z**(-1),
+]
+
+FUNCTION_NAMES = [
+    lambda x: "1",
+    lambda x: x,
+    lambda x: f"{x}^-1",
+    lambda x, y: f"{x}*{y}",
+    lambda x, y: f"{x}^-1*{y}^-1",
+    lambda x, y: f"{x}*{y}^-1",
+    lambda x, y, z: f"{x}*{y}*{z}",
+    lambda x, y, z: f"{x}*{y}*{z}^-1",
+    lambda x, y, z: f"{x}*{y}^-1*{z}^-1",
+    lambda x, y, z: f"{x}^-1*{y}^-1*{z}^-1",
+]
+
+def load_dataset(
+    file_path: str, dataset_size: int = None, features: str = None
+) -> pd.DataFrame:
+    """Load a dataset, sample it, and select specified features."""
     data = pd.read_csv(file_path)
-
-    # Filter dataset columns based on features
+    
     if features and features != "all":
-        feature_list = features.split(',')
-        data = data[feature_list]
+        feature_list = ['P_p'] + features.split(',')
+        data = data[['time'] + feature_list].dropna()
 
-    # Sample the dataset if dataset size is specified
     if dataset_size:
-        dataset_size = min(dataset_size, len(data))  # Ensure we don't exceed dataset size
-        data = data.sample(n=dataset_size)
+        dataset_size = min(dataset_size, len(data))
+        data = data.iloc[:dataset_size]
 
+    # Apply exponential transformation
+    if 'feature_list' in locals():
+        data[feature_list] = np.exp(data[feature_list])
+    
     return data
 
-def convert_to_symbolic(model, input_features):
-    """Convert the learned SINDy-PI model to symbolic form."""
-    equations = model.print(precision=3)
-    symbolic_equations = []
+def convert_to_symbolic(model: ps.SINDy, input_features: list[str]) -> list[sp.Expr]:
+    """Convert the SINDy-PI model to symbolic form."""
+    print(model.coefficients())
+    equations = model.print(precision=6)
+    return [sp.sympify(equation) for equation in equations]
 
-    for equation in equations:
-        # Convert the string representation of each equation into a symbolic expression
-        symbolic_equations.append(sp.sympify(equation))
+def sample_splitter(data: pd.DataFrame) -> tuple[np.ndarray, list[np.ndarray], list[np.ndarray]]:
+    """Split data into time, features (X), and targets (y)."""
+    samples = [
+        data.iloc[i * N_TIME_STEPS:(i + 1) * N_TIME_STEPS - 1].reset_index(drop=True)
+        for i in range(N_SAMPLES)
+    ]
+    X = [sample.iloc[:, 1:-1].values for sample in samples]
+    y = [sample.iloc[:, -1].values for sample in samples]
+    t = samples[0]['time'].values
+    return t, X, y
 
-    return symbolic_equations
+def get_x_dot(data: pd.DataFrame) -> list[np.ndarray]:
+    """Compute derivatives of features with respect to time."""
+    t, _, y = sample_splitter(data)
+    samples = [
+        data.iloc[i * N_TIME_STEPS:(i + 1) * N_TIME_STEPS - 1].reset_index(drop=True)
+        for i in range(N_SAMPLES)
+    ]
+    x_dots = []
+    for i, sample in enumerate(samples):
+        P_u_values = sample['P_u'].values  # Replace with actual column name
+        P_u_dot = np.gradient(P_u_values, t)
+        P_p_dot = y[i]
+        cst_dot = np.zeros(N_TIME_STEPS - 1)
+        x_dot_sample = np.vstack([P_p_dot, cst_dot, P_u_dot, cst_dot, cst_dot, cst_dot, cst_dot]).T
+        x_dots.append(x_dot_sample)
+    return x_dots
 
-def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
-    """Run SINDy-PI to find the best formula, saving progress periodically and converting the output to symbolic form."""
-    # Split data into inputs (X) and labels (y)
-    sample = data.iloc[N_SAMPLE*N_TIME_STEPS:(N_SAMPLE+1)*N_TIME_STEPS, :].reset_index()
-    X = sample.iloc[:, :-1].values
-    y = sample.iloc[:, -1].values
+def find_best_formula(
+    data: pd.DataFrame, temp_file: str, n_iterations: int = N_ITERATIONS
+) -> None:
+    """Run SINDy-PI to find the best formula."""
+    t, X, _ = sample_splitter(data)
+    x_dots = get_x_dot(data)
+    
+    feature_names = ['P_p', 'tK', 'P_u', 'k_cat', 'k_on', 'k_off', 'k_inact']
 
-    t = np.log(np.array(data.index[:-1]) + 1)
-
-    # Initialize the SINDy-PI model
+    # Initialize SINDy-PI model
     pde_lib = ps.PDELibrary(
-        library_functions=ps.PolynomialLibrary(),
+        library_functions=LIBRARY_FUNCTIONS,
+        function_names=FUNCTION_NAMES,
         temporal_grid=t,
         derivative_order=1,
         implicit_terms=True,
     )
-    optimizer = ps.STLSQ(threshold=ALPHA)
-    model = ps.SINDy(feature_library=pde_lib, 
-                    optimizer=optimizer, 
-                    feature_names=['P_p', 'tK', 'P_u'],
-                    differentiation_method=ps.FiniteDifference(drop_endpoints=True),
+    optimizer = ps.STLSQ(alpha=ALPHA, threshold=THRESHOLD)
+    model = ps.SINDy(
+        feature_library=pde_lib,
+        optimizer=optimizer,
+        feature_names=feature_names,
     )
 
     best_formula = None
-
     with tqdm(total=n_iterations, desc="SINDy-PI Training Progress") as pbar:
         for iteration in range(n_iterations):
-            model.fit(X, y)
-            pbar.update(1)
-
-            # Retrieve the best formula in symbolic form
+            model.fit(X, t=t, x_dot=x_dots, multiple_trajectories=True)
             symbolic_formulas = convert_to_symbolic(model, input_features=data.columns[:-1])
 
-            # Save the best formula periodically (every 10 iterations)
             if iteration % 10 == 0:
                 best_formula = symbolic_formulas
                 with open(temp_file, 'w') as f:
                     f.write("\n".join(str(formula) for formula in best_formula))
+            pbar.update(1)
 
-    # Final save of the best formula after all iterations
-    with open(temp_file, 'w') as f:
-        f.write("\n".join(str(formula) for formula in best_formula))
+    if best_formula:
+        with open(temp_file, 'w') as f:
+            f.write("\n".join(str(formula) for formula in best_formula))
 
-def main():
-    parser = argparse.ArgumentParser(description='Find the best formula using SINDy-PI')
-    parser.add_argument('--dataset', required=True, help='Path to the dataset CSV file')
-    parser.add_argument('--dataset_size', type=int, help='Number of samples to use from the dataset')
-    parser.add_argument('--features', type=str, help='Comma-separated list of features to use from the dataset')
-    parser.add_argument('--temp_file', required=True, help='Path to the temporary file to save intermediate results')
-
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Find the best formula using SINDy-PI")
+    parser.add_argument("--dataset", required=True, help="Path to the dataset CSV file")
+    parser.add_argument("--dataset_size", type=int, help="Number of samples to use from the dataset")
+    parser.add_argument("--features", type=str, help="Comma-separated list of features to use")
+    parser.add_argument("--temp_file", required=True, help="Path to save intermediate results")
     args = parser.parse_args()
+
     data = load_dataset(args.dataset, args.dataset_size, args.features)
     find_best_formula(data, args.temp_file)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

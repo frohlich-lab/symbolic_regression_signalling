@@ -9,13 +9,15 @@
 
 # Load any modules or activate your environment here
 ml Anaconda3
-ml snakemake
 ml Coreutils
+ml GCCcore/12.2.0
 
 # Disable SSL verification for Git
 export GIT_SSL_NO_VERIFY=1
 
+source $(conda info --base)/etc/profile.d/conda.sh
+conda activate snakemake
+
 # Run your script or command
-# conda config --set channel_priority strict
 snakemake --unlock
-snakemake --cores=all --use-conda --conda-front conda
+snakemake --cores=all --use-conda

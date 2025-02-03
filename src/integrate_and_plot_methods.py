@@ -6,7 +6,7 @@ import sympy
 import matplotlib.pyplot as plt
 from diffrax import ODETerm, diffeqsolve, Kvaerno3, SaveAt, SteadyStateEvent, PIDController, ImplicitAdjoint
 
-# Solver parameters (constants) - easily adjustable at the top of the script
+# Solver parameters
 STEADY_STATE_ATOL = 1e-14
 STEADY_STATE_RTOL = 0
 STEADY_STATE_PCOEFF = 0.4
@@ -21,23 +21,29 @@ SIMULATION_DT0 = 1e-8
 SIMULATION_MAX_STEPS = 2**22
 
 solver = Kvaerno3()
-solver2 = Kvaerno3()
 
 def load_dataset(file_path, features=None, trajectory_column=None, data_proportion=1.0):
-    print("Loading dataset...")
+    print("Loading dataset from:", file_path)
     data = pd.read_csv(file_path)
 
+    # Filtering columns if specified
     if features and features != "all":
+        print("Filtering dataset to include only specified features and trajectory column.")
         feature_list = features.split(',')
-        data = data[feature_list + [trajectory_column]] if trajectory_column else data[feature_list]
+        columns_to_select = feature_list + ([trajectory_column] if trajectory_column else [])
+        data = data[columns_to_select]
 
+    # Sampling data if a proportion less than 1.0 is specified
     if data_proportion < 1.0:
+        print(f"Sampling {data_proportion*100}% of the data for analysis.")
         data = data.sample(frac=data_proportion, random_state=42).reset_index(drop=True)
-    print("Dataset loaded successfully.")
+
+    print("Dataset loaded and preprocessed successfully.")
     return data
 
-def integrate_steady_state(ode_term, initial_values, params, solver):
-    print("Integrating steady state...")
+def integrate_steady_state(ode_term, initial_values, params):
+    print("Starting steady state integration with initial values:", initial_values)
+    print("Using parameters:", params)
     try:
         solution_ss = diffeqsolve(
             ode_term,
@@ -49,21 +55,23 @@ def integrate_steady_state(ode_term, initial_values, params, solver):
             args=params,
             discrete_terminating_event=SteadyStateEvent(atol=STEADY_STATE_ATOL, rtol=STEADY_STATE_RTOL),
             stepsize_controller=PIDController(
-                atol=SIMULATION_ATOL, rtol=SIMULATION_RTOL,
+                atol=STEADY_STATE_ATOL, rtol=STEADY_STATE_RTOL,
                 pcoeff=STEADY_STATE_PCOEFF, icoeff=STEADY_STATE_ICOEFF, dcoeff=STEADY_STATE_DCOEFF
             ),
             adjoint=ImplicitAdjoint(),
             max_steps=STEADY_STATE_MAX_STEPS,
             throw=False
         )
-        print("Steady state integration complete.")
+        print("Steady state integration completed.")
         return solution_ss
-    except:
-        print("Steady state integration failed.")
+    except Exception as e:
+        print(f"Error during steady state integration: {e}")
         return None
 
-def integrate_simulation(ode_term, initial_values, params, solver, ts):
-    print("Integrating simulation...")
+def integrate_simulation(ode_term, initial_values, params, ts):
+    print("Starting forward simulation with initial values:", initial_values)
+    print("Using parameters:", params)
+    print("Time steps:", ts)
     try:
         solution_simu = diffeqsolve(
             terms=ode_term,
@@ -78,39 +86,65 @@ def integrate_simulation(ode_term, initial_values, params, solver, ts):
             saveat=SaveAt(ts=ts),
             throw=True
         )
-        print("Simulation integration complete.")
+        print("Forward simulation completed.")
         return solution_simu
-    except:
-        print("Simulation integration failed.")
+    except Exception as e:
+        print(f"Error during forward simulation: {e}")
         return None
 
+def calculate_loss(groundtruth, simulation_output):
+    print("Calculating log MSE loss between ground truth and simulation output.")
+    log_groundtruth = np.log(np.clip(groundtruth, a_min=1e-10, a_max=None))
+    log_simulation_output = np.log(np.clip(simulation_output, a_min=1e-10, a_max=None))
+    loss = np.mean((log_groundtruth - log_simulation_output) ** 2, axis=1)
+    print("Log MSE loss calculated:", loss)
+    return loss
+
+def plot_log_mse(loss_results, plot_path):
+    """Plot the log MSE results for each method and save to the specified file."""
+    methods = list(loss_results.keys())
+    losses = list(loss_results.values())
+
+    plt.figure()
+    plt.bar(methods, losses)
+    plt.xlabel('Method')
+    plt.ylabel('Average Log MSE')
+    plt.title('Log MSE by Method')
+    plt.xticks(rotation=45)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.tight_layout()
+    plt.savefig(plot_path)
+    plt.close()
+
 def integrate_and_calculate_loss(data, formulas, output_path, plot_path):
-    print("Starting integration and loss calculation for all methods...")
+    print("Starting integration and loss calculation for all methods.")
     loss_results = {}
 
     for method, formula_path in formulas.items():
-        print(f"Processing method: {method}")
+        print(f"\nProcessing method: {method}")
+        print("Loading formula from:", formula_path)
 
+        # Load and parse the formula
         with open(formula_path, 'r') as f:
             expression = sympy.sympify(f.read().strip())
         arguments = ['k_off', 'k_D', 'k_cat', 'k_inact', 'tK', 'P_u']
-        pp_ode_base = sympy.lambdify(args=arguments, expr=expression)
+        ode_function = sympy.lambdify(args=arguments, expr=expression)
 
-        def ode_function(t, y, args):
+        def system_ode(t, y, args):
             tK, P_u, Pp = y
             k_off, k_D, k_cat, k_inact, K0, krev = args
             tK_dot = k_inact * (K0 - tK)
-            kfw = pp_ode_base(k_off, k_D, k_cat, k_inact, tK, P_u)
+            kfw = ode_function(k_off, k_D, k_cat, k_inact, tK, P_u)
             P_u_dot = -k_cat * kfw + krev * Pp
             Pp_dot = k_cat * kfw - krev * Pp
             return jnp.array([tK_dot, P_u_dot, Pp_dot])
 
-        ode_term = ODETerm(ode_function)
+        ode_term = ODETerm(system_ode)
         loss_df = []
         fails_indices = []
 
         for i, sample in enumerate(data['condition_id'].unique()):
-            print(f"Sample {i+1}/{len(data['condition_id'].unique())} for method {method}")
+            print(f"\nSample {i+1}/{len(data['condition_id'].unique())} for method {method}")
 
             data_sample = data[data['condition_id'] == sample]
             initial_values_ss = jnp.array([
@@ -127,8 +161,10 @@ def integrate_and_calculate_loss(data, formulas, output_path, plot_path):
                 data_sample.iloc[0]['krev']
             )
 
-            solution_ss = integrate_steady_state(ode_term, initial_values_ss, params_ss, solver)
+            print("Integrating to steady state...")
+            solution_ss = integrate_steady_state(ode_term, initial_values_ss, params_ss)
             if solution_ss is None:
+                print(f"Steady state integration failed for sample {i}. Skipping to next sample.")
                 fails_indices.append(i)
                 loss_df.append([None, None, None])
                 continue
@@ -143,18 +179,21 @@ def integrate_and_calculate_loss(data, formulas, output_path, plot_path):
                 data_sample.iloc[0]['krev']
             )
             ts = jnp.array(data_sample['time'].to_numpy()[:-1])
-            solution_simu = integrate_simulation(ode_term, initial_values_sim, params_simu, solver2, ts)
 
+            print("Starting simulation integration...")
+            solution_simu = integrate_simulation(ode_term, initial_values_sim, params_simu, ts)
             if solution_simu is None:
+                print(f"Simulation integration failed for sample {i}. Skipping to next sample.")
                 fails_indices.append(i)
                 loss_df.append([None, None, None])
                 continue
 
-            groundtruth = [
+            groundtruth = np.vstack([
                 data_sample['tK'][:-1].to_numpy(),
                 data_sample['P_u'][:-1].to_numpy(),
                 data_sample['Pp'][:-1].to_numpy()
-            ]
+            ])
+            print("Calculating loss for sample:", i)
             loss_ls = calculate_loss(groundtruth, solution_simu.ys)
             loss_df.append(loss_ls)
 
@@ -162,13 +201,15 @@ def integrate_and_calculate_loss(data, formulas, output_path, plot_path):
         print(f"Average Log MSE for {method}: {average_log_mse}")
         loss_results[method] = average_log_mse
 
+    print("Saving loss results to:", output_path)
     with open(output_path, 'w') as f:
         for method, mse in loss_results.items():
             f.write(f"{method}: {mse}\n")
-    print(f"Loss results saved to {output_path}")
+    print("Loss results saved.")
 
+    print("Plotting log MSE results...")
     plot_log_mse(loss_results, plot_path)
-    print(f"Log MSE plot saved to {plot_path}")
+    print("Log MSE plot saved to:", plot_path)
     print("Integration and loss calculation completed for all methods.")
 
 def main():
