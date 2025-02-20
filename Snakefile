@@ -149,7 +149,7 @@ rule integrate_and_plot_results:
         methods=models,
         data_proportion=config["data_proportion"],
         features=features,
-        trajectory_column="trajectory_id"
+        trajectory_column="condition_id"
     shell:
         """
         echo "Integrating and plotting results for methods: {params.methods}"

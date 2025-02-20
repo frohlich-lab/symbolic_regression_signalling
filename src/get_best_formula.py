@@ -43,7 +43,10 @@ def extract_best_formula_from_txt(hall_of_fame_file, feature_names, formula_indi
                                 best_score, best_formula = score, formula
                         except ValueError:
                             continue
-    return convert_x_i_variables(best_formula, feature_names, start_index=start_index, underscore=underscore) if best_formula else None
+    if start_index == None:
+        return best_formula
+    else:
+        return convert_x_i_variables(best_formula, feature_names, start_index=start_index, underscore=underscore) if best_formula else None
 
 def main():
     parser = argparse.ArgumentParser(description='Extract best formulas from hall of fame files.')
@@ -58,7 +61,7 @@ def main():
         raise ValueError("Mismatch between the number of methods, hall of fame files, and save paths.")
 
     method_to_extractor = {
-        'pysindy': lambda file, features: extract_best_formula_from_csv(file, features, 'Equation', 'Loss', delimiter=',', underscore=False),
+        'pysindy': lambda file, features: extract_best_formula_from_txt(file, features, 'Equation', 'Loss', start_index=None),
         'aifeynman': lambda file, features: extract_best_formula_from_txt(file, features, "Formula:", "Error:", start_index=1),
         'dso': lambda file, features: extract_best_formula_from_csv(file, features, 'Equation', 'Score', start_index=1, underscore=False),
         'kan': lambda file, features: extract_best_formula_from_txt(file, features, "Formula:", "Loss:", start_index=1),

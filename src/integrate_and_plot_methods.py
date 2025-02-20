@@ -20,7 +20,9 @@ STEADY_STATE_MAX_STEPS = 2**20
 SIMULATION_ATOL = 1e-4
 SIMULATION_RTOL = 1e-4
 SIMULATION_DT0 = 1e-8
-SIMULATION_MAX_STEPS = 2**22
+SIMULATION_MAX_STEPS = 2**23
+
+N_TIME_STEPS = 22
 
 solver = Kvaerno3()
 
@@ -50,7 +52,9 @@ def load_dataset(file_path, features=None, trajectory_column=None, data_proporti
     # Sampling data if a proportion less than 1.0 is specified
     if data_proportion < 1.0:
         print(f"Sampling {data_proportion*100}% of the data for analysis.")
-        data = data.sample(frac=data_proportion, random_state=42).reset_index(drop=True)
+        unique_conditions = data[trajectory_column].unique()
+        sampled_conditions = np.random.choice(unique_conditions, size=int(len(unique_conditions) * data_proportion), replace=False)
+        data = data[data[trajectory_column].isin(sampled_conditions)].reset_index(drop=True)
 
     print("Dataset loaded and preprocessed successfully.")
     return data
@@ -130,9 +134,9 @@ def integrate_simulation(ode_term, initial_values, params, solver, ts):
 
 def calculate_loss(groundtruth, simulation_output):
     print("Calculating log MSE loss between ground truth and simulation output.")
-    log_groundtruth = np.log(np.clip(groundtruth, a_min=1e-10, a_max=None))
-    log_simulation_output = np.log(np.clip(simulation_output, a_min=1e-10, a_max=None))
-    loss = np.mean((log_groundtruth - log_simulation_output) ** 2, axis=1)
+    log_groundtruth = np.log10(np.clip(groundtruth, a_min=1e-20, a_max=None))
+    log_simulation_output = np.log10(np.clip(simulation_output, a_min=1e-20, a_max=None))
+    loss = np.mean(log_groundtruth - log_simulation_output, axis=0)
     print("Log MSE loss calculated:", loss)
     return loss
 
@@ -189,58 +193,59 @@ def integrate_and_calculate_loss(data, formulas, output_path, plot_path):
         fails_indices = []
 
         for i, sample in enumerate(data['condition_id'].unique()):
-            print(f"\nSample {i+1}/{len(data['condition_id'].unique())} for method {method}")
-
+            print(f"\nProcessing sample: {i}/{len(data['condition_id'].unique())}")
             data_sample = data[data['condition_id'] == sample]
-            initial_values_ss = jnp.array([
-                data_sample.iloc[0]['K0_preeq'],
-                data_sample.iloc[0]["uP0_preeq"],
-                data_sample.iloc[0]["pP0_preeq"]
-            ])
-            params_ss = (
-                data_sample.iloc[0]["k_off"],
-                data_sample.iloc[0]["k_D"],
-                data_sample.iloc[0]["k_cat"],
-                data_sample.iloc[0]['k_inact'],
-                data_sample.iloc[0]['K0_preeq'],
-                data_sample.iloc[0]['krev']
-            )
+            sublists = np.array_split(data_sample, 3)
+            for j, data_sample in enumerate(sublists):  # Assuming there are 3 trajectories per condition
+                initial_values_ss = jnp.array([
+                    data_sample.iloc[0]['K0_preeq'],
+                    data_sample.iloc[0]["uP0_preeq"],
+                    data_sample.iloc[0]["pP0_preeq"]
+                ])
+                params_ss = (
+                    data_sample.iloc[0]["k_off"],
+                    data_sample.iloc[0]["k_D"],
+                    data_sample.iloc[0]["k_cat"],
+                    data_sample.iloc[0]['k_inact'],
+                    data_sample.iloc[0]['K0_preeq'],
+                    data_sample.iloc[0]['krev']
+                )
 
-            print("Integrating to steady state...")
-            solution_ss = integrate_steady_state(ode_term, initial_values_ss, params_ss)
-            if solution_ss is None:
-                print(f"Steady state integration failed for sample {i}. Skipping to next sample.")
-                fails_indices.append(i)
-                loss_df.append([None, None, None])
-                continue
+                print("Integrating to steady state...")
+                solution_ss = integrate_steady_state(ode_term, initial_values_ss, params_ss, solver)
+                if solution_ss is None:
+                    print(f"Steady state integration failed for sample {i}, trajectory {j}. Skipping to next trajectory.")
+                    fails_indices.append((i, j))
+                    loss_df.append([None, None, None])
+                    continue
 
-            initial_values_sim = solution_ss.ys[-1, :]
-            params_simu = (
-                data_sample.iloc[0]["k_off"],
-                data_sample.iloc[0]["k_D"],
-                data_sample.iloc[0]["k_cat"],
-                data_sample.iloc[0]['k_inact'],
-                data_sample.iloc[0]['K0'],
-                data_sample.iloc[0]['krev']
-            )
-            ts = jnp.array(data_sample['time'].to_numpy()[:-1])
+                initial_values_sim = solution_ss.ys[-1, :]
+                params_simu = (
+                    data_sample.iloc[0]["k_off"],
+                    data_sample.iloc[0]["k_D"],
+                    data_sample.iloc[0]["k_cat"],
+                    data_sample.iloc[0]['k_inact'],
+                    data_sample.iloc[0]['K0'],
+                    data_sample.iloc[0]['krev']
+                )
+                ts = jnp.array(data_sample['time'].to_numpy()[:-1])
 
-            print("Starting simulation integration...")
-            solution_simu = integrate_simulation(ode_term, initial_values_sim, params_simu, ts)
-            if solution_simu is None:
-                print(f"Simulation integration failed for sample {i}. Skipping to next sample.")
-                fails_indices.append(i)
-                loss_df.append([None, None, None])
-                continue
-
-            groundtruth = np.vstack([
-                data_sample['tK'][:-1].to_numpy(),
-                data_sample['P_u'][:-1].to_numpy(),
-                data_sample['Pp'][:-1].to_numpy()
-            ])
-            print("Calculating loss for sample:", i)
-            loss_ls = calculate_loss(groundtruth, solution_simu.ys)
-            loss_df.append(loss_ls)
+                print("Starting simulation integration...")
+                solution_simu = integrate_simulation(ode_term, initial_values_sim, params_simu, solver, ts)
+                if solution_simu is None:
+                    print(f"Simulation integration failed for sample {i}, trajectory {j}. Skipping to next trajectory.")
+                    fails_indices.append((i, j))
+                    loss_df.append([None, None, None])
+                    continue
+                print(data_sample.columns)
+                groundtruth = np.vstack([
+                    data_sample['tK'][:-1].to_numpy(),
+                    data_sample['P_u'][:-1].to_numpy(),
+                    data_sample['P_p'][:-1].to_numpy()
+                ]).T
+                print("Calculating loss for sample:", i, "trajectory:", j)
+                loss_ls = calculate_loss(groundtruth, solution_simu.ys)
+                loss_df.append(loss_ls)
 
         average_log_mse = np.nanmean([np.mean(loss) for loss in loss_df if loss is not None])
         print(f"Average Log MSE for {method}: {average_log_mse}")

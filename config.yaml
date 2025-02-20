@@ -2,7 +2,7 @@
 data_type: "dynamic"  # Options: "dynamic" or "static"
 
 # Model selection
-models: ["pysindy"] #, "aifeynman", "dso", "kan", "pysr"]
+models: ["dso"] #, "aifeynman", "dso", "kan", "pysr"]
 
 output_extension: {
     "pysindy": "txt",
@@ -25,10 +25,10 @@ timeout_duration: 280
 
 # Dataset sizes for each method
 dataset_sizes:
-  pysindy: 1000       # PySINDy needs around 100-1000 samples
+  pysindy: 10000       # PySINDy needs around 100-1000 samples
   aifeynman: 5000     # AI Feynman needs around 500-5000 samples
   dso: 10000          # DSO needs around 2000-10000 samples
   kan: 10000          # KAN needs around 2000-10000 samples
   pysr: 10000         # PySR needs around 1000-10000 samples
 
-data_proportion: 0.2  # Proportion of data to be used for integrator and plot method
+data_proportion: 0.01  # Proportion of data to be used for integrator and plot method
