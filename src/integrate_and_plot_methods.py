@@ -247,6 +247,7 @@ def integrate_and_calculate_loss(data, formulas, output_path, plot_path):
                 loss_ls = calculate_loss(groundtruth, solution_simu.ys)
                 loss_df.append(loss_ls)
 
+        print("Loss DataFrame contents:", loss_df)
         average_log_mse = np.nanmean([np.mean(loss) for loss in loss_df if loss is not None])
         print(f"Average Log MSE for {method}: {average_log_mse}")
         loss_results[method] = average_log_mse
@@ -266,6 +267,7 @@ def main():
     """
     Main function to parse arguments and run the integration and loss calculation.
     """
+    print('STARTED integrate ')
     parser = argparse.ArgumentParser(description='Integrate ODE system, calculate loss, and plot results using multiple formulas.')
     parser.add_argument('--dataset', required=True, help='Path to the dataset CSV file')
     parser.add_argument('--features', type=str, help='Comma-separated list of features to use from the dataset')
@@ -279,6 +281,7 @@ def main():
 
     formulas = dict(zip(args.methods, args.formulas))
     data = load_dataset(args.dataset, args.features, args.trajectory_column, args.data_proportion)
+    print('ere')
     integrate_and_calculate_loss(data, formulas, args.output, args.plot)
 
 if __name__ == '__main__':

@@ -87,7 +87,7 @@ def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
                     lamb=LAMB,
                     lamb_entropy=LAMB_ENTROPY
                 )
-                
+            
                 # Prune the model and extract the formula
                 model.prune(edge_th=THRESHOLD)
                 model.auto_symbolic(lib=LIBRARY)

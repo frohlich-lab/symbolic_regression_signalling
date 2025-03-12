@@ -2,7 +2,7 @@
 data_type: "dynamic"  # Options: "dynamic" or "static"
 
 # Model selection
-models: ["dso"] #, "aifeynman", "dso", "kan", "pysr"]
+models: ["pysr", "dso", "pysindy"] #, "aifeynman", "dso", "kan", "pysr"]
 
 output_extension: {
     "pysindy": "txt",

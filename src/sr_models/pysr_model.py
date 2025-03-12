@@ -13,12 +13,11 @@ from pysr import PySRRegressor
 import os
 
 # Hyperparameters for PySR (Python Symbolic Regression)
-N_ITERATIONS = 1000  # Total iterations for model training
+N_ITERATIONS = 100  # Total iterations for model training
 POPULATION_SIZE = 30  # Symbolic expressions in the population
 POPULATIONS = 15  # Number of populations to evolve
 MUTATION_RATE = 0.1  # Mutation probability per individual
 MAX_SIZE = 20  # Maximum size of symbolic expressions
-LOG_SPACE_LOSS = "my_loss(x,y)=(log(max(x,0)+1e-25)-log(max(y,0)+1e-25))^2"  # Custom log-space loss
 PARSIMONY = 1  # Regularization to reduce expression complexity
 VERBOSITY = 0  # Verbosity level during training
 BATCHING = True  # Enable mini-batch training
@@ -26,7 +25,7 @@ ANNEALING = True  # Enable annealing to escape local minima
 
 # Operators for Symbolic Regression
 BINARY_OPERATORS = ["+", "*", "/", "-"]  # Binary operators for expressions
-UNARY_OPERATORS = ["exp", "log", "abs", "neg"]  # Unary operators for expressions
+UNARY_OPERATORS = ["exp", "log"]  # Unary operators for expressions
 
 def load_dataset(file_path, dataset_size=None, features=None):
     """
@@ -64,7 +63,6 @@ def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
             verbosity=VERBOSITY,
             batching=BATCHING,
             annealing=ANNEALING,
-            elementwise_loss=LOG_SPACE_LOSS,
             equation_file=temp_file  # Save best formulas to this file
         )
         model.fit(X, y)

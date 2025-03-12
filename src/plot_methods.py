@@ -71,21 +71,22 @@ def main():
     """
     Main function to parse arguments and generate the scatter plot.
     """
+    print('STARTED')
     parser = argparse.ArgumentParser(description='Plot Log-Space MSE Loss against Formula Complexity')
-    parser.add_argument('--formulas', nargs='+', required=True, help='List of formulas or a file path containing formulas')
+    parser.add_argument('--formulas', nargs='+', required=True, help='List of file paths containing formulas')
     parser.add_argument('--dataset', required=True, help='File path to a CSV dataset')
     parser.add_argument('--output', required=True, help='File path to save the generated plot')
 
     args = parser.parse_args()
 
-    # Determine if formulas are in a file or provided directly
-    if os.path.isfile(args.formulas[0]):
-        formulas = load_formulas_from_file(args.formulas[0])
-    else:
-        formulas = args.formulas
-
-    # Convert formulas to sympy expressions
-    formulas = [sp.sympify(formula) for formula in formulas]
+    # Load all formulas from the provided file paths
+    formulas = []
+    print('args.formulas', args.formulas)
+    for file_path in args.formulas:
+        with open(file_path, 'r') as f:
+            print('Plotting: ', file_path)
+            formula = f.readline().strip()  # Assuming each file contains only one formula
+            formulas.append(sp.sympify(formula))  # Convert to sympy expression
 
     # Load dataset from CSV file
     dataset = pd.read_csv(args.dataset)

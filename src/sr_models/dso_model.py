@@ -8,8 +8,8 @@ import tensorflow as tf
 tf.keras.backend.clear_session()  # Clears TensorFlow state
 
 # Hyperparameters for DSO (Deep Symbolic Optimization)
-N_ITERATIONS = 50
-N_SAMPLES = 40
+N_ITERATIONS = 100
+N_SAMPLES = 100
 SAVE_ALL_ITERATIONS = True
 FUNCTION_SET = ["add", "sub", "mul", "div", "sin", "cos", "exp", "log", "poly"]
 LEARNING_RATE = 0.001
@@ -35,9 +35,13 @@ def create_dso_config(dataset_path):
         "training": {
             "n_samples": N_SAMPLES,
             "batch_size": 500,
+            "early_stopping" : False
         },
         "prior": {
             "const": {"on": True},
+        },
+        "experiment" : {
+            "logdir" : "./data/dso/logs"
         }
     }
     os.makedirs(os.path.dirname(CONFIG_FILE_PATH), exist_ok=True)
@@ -58,28 +62,16 @@ def run_dso_training(temp_file):
     """Runs DSO model training and logs the best equations to a specified file."""
     model = DeepSymbolicRegressor(CONFIG_FILE_PATH)
     model.setup()
-    current_best = None
 
     with open(temp_file, 'w') as f:
-        f.write("Iteration\tEquation\tScore\n")
-        for iteration in range(N_ITERATIONS):
-            try:
-                model.train_one_step()
-                new_best_program = model.trainer.p_r_best
-                new_best_equation = repr(new_best_program.sympy_expr)
-                score = new_best_program.r
+        model.train()
+        f.write("Equation\tScore\n")
+        new_best_program = model.trainer.p_r_best
+        new_best_equation = repr(new_best_program.sympy_expr)
+        print(new_best_equation)
+        score = new_best_program.r
+        f.write(f"{new_best_equation}\t{score:.6f}\n")
 
-                if new_best_equation != current_best:
-                    current_best = new_best_equation
-                    f.write(f"{iteration}\t{current_best}\t{score:.6f}\n")
-                    print(f"New best equation found at iteration {iteration}: {current_best} with score: {score}")
-
-            except Exception as e:
-                print(f"Error at iteration {iteration}: {e}")
-                continue
-
-        f.write(f"\nFinal best equation after {N_ITERATIONS} iterations:\n")
-        f.write(f"Iteration: {iteration}\tEquation: {current_best}\tScore: {score:.6f}\n")
     print("DSO model training completed. Results saved.")
 
 def main():
@@ -97,6 +89,7 @@ def main():
 
     create_dso_config(dataset_path)
     run_dso_training(args.temp_file)
+
 
 if __name__ == '__main__':
     main()
