@@ -1,6 +1,6 @@
 """
-This module provides methods for loading symbolic formulas, computing log-space MSE loss,
-calculating formula complexity, and generating scatter plots of log-space MSE loss against
+This module provides methods for loading symbolic formulas, computing log-space MAE loss,
+calculating formula complexity, and generating scatter plots of log-space MAE loss against
 formula complexity.
 """
 
@@ -25,8 +25,8 @@ def load_formulas_from_file(file_path):
         formulas = file.readlines()
     return [formula.strip() for formula in formulas]
 
-def compute_log_mse_loss(formula, dataset):
-    """Compute the mean squared error (MSE) loss between predictions of the formula and the target in log-space data."""
+def compute_log_MAE_loss(formula, dataset):
+    """Compute the mean squared error (MAE) loss between predictions of the formula and the target in log-space data."""
     formula_symbols = formula.free_symbols
     formula_variable_names = [str(symbol) for symbol in formula_symbols]  # Extract variable names in formula
     relevant_columns = [col for col in dataset.columns if col in formula_variable_names]
@@ -40,29 +40,32 @@ def compute_log_mse_loss(formula, dataset):
     # Calculate predictions
     predicted_values = formula_func(*[dataset[col].astype(float) for col in relevant_columns])
 
-    # Compute MSE directly
-    loss = np.mean((predicted_values - dataset[target_column]) ** 2)
+    # Compute MAE directly
+    loss = np.mean(np.abs(predicted_values - dataset[target_column]))
     return loss
 
 def calculate_complexity(formula):
     """Calculate the complexity of a formula based on the number of elements."""
     return len(formula.atoms(sp.Symbol, sp.Number)) + len(formula.atoms(sp.Add, sp.Mul, sp.Pow, sp.Function))
 
-def scatter_plot_formulas(formulas, dataset, output_file):
-    """Generate a scatter plot of log-space MSE loss versus formula complexity and save it to a file."""
+def scatter_plot_formulas(formula_paths, formulas, dataset, output_file):
+    """Generate a scatter plot of log-space MAE loss versus formula complexity and save it to a file."""
     complexities, losses = [], []
 
     for formula in formulas:
         complexity = calculate_complexity(formula)
-        loss = compute_log_mse_loss(formula, dataset)
+        loss = compute_log_MAE_loss(formula, dataset)
         complexities.append(complexity)
         losses.append(loss)
 
     plt.figure()
     plt.scatter(complexities, losses)
+    for i, formula in enumerate(formula_paths):
+        formula_name = formula.split('_')[1]
+        plt.annotate(formula_name, (complexities[i], losses[i]), fontsize=8)
     plt.xlabel('Formula Complexity')
-    plt.ylabel('Log-Space Loss (MSE)')
-    plt.title('Scatter Plot of Log-Space MSE Loss vs. Formula Complexity')
+    plt.ylabel('Log-Space Loss (MAE)')
+    plt.title('Scatter Plot of Log-Space MAE Loss vs. Formula Complexity')
     plt.grid(True)
     plt.savefig(output_file)
     plt.close()
@@ -72,7 +75,7 @@ def main():
     Main function to parse arguments and generate the scatter plot.
     """
     print('STARTED')
-    parser = argparse.ArgumentParser(description='Plot Log-Space MSE Loss against Formula Complexity')
+    parser = argparse.ArgumentParser(description='Plot Log-Space MAE Loss against Formula Complexity')
     parser.add_argument('--formulas', nargs='+', required=True, help='List of file paths containing formulas')
     parser.add_argument('--dataset', required=True, help='File path to a CSV dataset')
     parser.add_argument('--output', required=True, help='File path to save the generated plot')
@@ -81,10 +84,8 @@ def main():
 
     # Load all formulas from the provided file paths
     formulas = []
-    print('args.formulas', args.formulas)
     for file_path in args.formulas:
         with open(file_path, 'r') as f:
-            print('Plotting: ', file_path)
             formula = f.readline().strip()  # Assuming each file contains only one formula
             formulas.append(sp.sympify(formula))  # Convert to sympy expression
 
@@ -92,7 +93,7 @@ def main():
     dataset = pd.read_csv(args.dataset)
 
     # Generate and save the scatter plot
-    scatter_plot_formulas(formulas, dataset, args.output)
+    scatter_plot_formulas(args.formulas, formulas, dataset, args.output)
 
 if __name__ == '__main__':
     main()

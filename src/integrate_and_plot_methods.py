@@ -56,6 +56,10 @@ def load_dataset(file_path, features=None, trajectory_column=None, data_proporti
         sampled_conditions = np.random.choice(unique_conditions, size=int(len(unique_conditions) * data_proportion), replace=False)
         data = data[data[trajectory_column].isin(sampled_conditions)].reset_index(drop=True)
 
+        columns_to_exclude = ['condition_id', 'time']
+        columns_to_transform = [col for col in data.columns if col not in columns_to_exclude]
+        data[columns_to_transform] = data[columns_to_transform].map(lambda x: np.exp(x))
+
     print("Dataset loaded and preprocessed successfully.")
     return data
 
@@ -133,23 +137,23 @@ def integrate_simulation(ode_term, initial_values, params, solver, ts):
         return None
 
 def calculate_loss(groundtruth, simulation_output):
-    print("Calculating log MSE loss between ground truth and simulation output.")
+    print("Calculating log MAE loss between ground truth and simulation output.")
     log_groundtruth = np.log10(np.clip(groundtruth, a_min=1e-20, a_max=None))
     log_simulation_output = np.log10(np.clip(simulation_output, a_min=1e-20, a_max=None))
-    loss = np.mean(log_groundtruth - log_simulation_output, axis=0)
-    print("Log MSE loss calculated:", loss)
+    loss = np.mean(np.abs(log_groundtruth - log_simulation_output), axis=0)
+    print("Log MAE loss calculated:", loss)
     return loss
 
-def plot_log_mse(loss_results, plot_path):
-    """Plot the log MSE results for each method and save to the specified file."""
+def plot_log_MAE(loss_results, plot_path):
+    """Plot the log MAE results for each method and save to the specified file."""
     methods = list(loss_results.keys())
     losses = list(loss_results.values())
 
     plt.figure()
     plt.bar(methods, losses)
     plt.xlabel('Method')
-    plt.ylabel('Average Log MSE')
-    plt.title('Log MSE by Method')
+    plt.ylabel('Average Log MAE')
+    plt.title('Log MAE by Method')
     plt.xticks(rotation=45)
     plt.grid(axis='y', linestyle='--', alpha=0.7)
     plt.tight_layout()
@@ -177,7 +181,11 @@ def integrate_and_calculate_loss(data, formulas, output_path, plot_path):
         with open(formula_path, 'r') as f:
             expression = sympy.sympify(f.read().strip())
         arguments = ['k_off', 'k_D', 'k_cat', 'k_inact', 'tK', 'P_u']
-        ode_function = sympy.lambdify(args=arguments, expr=expression)
+        log_subs = {arg: sympy.log(arg) for arg in arguments}  
+
+        # Apply transformation: log(x) → exp(expression(log(x)))
+        transformed_expression = sympy.exp(expression.subs(log_subs))
+        ode_function = sympy.lambdify(args=arguments, expr=transformed_expression)
 
         def system_ode(t, y, args):
             tK, P_u, Pp = y
@@ -242,25 +250,26 @@ def integrate_and_calculate_loss(data, formulas, output_path, plot_path):
                     data_sample['tK'][:-1].to_numpy(),
                     data_sample['P_u'][:-1].to_numpy(),
                     data_sample['P_p'][:-1].to_numpy()
-                ]).T
+                ]).transpose()
                 print("Calculating loss for sample:", i, "trajectory:", j)
                 loss_ls = calculate_loss(groundtruth, solution_simu.ys)
                 loss_df.append(loss_ls)
 
-        print("Loss DataFrame contents:", loss_df)
-        average_log_mse = np.nanmean([np.mean(loss) for loss in loss_df if loss is not None])
-        print(f"Average Log MSE for {method}: {average_log_mse}")
-        loss_results[method] = average_log_mse
+        print("Loss DataFrame contents", loss_df)
+        print([loss[2] for loss in loss_df if loss[2] is not None])
+        average_log_MAE = np.nanmean([loss[2] for loss in loss_df if loss[2] is not None])
+        print(f"Average Log MAE for {method}: {average_log_MAE}")
+        loss_results[method] = average_log_MAE
 
     print("Saving loss results to:", output_path)
     with open(output_path, 'w') as f:
-        for method, mse in loss_results.items():
-            f.write(f"{method}: {mse}\n")
+        for method, MAE in loss_results.items():
+            f.write(f"{method}: {MAE}\n")
     print("Loss results saved.")
 
-    print("Plotting log MSE results...")
-    plot_log_mse(loss_results, plot_path)
-    print("Log MSE plot saved to:", plot_path)
+    print("Plotting log MAE results...")
+    plot_log_MAE(loss_results, plot_path)
+    print("Log MAE plot saved to:", plot_path)
     print("Integration and loss calculation completed for all methods.")
 
 def main():
