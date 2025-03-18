@@ -9,10 +9,10 @@ tf.keras.backend.clear_session()  # Clears TensorFlow state
 
 # Hyperparameters for DSO (Deep Symbolic Optimization)
 N_ITERATIONS = 100
-N_SAMPLES = 100
+N_SAMPLES = 200
 SAVE_ALL_ITERATIONS = True
 FUNCTION_SET = ["add", "sub", "mul", "div", "sin", "cos", "exp", "log", "poly"]
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.0005
 OPTIMIZER = "adam"
 POLY_REGRESSOR = "dso_least_squares"
 CONFIG_FILE_PATH = "./data/dso/dso_config.json"
@@ -34,7 +34,7 @@ def create_dso_config(dataset_path):
         },
         "training": {
             "n_samples": N_SAMPLES,
-            "batch_size": 500,
+            "batch_size": 64,
             "early_stopping" : False
         },
         "prior": {

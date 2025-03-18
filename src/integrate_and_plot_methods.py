@@ -3,6 +3,7 @@
 import numpy as np
 import jax.numpy as jnp
 import pandas as pd
+import json
 import argparse
 import sympy
 import matplotlib.pyplot as plt
@@ -160,7 +161,7 @@ def plot_log_MAE(loss_results, plot_path):
     plt.savefig(plot_path)
     plt.close()
 
-def integrate_and_calculate_loss(data, formulas, output_path, plot_path):
+def integrate_and_calculate_loss(data, formulas, discovery_scales, output_path, plot_path):
     """
     Integrate ODE systems and calculate loss for multiple methods.
 
@@ -181,11 +182,16 @@ def integrate_and_calculate_loss(data, formulas, output_path, plot_path):
         with open(formula_path, 'r') as f:
             expression = sympy.sympify(f.read().strip())
         arguments = ['k_off', 'k_D', 'k_cat', 'k_inact', 'tK', 'P_u']
-        log_subs = {arg: sympy.log(arg) for arg in arguments}  
 
-        # Apply transformation: log(x) → exp(expression(log(x)))
-        transformed_expression = sympy.exp(expression.subs(log_subs))
-        ode_function = sympy.lambdify(args=arguments, expr=transformed_expression)
+        if discovery_scales[method] == 'log':
+            log_subs = {arg: sympy.log(arg) for arg in arguments}  
+            # Apply transformation: log(x) → exp(expression(log(x)))
+            transformed_expression = sympy.exp(expression.subs(log_subs))
+            ode_function = sympy.lambdify(args=arguments, expr=transformed_expression)
+        elif discovery_scales[method] == 'linear':
+            ode_function = sympy.lambdify(args=arguments, expr=expression)
+        else:
+            raise ValueError(f"Unsupported discovery scale: {discovery_scales[method]}")
 
         def system_ode(t, y, args):
             tK, P_u, Pp = y
@@ -280,8 +286,9 @@ def main():
     parser = argparse.ArgumentParser(description='Integrate ODE system, calculate loss, and plot results using multiple formulas.')
     parser.add_argument('--dataset', required=True, help='Path to the dataset CSV file')
     parser.add_argument('--features', type=str, help='Comma-separated list of features to use from the dataset')
-    parser.add_argument('--trajectory_column', type=str, help='Column name that identifies different trajectories in the dataset')
-    parser.add_argument('--data_proportion', type=float, help='Proportion of the dataset to use for analysis')
+    parser.add_argument('--discovery-scales', type=str, help='JSON of method names and their corresponding discovery scales')
+    parser.add_argument('--trajectory-column', type=str, help='Column name that identifies different trajectories in the dataset')
+    parser.add_argument('--data-proportion', type=float, help='Proportion of the dataset to use for analysis')
     parser.add_argument('--formulas', nargs='+', required=True, help='Paths to the formula files for each method')
     parser.add_argument('--methods', nargs='+', required=True, help='List of method names corresponding to the formula files')
     parser.add_argument('--output', required=True, help='Path to the file to save the loss results')
@@ -290,8 +297,8 @@ def main():
 
     formulas = dict(zip(args.methods, args.formulas))
     data = load_dataset(args.dataset, args.features, args.trajectory_column, args.data_proportion)
-    print('ere')
-    integrate_and_calculate_loss(data, formulas, args.output, args.plot)
+    discovery_scales = json.loads(args.discovery_scales)
+    integrate_and_calculate_loss(data, formulas, discovery_scales, args.output, args.plot)
 
 if __name__ == '__main__':
     main()

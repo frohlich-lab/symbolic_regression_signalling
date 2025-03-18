@@ -117,6 +117,21 @@ rule pysr:
     shell:
         symbolic_regression_rule("pysr", "{input.merged}", "{params.dataset_size}", "{params.features}", "{output.temp_file}")
 
+rule nn:
+    input:
+        merged=f"data/processed/{data_type}_merged.csv"
+    output:
+        temp_file=temporary(f"data/temp_results/temp_model_nn_{data_type}.pth")
+    conda:
+        "envs/nn.yaml"
+    params:
+        dataset_size=config["dataset_sizes"]["nn"],
+        features=features
+    shell:
+        """
+        timeout {config["timeout_duration"]} python src/nn_model.py --dataset {input.merged} --dataset_size {params.dataset_size} --features {params.features} --temp_file {output.temp_file} || true
+        """
+
 # Rule to extract the best formula from each temporary result file
 rule get_best_formula:
     input:
@@ -149,11 +164,12 @@ rule integrate_and_plot_results:
         methods=models,
         data_proportion=config["data_proportion"],
         features=features,
+        discovery_scales="'" + config["discovery_scales"] + "'",
         trajectory_column="condition_id"
     shell:
         """
         echo "Integrating and plotting results for methods: {params.methods}"
-        python src/integrate_and_plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --methods {params.methods} --data_proportion {params.data_proportion} --trajectory_column {params.trajectory_column} --output {output.csv} --plot {output.plot}
+        strace -o output_int.log -T -f python src/integrate_and_plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --methods {params.methods}  --discovery-scales {params.discovery_scales} --data-proportion {params.data_proportion} --trajectory-column {params.trajectory_column} --output {output.csv} --plot {output.plot}
         echo "Integrated results saved to {output.csv}, plot saved to {output.plot}"
         """
 
@@ -166,9 +182,11 @@ rule plot_methods:
         "data/plots/results_plot.png"
     conda:
         "envs/base.yaml"
+    params:
+        discovery_scales="'" + config["discovery_scales"] + "'"
     shell:
         """
         echo "Generating comparison plot for all methods."
-        python src/plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --output {output}
+        strace -o output_plot.log -T -f python src/plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --output {output} --discovery-scales {params.discovery_scales}
         echo "Comparison plot saved to {output}"
         """

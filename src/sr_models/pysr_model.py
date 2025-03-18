@@ -13,7 +13,7 @@ from pysr import PySRRegressor
 import os
 
 # Hyperparameters for PySR (Python Symbolic Regression)
-N_ITERATIONS = 100  # Total iterations for model training
+N_ITERATIONS = 300  # Total iterations for model training
 POPULATION_SIZE = 30  # Symbolic expressions in the population
 POPULATIONS = 15  # Number of populations to evolve
 MUTATION_RATE = 0.1  # Mutation probability per individual
@@ -22,6 +22,7 @@ PARSIMONY = 1  # Regularization to reduce expression complexity
 VERBOSITY = 0  # Verbosity level during training
 BATCHING = True  # Enable mini-batch training
 ANNEALING = True  # Enable annealing to escape local minima
+LOG_SPACE_LOSS = "my_loss(x,y)=(log(max(x,0)+1e-25)-log(max(y,0)+1e-25))^2"  # Custom log-space loss function
 
 # Operators for Symbolic Regression
 BINARY_OPERATORS = ["+", "*", "/", "-"]  # Binary operators for expressions
@@ -42,6 +43,8 @@ def load_dataset(file_path, dataset_size=None, features=None):
     if dataset_size:
         data = data.sample(n=min(dataset_size, len(data)))
 
+    data = data.map(np.exp)
+
     return data
 
 def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
@@ -49,6 +52,8 @@ def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
     Run PySR to find the best formula, saving results to a specified file.
     """
     X, y = data.iloc[:, :-1].values, data.iloc[:, -1].values  # Split data into inputs (X) and output (y)
+
+    custom_log_loss = lambda y_true, y_pred: np.mean(np.abs(np.log(y_true) - np.log(y_pred)))  # Custom log loss functio
 
     try:
         # Set up and train the PySR model
@@ -62,6 +67,7 @@ def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
             parsimony=PARSIMONY,
             verbosity=VERBOSITY,
             batching=BATCHING,
+            elementwise_loss=LOG_SPACE_LOSS,
             annealing=ANNEALING,
             equation_file=temp_file  # Save best formulas to this file
         )

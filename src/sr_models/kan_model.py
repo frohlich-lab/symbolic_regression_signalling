@@ -21,16 +21,16 @@ SEED = 1  # Random seed for reproducibility
 
 # Model Settings
 N_ITERATIONS = 3  # Number of KAN model iterations
-WIDTH = [5, 5, 5, 1]  # Width of neural network layers
-GRID = 35  # Grid size for KAN
+WIDTH = [5, 7, 5, 1]  # Width of neural network layers
+GRID = 40  # Grid size for KAN
 K = 3  # Degree of polynomial features
 THRESHOLD = 0.01  # Pruning threshold
 
 # Training Configuration
-OPTIMIZER = "LBFGS"  # Optimizer for KAN training
-STEPS = 20  # Optimization steps per iteration
-LAMB = 0.01  # Regularization parameter
-LAMB_ENTROPY = 10.0  # Entropy regularization
+OPTIMIZER = "Adam"  # Optimizer for KAN training
+STEPS = 150  # Optimization steps per iteration
+LAMB = 0.001  # Regularization parameter
+LAMB_ENTROPY = 1.0  # Entropy regularization
 
 # Function Library for Symbolic Representation
 LIBRARY = ['x', 'x^2', 'x^3', 'exp', 'log', 'abs']  # KAN function library

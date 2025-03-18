@@ -8,8 +8,21 @@ import sympy as sp
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import json
 import argparse
 import os
+
+def load_dataset(file_path, discovery_scales):
+    """
+    Load dataset from a CSV file, sample it if specified, 
+    and select specific columns if features are provided.
+    """
+    data = pd.read_csv(file_path)
+    if discovery_scales:
+        data = data.apply(lambda x: np.log(x) if discovery_scales[x.name] else x)
+
+
+    return data
 
 def load_formulas_from_file(file_path):
     """
@@ -25,7 +38,7 @@ def load_formulas_from_file(file_path):
         formulas = file.readlines()
     return [formula.strip() for formula in formulas]
 
-def compute_log_MAE_loss(formula, dataset):
+def compute_log_MAE_loss(formula, dataset, discovery_scale):
     """Compute the mean squared error (MAE) loss between predictions of the formula and the target in log-space data."""
     formula_symbols = formula.free_symbols
     formula_variable_names = [str(symbol) for symbol in formula_symbols]  # Extract variable names in formula
@@ -41,28 +54,36 @@ def compute_log_MAE_loss(formula, dataset):
     predicted_values = formula_func(*[dataset[col].astype(float) for col in relevant_columns])
 
     # Compute MAE directly
-    loss = np.mean(np.abs(predicted_values - dataset[target_column]))
+    if discovery_scale == 'log':
+        loss = np.mean(np.abs(predicted_values - dataset[target_column]))
+    else:
+        loss = np.mean(np.abs(np.log10(np.clip(predicted_values, a_min=1e-20, a_max=None) - np.log10(dataset[target_column]))))
     return loss
 
 def calculate_complexity(formula):
     """Calculate the complexity of a formula based on the number of elements."""
     return len(formula.atoms(sp.Symbol, sp.Number)) + len(formula.atoms(sp.Add, sp.Mul, sp.Pow, sp.Function))
 
-def scatter_plot_formulas(formula_paths, formulas, dataset, output_file):
+def scatter_plot_formulas(methods, formulas, discovery_scales, dataset, output_file):
     """Generate a scatter plot of log-space MAE loss versus formula complexity and save it to a file."""
     complexities, losses = [], []
 
-    for formula in formulas:
+    for method, formula in zip(methods, formulas):
         complexity = calculate_complexity(formula)
-        loss = compute_log_MAE_loss(formula, dataset)
+        if discovery_scales[method] == 'log':
+            loss = compute_log_MAE_loss(formula, dataset, discovery_scale='log')
+        elif discovery_scales[method] == 'linear':
+            dataset_linear = dataset.apply(lambda x: np.exp(x) if x.name in dataset.columns[2:] else x)
+            loss = compute_log_MAE_loss(formula, dataset_linear, discovery_scale='linear')
+        else:
+            raise ValueError(f"Unsupported discovery scale: {discovery_scales[method]}")
         complexities.append(complexity)
         losses.append(loss)
 
     plt.figure()
     plt.scatter(complexities, losses)
-    for i, formula in enumerate(formula_paths):
-        formula_name = formula.split('_')[1]
-        plt.annotate(formula_name, (complexities[i], losses[i]), fontsize=8)
+    for i, method in enumerate(methods):
+        plt.annotate(method, (complexities[i], losses[i]), fontsize=8)
     plt.xlabel('Formula Complexity')
     plt.ylabel('Log-Space Loss (MAE)')
     plt.title('Scatter Plot of Log-Space MAE Loss vs. Formula Complexity')
@@ -79,8 +100,10 @@ def main():
     parser.add_argument('--formulas', nargs='+', required=True, help='List of file paths containing formulas')
     parser.add_argument('--dataset', required=True, help='File path to a CSV dataset')
     parser.add_argument('--output', required=True, help='File path to save the generated plot')
-
+    parser.add_argument('--discovery-scales', required=True, type=str, help='JSON of method names and their corresponding discovery scales')
+ 
     args = parser.parse_args()
+    methods = [formula.split('_')[1] for formula in args.formulas]
 
     # Load all formulas from the provided file paths
     formulas = []
@@ -91,9 +114,10 @@ def main():
 
     # Load dataset from CSV file
     dataset = pd.read_csv(args.dataset)
+    discovery_scales = json.loads(args.discovery_scales)
 
     # Generate and save the scatter plot
-    scatter_plot_formulas(args.formulas, formulas, dataset, args.output)
+    scatter_plot_formulas(methods, formulas, discovery_scales, dataset, args.output)
 
 if __name__ == '__main__':
     main()

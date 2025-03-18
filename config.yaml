@@ -2,14 +2,15 @@
 data_type: "dynamic"  # Options: "dynamic" or "static"
 
 # Model selection
-models: ["pysr", "dso", "pysindy"] #, "aifeynman", "dso", "kan", "pysr"]
+models: ["nn"] #["pysr", "pysindy", "kan", "dso"] #, "aifeynman", "dso", "kan", "pysr"]
 
 output_extension: {
     "pysindy": "txt",
     "aifeynman": "txt",
     "dso": "txt",
     "kan": "txt",
-    "pysr": "csv"  # pysr specifically uses csv
+    "pysr": "csv",  # pysr specifically uses csv
+    "nn": "txt"
 }
 
 # Feature lists for static and dynamic datasets
@@ -21,7 +22,9 @@ features:
 target_feature: "kcat_cg"  # Target feature to be placed as the last column of the dataset
 
 # Timeout duration in seconds (e.g., 2 min * 60 = 120 seconds)
-timeout_duration: 280
+timeout_duration: 600
+
+discovery_scales: '{"pysindy": "linear", "aifeynman": "log", "dso": "log", "kan": "log", "pysr": "linear", "nn": "log"}'
 
 # Dataset sizes for each method
 dataset_sizes:
@@ -30,5 +33,6 @@ dataset_sizes:
   dso: 10000          # DSO needs around 2000-10000 samples
   kan: 10000          # KAN needs around 2000-10000 samples
   pysr: 10000         # PySR needs around 1000-10000 samples
+  nn: 10000           # Neural network needs around 1000-10000 samples
 
-data_proportion: 0.01  # Proportion of data to be used for integrator and plot method
+data_proportion: 0.0001  # Proportion of data to be used for integrator and plot method
