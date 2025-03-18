@@ -2,7 +2,7 @@
 data_type: "dynamic"  # Options: "dynamic" or "static"
 
 # Model selection
-models: ["nn"] #["pysr", "pysindy", "kan", "dso"] #, "aifeynman", "dso", "kan", "pysr"]
+models: ["pysr"] #["pysr", "pysindy", "kan", "dso"] #, "aifeynman", "dso", "kan", "pysr"]
 
 output_extension: {
     "pysindy": "txt",
@@ -10,7 +10,6 @@ output_extension: {
     "dso": "txt",
     "kan": "txt",
     "pysr": "csv",  # pysr specifically uses csv
-    "nn": "txt"
 }
 
 # Feature lists for static and dynamic datasets
@@ -24,7 +23,7 @@ target_feature: "kcat_cg"  # Target feature to be placed as the last column of t
 # Timeout duration in seconds (e.g., 2 min * 60 = 120 seconds)
 timeout_duration: 600
 
-discovery_scales: '{"pysindy": "linear", "aifeynman": "log", "dso": "log", "kan": "log", "pysr": "linear", "nn": "log"}'
+discovery_scales: '{"pysindy": "linear", "aifeynman": "log", "dso": "log", "kan": "log", "pysr": "linear"}'
 
 # Dataset sizes for each method
 dataset_sizes:

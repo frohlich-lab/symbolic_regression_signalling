@@ -17,7 +17,8 @@ rule all:
         temp_files,
         "data/plots/results_plot.png",
         "data/plots/integrated_results_plot.png",
-        "data/results/loss_comparison.csv"
+        "data/results/loss_comparison.csv",
+        f"data/results/model_nn_{data_type}.pth"
 
 # Preprocessing rule to merge and process raw data
 rule preprocessing:
@@ -121,7 +122,7 @@ rule nn:
     input:
         merged=f"data/processed/{data_type}_merged.csv"
     output:
-        temp_file=temporary(f"data/temp_results/temp_model_nn_{data_type}.pth")
+        output=f"data/results/model_nn_{data_type}.pth"
     conda:
         "envs/nn.yaml"
     params:
@@ -129,7 +130,7 @@ rule nn:
         features=features
     shell:
         """
-        timeout {config["timeout_duration"]} python src/nn_model.py --dataset {input.merged} --dataset_size {params.dataset_size} --features {params.features} --temp_file {output.temp_file} || true
+        python src/nn_model.py --dataset {input.merged} --dataset_size {params.dataset_size} --features {params.features} --output {output.output} || true
         """
 
 # Rule to extract the best formula from each temporary result file

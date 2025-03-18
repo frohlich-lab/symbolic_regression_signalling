@@ -11,7 +11,7 @@ import os
 # Hyperparameters for the neural network
 LEARNING_RATE = 0.001
 BATCH_SIZE = 64
-EPOCHS = 300
+EPOCHS = 25
 HIDDEN_LAYERS = [128, 64, 32]
 ACTIVATION = nn.ReLU
 
@@ -43,27 +43,28 @@ def load_dataset(file_path, dataset_size=None, features=None):
     if features and features != "all":
         data = data[features.split(',')]
     
-    # Sample the dataset if dataset size is specified
-    if dataset_size:
-        data = data.sample(n=min(dataset_size, len(data)))
-    
+    # Normalize input features
     scaler_X = StandardScaler()
-    data.iloc[:, :-1] = scaler_X.fit_transform(data.iloc[:, :-1])  # Normalize input features
-
-    return data
-
-def train_model(data, temp_file):
-    """
-    Train a neural network on the dataset and save predictions to a file.
-    """
-    X, y = data.iloc[:, :-1].values, data.iloc[:, -1].values
-    X = torch.tensor(X, dtype=torch.float32)
-    y = torch.tensor(y, dtype=torch.float32).view(-1, 1)
+    data.iloc[:, :-1] = scaler_X.fit_transform(data.iloc[:, :-1])
     
-    dataset = TensorDataset(X, y)
+    # Sample the dataset if dataset size is specified
+    sampled_data = data.sample(n=min(dataset_size, len(data))) if dataset_size else data
+
+    return sampled_data, data
+
+def train_and_evaluate_model(sampled_data, full_data):
+    """
+    Train a neural network on the sampled dataset and calculate MAE on the full dataset.
+    """
+    # Prepare sampled data for training
+    X_sampled, y_sampled = sampled_data.iloc[:, :-1].values, sampled_data.iloc[:, -1].values
+    X_sampled = torch.tensor(X_sampled, dtype=torch.float32)
+    y_sampled = torch.tensor(y_sampled, dtype=torch.float32).view(-1, 1)
+    
+    dataset = TensorDataset(X_sampled, y_sampled)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
     
-    model = NeuralNet(input_dim=X.shape[1], output_dim=1)
+    model = NeuralNet(input_dim=X_sampled.shape[1], output_dim=1)
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     
@@ -75,26 +76,34 @@ def train_model(data, temp_file):
             loss.backward()
             optimizer.step()
         
-        if epoch % 50 == 0:
+        if epoch % 1 == 0:
             print(f"Epoch {epoch}: Loss = {loss.item()}")
     
-    torch.save(model.state_dict(), temp_file)
-    print(f"Model trained and saved to {temp_file}")
+    # Evaluate on the full dataset
+    X_full, y_full = full_data.iloc[:, :-1].values, full_data.iloc[:, -1].values
+    X_full = torch.tensor(X_full, dtype=torch.float32)
+    y_full = torch.tensor(y_full, dtype=torch.float32).view(-1, 1)
+    
+    model.eval()
+    with torch.no_grad():
+        predictions = model(X_full)
+        mae = torch.mean(torch.abs(predictions - y_full)).item()
+    
+    print(f"Mean Absolute Error (MAE) on the full dataset- Neural Network: {mae}")
 
 def main():
     """
     Main function to parse arguments and train the neural network.
     """
-    parser = argparse.ArgumentParser(description='Train a neural network on the dataset')
+    parser = argparse.ArgumentParser(description='Train a neural network and evaluate MAE')
     parser.add_argument('--dataset', required=True, help='Path to the dataset CSV file')
     parser.add_argument('--dataset_size', type=int, help='Maximum number of samples to load from the dataset')
     parser.add_argument('--features', type=str, help='Comma-separated list of features to use from the dataset')
-    parser.add_argument('--temp_file', required=True, help='Path to save the trained model')
+    parser.add_argument('--output', required=True, help='File path to save the model') 
     
     args = parser.parse_args()
-    data = load_dataset(args.dataset, args.dataset_size, args.features)
-    train_model(data, args.temp_file)
+    sampled_data, full_data = load_dataset(args.dataset, args.dataset_size, args.features)
+    train_and_evaluate_model(sampled_data, full_data)
 
 if __name__ == '__main__':
     main()
-

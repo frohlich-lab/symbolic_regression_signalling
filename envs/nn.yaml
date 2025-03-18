@@ -1,0 +1,14 @@
+name: nn_env
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - pytorch
+  - torchvision
+  - scikit-learn
+  - pip
+  - pip:
+      - argparse
