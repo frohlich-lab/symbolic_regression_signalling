@@ -18,7 +18,8 @@ rule all:
         "data/plots/results_plot.png",
         "data/plots/integrated_results_plot.png",
         "data/results/loss_comparison.csv",
-        f"data/results/model_nn_{data_type}.pth"
+        f"data/results/model_nn_{data_type}.pth",
+        "data/plots/regime_loss_comparison.png"
 
 # Preprocessing rule to merge and process raw data
 rule preprocessing:
@@ -190,4 +191,21 @@ rule plot_methods:
         echo "Generating comparison plot for all methods."
         strace -o output_plot.log -T -f python src/plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --output {output} --discovery-scales {params.discovery_scales}
         echo "Comparison plot saved to {output}"
+        """
+
+rule pysr_regimes:
+    input:
+        dataset=f"data/processed/{data_type}_merged.csv"
+    output:
+        "data/plots/regime_loss_comparison.png"
+    conda:
+        "envs/pysr.yaml"
+    params:
+        dataset_size=config["dataset_sizes"]["pysr"],
+        features=features
+    shell:
+        """
+        echo "Running PySR on different biochemical regimes."
+        python src/pysr_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features}
+        echo "PySR regime evaluation completed."
         """
