@@ -11,3 +11,6 @@ mystery.dat
 results_gen_sym.dat
 results.dat
 qaz.dat
+wandb/
+src/__pycache__/
+.DS_Store

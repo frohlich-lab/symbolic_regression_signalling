@@ -13,7 +13,7 @@ from pysr import PySRRegressor
 import os
 
 # Hyperparameters for PySR (Python Symbolic Regression)
-N_ITERATIONS = 300  # Total iterations for model training
+N_ITERATIONS = 200  # Total iterations for model training
 POPULATION_SIZE = 30  # Symbolic expressions in the population
 POPULATIONS = 15  # Number of populations to evolve
 MUTATION_RATE = 0.1  # Mutation probability per individual
@@ -52,9 +52,7 @@ def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
     Run PySR to find the best formula, saving results to a specified file.
     """
     X, y = data.iloc[:, :-1].values, data.iloc[:, -1].values  # Split data into inputs (X) and output (y)
-
-    custom_log_loss = lambda y_true, y_pred: np.mean(np.abs(np.log(y_true) - np.log(y_pred)))  # Custom log loss functio
-
+    
     try:
         # Set up and train the PySR model
         model = PySRRegressor(

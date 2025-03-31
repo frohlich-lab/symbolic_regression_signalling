@@ -9,6 +9,7 @@ dependencies:
   - pytorch
   - torchvision
   - scikit-learn
+  - wandb
   - pip
   - pip:
       - argparse

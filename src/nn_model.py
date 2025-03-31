@@ -9,21 +9,25 @@ from sklearn.preprocessing import StandardScaler
 import os
 
 # Hyperparameters for the neural network
-LEARNING_RATE = 0.001
-BATCH_SIZE = 64
-EPOCHS = 25
-HIDDEN_LAYERS = [128, 64, 32]
-ACTIVATION = nn.ReLU
+LEARNING_RATE = 3e-4
+BATCH_SIZE = 256
+EPOCHS = 600
+HIDDEN_LAYERS = [256, 256, 128, 64]
+ACTIVATION = nn.SiLU  # smooth saturation curve approximation
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class NeuralNet(nn.Module):
-    def __init__(self, input_dim, output_dim):
+    def __init__(self, input_dim, output_dim, dropout_rate=0.03):
         super(NeuralNet, self).__init__()
         layers = []
         prev_dim = input_dim
         
         for hidden_dim in HIDDEN_LAYERS:
             layers.append(nn.Linear(prev_dim, hidden_dim))
+            layers.append(nn.BatchNorm1d(hidden_dim))  # Add BatchNorm layer
             layers.append(ACTIVATION())
+            layers.append(nn.Dropout(p=dropout_rate))
             prev_dim = hidden_dim
         
         layers.append(nn.Linear(prev_dim, output_dim))
@@ -34,76 +38,125 @@ class NeuralNet(nn.Module):
 
 def load_dataset(file_path, dataset_size=None, features=None):
     """
-    Load dataset from a CSV file, sample it if dataset size is specified, 
-    and select specific features if provided.
+    Load dataset, normalize input features, and optionally sample.
     """
     data = pd.read_csv(file_path)
-    
-    # Select specific columns if features are provided
+
+    # Optional: add meaningful ratios if helpful for MM modeling
+    # data['P_u_over_tK'] = data['P_u'] / data['tK']
+    # data['combined_rate'] = (data['k_off'] + data['k_cat'] + data['k_inact']) / (data['k_D'] * data['k_off'])
+
     if features and features != "all":
         data = data[features.split(',')]
     
-    # Normalize input features
+    # Normalize inputs only (not output)
     scaler_X = StandardScaler()
     data.iloc[:, :-1] = scaler_X.fit_transform(data.iloc[:, :-1])
     
-    # Sample the dataset if dataset size is specified
     sampled_data = data.sample(n=min(dataset_size, len(data))) if dataset_size else data
 
     return sampled_data, data
 
-def train_and_evaluate_model(sampled_data, full_data):
+def train_model(sampled_data, output_path, verbose=False, retrain=True):
     """
-    Train a neural network on the sampled dataset and calculate MAE on the full dataset.
+    Train a neural network on log-transformed targets with early stopping.
     """
-    # Prepare sampled data for training
-    X_sampled, y_sampled = sampled_data.iloc[:, :-1].values, sampled_data.iloc[:, -1].values
-    X_sampled = torch.tensor(X_sampled, dtype=torch.float32)
-    y_sampled = torch.tensor(y_sampled, dtype=torch.float32).view(-1, 1)
+
+    input_dim = sampled_data.shape[1] - 1
+
+    model = NeuralNet(input_dim=input_dim, output_dim=1).to(device)
+
+    if not retrain and os.path.exists(output_path):
+        if verbose:
+            print(f"Loading pretrained model from {output_path}")
+        model.load_state_dict(torch.load(output_path, map_location=device))
+        return model
     
+    X_sampled = sampled_data.iloc[:, :-1].values
+    y_sampled = sampled_data.iloc[:, -1].values
+    y_sampled_log = np.log(np.maximum(y_sampled, 1e-100))
+
+    X_sampled = torch.tensor(X_sampled, dtype=torch.float32).to(device)
+    y_sampled = torch.tensor(y_sampled_log, dtype=torch.float32).view(-1, 1).to(device)
+
     dataset = TensorDataset(X_sampled, y_sampled)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
-    
-    model = NeuralNet(input_dim=X_sampled.shape[1], output_dim=1)
-    criterion = nn.MSELoss()
+
+    model = NeuralNet(input_dim=X_sampled.shape[1], output_dim=1).to(device)
+    criterion = nn.L1Loss()
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.5)
+
+    best_loss = float('inf')
+    best_model_state = None
+    epochs_no_improve = 0
+    early_patience = 40
+
     for epoch in range(EPOCHS):
+        model.train()
+        epoch_losses = []
+
         for batch_X, batch_y in dataloader:
             optimizer.zero_grad()
             predictions = model(batch_X)
             loss = criterion(predictions, batch_y)
             loss.backward()
             optimizer.step()
-        
-        if epoch % 1 == 0:
-            print(f"Epoch {epoch}: Loss = {loss.item()}")
-    
-    # Evaluate on the full dataset
-    X_full, y_full = full_data.iloc[:, :-1].values, full_data.iloc[:, -1].values
-    X_full = torch.tensor(X_full, dtype=torch.float32)
-    y_full = torch.tensor(y_full, dtype=torch.float32).view(-1, 1)
-    
+            epoch_losses.append(loss.item())
+
+        avg_loss = np.mean(epoch_losses)
+        scheduler.step(avg_loss)
+
+        if avg_loss < best_loss - 1e-5:
+            best_loss = avg_loss
+            best_model_state = model.state_dict()
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= early_patience:
+                if verbose:
+                    print(f"Early stopping at epoch {epoch}")
+                break
+
+        if verbose and epoch % 10 == 0:
+            print(f"Epoch {epoch}: Log-MAE = {avg_loss:.4f}")
+
+    model.load_state_dict(best_model_state)
+    torch.save(model.state_dict(), output_path)
+    if verbose:
+        print(f"Best model saved to {output_path}")
+
+    return model
+
+def evaluate_model(model, full_data):
+    """
+    Evaluate model on full dataset (in original space), return MAE and predictions.
+    """
+    X_full = full_data.iloc[:, :-1].values
+    y_full = full_data.iloc[:, -1].values
+
+    X_tensor = torch.tensor(X_full, dtype=torch.float32).to(device)
+
     model.eval()
     with torch.no_grad():
-        predictions = model(X_full)
-        mae = torch.mean(torch.abs(predictions - y_full)).item()
-    
-    print(f"Mean Absolute Error (MAE) on the full dataset- Neural Network: {mae}")
+        pred_log = model(X_tensor).cpu().numpy().flatten()
+        pred = np.exp(pred_log)  # invert log-transform
+
+    mae = np.mean(np.abs(pred - y_full))
+
+    return mae, torch.tensor(pred)
 
 def main():
-    """
-    Main function to parse arguments and train the neural network.
-    """
-    parser = argparse.ArgumentParser(description='Train a neural network and evaluate MAE')
-    parser.add_argument('--dataset', required=True, help='Path to the dataset CSV file')
-    parser.add_argument('--dataset_size', type=int, help='Maximum number of samples to load from the dataset')
-    parser.add_argument('--features', type=str, help='Comma-separated list of features to use from the dataset')
-    parser.add_argument('--output', required=True, help='File path to save the model') 
+    parser = argparse.ArgumentParser(description='Train NN to approximate MM')
+    parser.add_argument('--dataset', required=True, help='CSV path')
+    parser.add_argument('--dataset_size', type=int, help='Max sample size')
+    parser.add_argument('--features', type=str, help='Comma-separated features or "all"')
+    parser.add_argument('--output', required=True, help='Model output path')
     
     args = parser.parse_args()
     sampled_data, full_data = load_dataset(args.dataset, args.dataset_size, args.features)
-    train_and_evaluate_model(sampled_data, full_data)
+    model = train_model(sampled_data, args.output, verbose=True)
+    evaluate_model(model, full_data)
 
 if __name__ == '__main__':
     main()
