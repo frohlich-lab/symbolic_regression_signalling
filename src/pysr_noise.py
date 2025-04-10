@@ -32,12 +32,18 @@ warnings.filterwarnings("ignore")
 
 # Define biochemical regimes
 REGIMES = {
-    "regime1": lambda df, r: df[(df["P_u"] / df["tK"]) >= r],
-    "regime1_1": lambda df, r: df[((df["P_u"] / df["tK"]) >= r) & (((df["k_off"] + df["k_cat"] + df["k_inact"]) / (df["k_D"] * df["k_off"])) / df["P_u"] >= r)],
-    "regime1_2": lambda df, r: df[((df["P_u"] / df["tK"]) >= r) & (df["P_u"] / ((df["k_off"] + df["k_cat"] + df["k_inact"]) / (df["k_D"] * df["k_off"])) >= r)],
-    "regime2": lambda df, r: df[(df["tK"] / df["P_u"]) >= r],
-    "regime2_1": lambda df, r: df[((df["tK"] / df["P_u"]) >= r) & (((df["k_off"] + df["k_cat"] + df["k_inact"]) / (df["k_D"] * df["k_off"])) / df["tK"] >= r)],
-    "regime2_2": lambda df, r: df[((df["tK"] / df["P_u"]) >= r) & (df["tK"] / ((df["k_off"] + df["k_cat"] + df["k_inact"]) / (df["k_D"] * df["k_off"])) >= r)],
+    "low_noise": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(
+        df["P_u"], df["tK"], df["k_cat"], df["k_off"], df["k_inact"], df["k_D"]))) < 0.01)],
+    "medium_noise": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(
+        df["P_u"], df["tK"], df["k_cat"], df["k_off"], df["k_inact"], df["k_D"]))) >= 0.01) & 
+        (np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(
+        df["P_u"], df["tK"], df["k_cat"], df["k_off"], df["k_inact"], df["k_D"]))) < 0.1)],
+    "high_noise": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(
+        df["P_u"], df["tK"], df["k_cat"], df["k_off"], df["k_inact"], df["k_D"]))) >= 0.1) & 
+        (np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(
+        df["P_u"], df["tK"], df["k_cat"], df["k_off"], df["k_inact"], df["k_D"]))) < 1.0)],
+    "very_high_noise": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(
+        df["P_u"], df["tK"], df["k_cat"], df["k_off"], df["k_inact"], df["k_D"]))) >= 1.0)],
 }
 
 # PySR configuration
@@ -108,8 +114,9 @@ def evaluate_models(data, features, temp_dir, dataset_size):
     losses, model_dict = {}, {}
 
     for regime, filter_func in REGIMES.items():
-        filtered = filter_func(data, 1.0).reset_index(drop=True)
+        filtered = filter_func(data).reset_index(drop=True)
         if filtered.empty:
+            print(f"No data for {regime} regime.")
             continue
 
         sample = filtered.sample(n=min(dataset_size, len(filtered)))
@@ -200,8 +207,8 @@ def plot_error_distributions(model_dict, output_dir):
     error_df = pd.DataFrame(error_records)
 
     regimes = sorted(error_df['Regime'].unique())
-    ncols = 3
-    nrows = (len(regimes) + ncols - 1) // ncols
+    ncols = 4
+    nrows = 1
 
     fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 5 * nrows), sharey=True)
     axes = axes.flatten()
@@ -227,133 +234,64 @@ def plot_error_distributions(model_dict, output_dir):
     plt.show()
 
 def plot_model_subregimes(model_dict, output_dir):
-
     models = ['pysr', 'mm', 'nn']
-    regimes_per_column = {
-        0: ['regime2_1', 'regime2_2'],  # P_u / tK < 1 — LEFT COLUMN
-        1: ['regime1_1', 'regime1_2'],  # P_u / tK > 1 — RIGHT COLUMN
+
+    regime_colors = {
+        "low_noise": "green",
+        "medium_noise": "orange",
+        "high_noise": "red",
+        "very_high_noise": "purple"
     }
-    regime_markers = {
-        'regime1_1': 'o',
-        'regime1_2': 's',
-        'regime2_1': '^',
-        'regime2_2': 'D'
-    }
-    cmap = cm.get_cmap('plasma', 256)  # Use a diverging colormap for better distinction
-    fig, axes = plt.subplots(3, 2, figsize=(14, 14), sharex=False, sharey=False)
-    all_handles, all_labels = [], []
 
-    indices = np.random.choice(
-        np.arange(1, 3001),
-        size=600,
-        replace=False
-    )
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+    indices = np.random.choice(np.arange(1, 3001), size=600, replace=False)
 
-    # Collect all errors across all models and regimes for global vmin/vmax
-    all_errors = []
-    for model in models:
-        for col in [0, 1]:
-            for regime in regimes_per_column[col]:
-                if regime not in model_dict:
-                    continue
+    for i, model in enumerate(models):
+        ax = axes[i]
 
-                data = model_dict[regime]['data'].loc[indices]
-                data_pre = model_dict[regime]['preprocessed'].loc[indices]
-                y_true = data.iloc[:, -1].values
+        for regime_name, condition_fn in REGIMES.items():
+            for regime_key in model_dict:
+                data = model_dict[regime_key]['data'].loc[indices].copy()
+                data_pre = model_dict[regime_key]['preprocessed'].loc[indices]
                 X = data.iloc[:, :-1]
-
-                if model == 'pysr':
-                    y_pred = model_dict[regime]['pysr'].predict(X.values)
-                elif model == 'mm':
-                    y_pred = michaelis_menten(
-                        data["P_u"], data["tK"],
-                        data["k_cat"], data["k_off"],
-                        data["k_inact"], data["k_D"]
-                    )
-                elif model == 'nn':
-                    y_pred = evaluate_model(model_dict[regime]['nn'], data_pre)[1].detach().cpu().numpy().flatten()
-
-                error = np.abs(np.log(np.maximum(y_pred, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
-                all_errors.extend(error)
-
-    vmin = np.percentile(all_errors, 1)
-    vmax = np.percentile(all_errors, 99)
-
-    # Plotting
-    for row, model in enumerate(models):
-        for col in [0, 1]:
-            ax = axes[row, col]
-            subregimes = regimes_per_column[col]
-            
-            for regime in subregimes:
-                if regime not in model_dict:
-                    continue
-
-                data = model_dict[regime]['data'].loc[indices]
-                data_pre = model_dict[regime]['preprocessed'].loc[indices]
-                y_true = data.iloc[:, -1].values
-                X = data.iloc[:, :-1]
-
-                if model == 'pysr':
-                    y_pred = model_dict[regime]['pysr'].predict(X.values)
-                elif model == 'mm':
-                    y_pred = michaelis_menten(
-                        data["P_u"], data["tK"],
-                        data["k_cat"], data["k_off"],
-                        data["k_inact"], data["k_D"]
-                    )
-                elif model == 'nn':
-                    y_pred = evaluate_model(model_dict[regime]['nn'], data_pre)[1].detach().cpu().numpy().flatten()
-
-                error = np.abs(np.log(np.maximum(y_pred, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
-                x_vals = (data["P_u"] / data["tK"]).values
-
-                if regime.startswith("regime1"):
-                    y_vals = ((data["k_off"] + data["k_cat"] + data["k_inact"]) /
-                              (data["k_D"] * data["k_off"])) / data["P_u"]
-                elif regime.startswith("regime2"):
-                    y_vals = ((data["k_off"] + data["k_cat"] + data["k_inact"]) /
-                              (data["k_D"] * data["k_off"])) / data["tK"]
-                else:
-                    raise ValueError(f"Unknown regime {regime}")
-
-                marker = regime_markers[regime]
-                sc = ax.scatter(
-                    x_vals, y_vals, c=error, cmap=cmap,
-                    marker=marker, alpha=0.7, edgecolors='k', linewidths=0.2,
-                    vmin=vmin, vmax=vmax, label=regime
+                data["y_true"] = data.iloc[:, -1]
+                data["y_mm"] = michaelis_menten(
+                    data["P_u"], data["tK"],
+                    data["k_cat"], data["k_off"],
+                    data["k_inact"], data["k_D"]
                 )
 
-                if regime not in all_labels:
-                    handle = plt.Line2D([0], [0], marker=marker, linestyle='',
-                                        color='black', label=regime, markersize=8)
-                    all_handles.append(handle)
-                    all_labels.append(regime)
+                if model == 'pysr':
+                    y_pred = model_dict[regime_key]['pysr'].predict(X.values)
+                elif model == 'mm':
+                    y_pred = data["y_mm"].values
+                elif model == 'nn':
+                    data_pre_subset = data_pre.loc[data.index]
+                    y_pred = evaluate_model(model_dict[regime_key]['nn'], data_pre_subset)[1].detach().cpu().numpy().flatten()
 
-            ax.set_xscale('log')
-            ax.set_yscale('log')
-            ax.set_xlabel("P_u / tK")
-            if col == 0:
-                ylabel = r"K$_\mathsf{M}$ / tK"
-            else:
-                ylabel = r"K$_\mathsf{M}$ / P$_\mathsf{u}$"
-            ax.set_ylabel(ylabel)
+                y_true = data["y_true"].values
+                error = np.abs(np.log(np.maximum(y_pred, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
 
-            regime_label = "< 1" if col == 0 else "> 1"
-            ax.set_title(f"{model.upper()} | P_u/tK {regime_label}")
-            ax.axhline(y=1, color='gray', linestyle='--', linewidth=0.8, alpha=0.7)
+                # Ensure points with zero error are included by setting a small value for log scale
+                error[error == 0] = 1e-25
 
-        # Per-row colorbar
-        norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
-        sm = ScalarMappable(cmap=cmap, norm=norm)
-        sm.set_array([])
-        cbar_ax = fig.add_axes([0.92, 0.72 - 0.30 * row, 0.015, 0.18])
-        cbar = plt.colorbar(sm, cax=cbar_ax)
-        cbar.set_label(f"{model.upper()} Log-MAE", fontsize=11)
+                ax.scatter(
+                    y_pred, error, alpha=0.6, s=20,
+                    label=regime_name if regime_name not in ax.get_legend_handles_labels()[1] else None,
+                    color=regime_colors[regime_name], edgecolors='k', linewidths=0.2
+                )
 
-    fig.legend(all_handles, all_labels, loc='upper center', ncol=4, frameon=False, fontsize=11)
-    plt.tight_layout(rect=[0, 0, 0.9, 0.94])
-    plt.savefig(os.path.join(output_dir, "error_landscape_all_regimes.png"))
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        ax.set_xlabel("Predicted Value", fontsize=11)
+        if i == 0:
+            ax.set_ylabel("Log Error (|log(pred) - log(true)|)", fontsize=11)
+        ax.set_title(f"{model.upper()} Error by Noise Regime", fontsize=13)
+        ax.legend(frameon=False)
+
+    plt.tight_layout()
+    output_path = os.path.join(output_dir, "error_landscape_all_regimes.png")
+    plt.savefig(output_path)
     plt.show()
 
 def plot_input_error_correlation(model_dict, output_dir):
@@ -544,8 +482,7 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
             ax.plot(pu_vals, y_nn, label="Neural Network", color='tab:blue')
             ax.plot(pu_vals, y_mm, label="Michaelis-Menten", color='tab:red', linestyle='--')
             ax.axvline(original_pu, color='gray', linestyle=':', linewidth=1.5, label='Original P_u')  # <-- Added
-            ax.set_xlim(0.01 * K_M, 100 * K_M)
-            ax.set_ylim(-0.2 * V_max, 1.6 * V_max)
+            ax.set_xlim(0.8 * original_pu, 1.2 * original_pu)
             ax.set_xlabel("P_u")
             if i % (n_samples // 2) == 0:
                 ax.set_ylabel("Output")
@@ -559,14 +496,14 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
         plt.close()
 
 def main():
-    parser = argparse.ArgumentParser(description='Evaluate biochemical regimes using symbolic regression and compare with MM and NN.')
+    parser = argparse.ArgumentParser(description='Evaluate noise regimes using symbolic regression and compare with MM and NN.')
     parser.add_argument('--dataset', required=True, help='CSV dataset path')
     parser.add_argument('--dataset_size', type=int, help='Max samples to use')
     parser.add_argument('--features', type=str, help='Comma-separated list of features or "all"')
     args = parser.parse_args()
 
     data = load_dataset(args.dataset, args.dataset_size, args.features)
-    evaluate_models(data, args.features, temp_dir='data/pysr_regimes/', dataset_size=args.dataset_size)
+    evaluate_models(data, args.features, temp_dir='data/pysr_noise/', dataset_size=args.dataset_size)
 
 if __name__ == '__main__':
     main()

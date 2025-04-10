@@ -9,11 +9,11 @@ from sklearn.preprocessing import StandardScaler
 import os
 
 # Hyperparameters for the neural network
-LEARNING_RATE = 3e-4
-BATCH_SIZE = 256
+LEARNING_RATE = 1
+BATCH_SIZE = 512
 EPOCHS = 600
 HIDDEN_LAYERS = [256, 256, 128, 64]
-ACTIVATION = nn.SiLU  # smooth saturation curve approximation
+ACTIVATION = nn.ReLU  # smooth saturation curve approximation
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

@@ -23,8 +23,10 @@ rule all:
         "data/pysr_regimes/regime_loss_comparison.png",
         "data/pysr_regimes/error_landscape_all_regimes.png",
         "data/pysr_regimes/all_pysr_formulas.txt",
-        "data/results/grid_search/grid_search_report.json",
-        "data/results/grid_search_followup/grid_search_followup_report.json"
+        # "data/results/grid_search/grid_search_report.json",
+        "data/pysr_noises/regime_loss_comparison.png",
+        "data/pysr_noise/error_landscape_all_regimes.png",
+        "data/pysr_noise/all_pysr_formulas.txt",
 
 # Preprocessing rule to merge and process raw data
 rule preprocessing:
@@ -214,7 +216,26 @@ rule pysr_regimes:
         """
         echo "Running PySR on different biochemical regimes."
         python src/pysr_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features}
-        echo "PySR regime evaluation completed."
+        echo "PySR biochemical regime evaluation completed."
+        """
+
+rule pysr_noise:
+    input:
+        dataset=f"data/processed/{data_type}_merged.csv"
+    output:
+        "data/pysr_noise/regime_loss_comparison.png",
+        "data/pysr_noise/error_landscape_all_regimes.png",
+        "data/pysr_noise/all_pysr_formulas.txt",
+    conda:
+        "envs/pysr.yaml"
+    params:
+        dataset_size=config["dataset_sizes"]["pysr"],
+        features=features
+    shell:
+        """
+        echo "Running PySR on different noise regimes."
+        python src/pysr_noise.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features}
+        echo "PySR noise regime evaluation completed."
         """
 
 # New rule to perform grid search for the NN model
@@ -236,30 +257,7 @@ rule nn_grid_search:
             --dataset {input.merged} \
             --dataset_size {params.dataset_size} \
             --features {params.features} \
-            --output_dir {params.output_dir} \
-            --n_trials 3
+            --output_dir {params.output_dir}
         echo "Grid search completed and saved to {output.report}"
         """
 
-rule nn_grid_search_followup:
-    input:
-        merged=f"data/processed/{data_type}_merged.csv"
-    output:
-        report="data/results/grid_search_followup/grid_search_followup_report.json"
-    conda:
-        "envs/nn.yaml"
-    params:
-        dataset_size=config["dataset_sizes"]["nn"],
-        features=features,
-        output_dir="data/results/grid_search_followup/"
-    shell:
-        """
-        echo "Running follow-up grid search over NN hyperparameters."
-        python src/nn_grid_search_followup.py \
-            --dataset {input.merged} \
-            --dataset_size {params.dataset_size} \
-            --features {params.features} \
-            --output_dir {params.output_dir} \
-            --n_trials 3
-        echo "Follow-up grid search completed and saved to {output.report}"
-        """
