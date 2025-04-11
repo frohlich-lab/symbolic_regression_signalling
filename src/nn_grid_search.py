@@ -55,8 +55,8 @@ def main():
         'metric': {'name': 'mae', 'goal': 'minimize'},
         'parameters': {
             'learning_rate': {
-                'min': 5e-4, 
-                'max': 2e-3, 
+                'min': 1e-5, 
+                'max': 1e-2, 
                 'distribution': 'log_uniform'
             },
             'batch_size': {
@@ -77,10 +77,12 @@ def main():
                 'values': [0.0]
             },
             'weight_decay': {
-                'values': [1e-5]
+                'min': 1e-5, 
+                'max': 1e-2, 
+                'distribution': 'log_uniform'
             },
             'activation': {
-                'values': ["ReLU"]
+                'values': ["ReLU", "SiLU"]
             },
             'optimizer': {
                 'values': ["Adam"]
@@ -101,7 +103,7 @@ def main():
     }
     wandb.login(relogin=False)
     sweep_id = args.sweep_id or wandb.sweep(sweep_config, project=args.project)
-    wandb.agent(sweep_id, function=train_wandb_trial, project=args.project)
+    wandb.agent(sweep_id, function=train_wandb_trial, project=args.project, count=100)
 
 if __name__ == "__main__":
     main()

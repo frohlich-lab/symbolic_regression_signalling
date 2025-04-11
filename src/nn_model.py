@@ -142,7 +142,7 @@ def evaluate_model(model, full_data):
         pred_log = model(X_tensor).cpu().numpy().flatten()
         pred = np.exp(pred_log)  # invert log-transform
 
-    mae = np.mean(np.abs(pred - y_full))
+    mae = np.mean(np.abs(pred_log - y_full))
 
     return mae, torch.tensor(pred)
 

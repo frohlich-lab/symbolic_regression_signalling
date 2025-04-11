@@ -491,6 +491,8 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
         X = data.iloc[:, :-1]
         pu_index = X.columns.get_loc("P_u")
 
+        _, pipeline = preprocess_data(X)
+
         # Full NN prediction and error
         y_pred_nn = evaluate_model(model, preprocessed_data)[1].detach().cpu().numpy().flatten()
         log_mae = np.abs(np.log(np.maximum(y_pred_nn, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
@@ -515,26 +517,21 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
             k_inact = fixed_sample["k_inact"]
             k_D = fixed_sample["k_D"]
 
-            # MM parameters
-            K_M = (k_cat + k_off + k_inact) / (k_off * k_D)
-            V_max = tK
-            pu_vals = np.linspace(0.01 * K_M, 100 * K_M, n_pu_points)
+            pu_vals = np.linspace(0.01 * original_pu, 5 * original_pu, n_pu_points)
 
             # Sweep P_u
             varied_inputs = np.tile(fixed_sample.values, (n_pu_points, 1))
             varied_inputs[:, pu_index] = pu_vals
 
             # Preprocess inputs
-            mean_vals = preprocessed_data.iloc[:, :-1].mean().values
-            std_vals = preprocessed_data.iloc[:, :-1].std().values
-            varied_df_log = np.log(varied_inputs)
-            varied_df_scaled = (varied_df_log - mean_vals) / std_vals
-            input_tensor = torch.tensor(varied_df_scaled, dtype=torch.float32)
-
+            X_varied_inputs_pre = pipeline.transform(varied_inputs)
+            varied_inputs_pre = pd.DataFrame(np.column_stack([X_varied_inputs_pre, np.full(len(varied_inputs_pre), y_true[idx])]), 
+                                              columns=list(data.columns))
+            
             # NN prediction
             model.eval()
             with torch.no_grad():
-                y_nn = model(input_tensor).detach().cpu().numpy().flatten()
+                y_nn = evaluate_model(model, varied_inputs_pre)[1].detach().cpu().numpy().flatten()
 
             # MM prediction
             y_mm = michaelis_menten(pu_vals, tK, k_cat, k_off, k_inact, k_D)
@@ -543,9 +540,9 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
             ax = axs[i]
             ax.plot(pu_vals, y_nn, label="Neural Network", color='tab:blue')
             ax.plot(pu_vals, y_mm, label="Michaelis-Menten", color='tab:red', linestyle='--')
+            ax.scatter(original_pu, y_true[idx], color='tab:blue', marker='o', s=100, label="Original P_u")
             ax.axvline(original_pu, color='gray', linestyle=':', linewidth=1.5, label='Original P_u')  # <-- Added
-            ax.set_xlim(0.01 * K_M, 100 * K_M)
-            ax.set_ylim(-0.2 * V_max, 1.6 * V_max)
+            ax.set_xlim(0.01 * original_pu, 5 * original_pu)
             ax.set_xlabel("P_u")
             if i % (n_samples // 2) == 0:
                 ax.set_ylabel("Output")
