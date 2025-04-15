@@ -525,13 +525,12 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
 
             # Preprocess inputs
             X_varied_inputs_pre = pipeline.transform(varied_inputs)
-            varied_inputs_pre = pd.DataFrame(np.column_stack([X_varied_inputs_pre, np.full(len(X_varied_inputs_pre), y_true[idx])]), 
-                                              columns=list(data.columns))
+            X_varied_inputs_pre = torch.tensor(X_varied_inputs_pre, dtype=torch.float32)
             
             # NN prediction
             model.eval()
             with torch.no_grad():
-                y_nn = evaluate_model(model, varied_inputs_pre)[1].detach().cpu().numpy().flatten()
+                y_nn = np.exp(model(X_varied_inputs_pre))
 
             # MM prediction
             y_mm = michaelis_menten(pu_vals, tK, k_cat, k_off, k_inact, k_D)

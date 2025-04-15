@@ -45,7 +45,7 @@ def main():
     parser.add_argument("--features", type=str, default="all")
     parser.add_argument("--output_dir", default="sweep_results")
     parser.add_argument("--sweep_id", type=str, default=None, help="Optional sweep ID to resume")
-    parser.add_argument("--project", type=str, default="michaelis-menten-nn-sweep-new")
+    parser.add_argument("--project", type=str, default="michaelis-menten-nn-sweep-fixed")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
