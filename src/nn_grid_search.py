@@ -45,7 +45,7 @@ def main():
     parser.add_argument("--features", type=str, default="all")
     parser.add_argument("--output_dir", default="sweep_results")
     parser.add_argument("--sweep_id", type=str, default=None, help="Optional sweep ID to resume")
-    parser.add_argument("--project", type=str, default="michaelis-menten-nn-sweep-2")
+    parser.add_argument("--project", type=str, default="michaelis-menten-nn-sweep-new")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -104,6 +104,37 @@ def main():
     wandb.login(relogin=False)
     sweep_id = args.sweep_id or wandb.sweep(sweep_config, project=args.project)
     wandb.agent(sweep_id, function=train_wandb_trial, project=args.project, count=100)
+
+    # Save a summary report of the grid search results
+    results_dir = os.path.join(args.output_dir, "data", "results")
+    os.makedirs(results_dir, exist_ok=True)
+
+    summary_path = os.path.join(results_dir, "grid_search_results.txt")
+    api = wandb.Api()
+    sweep = api.sweep(f"{wandb.run.entity}/{args.project}/{sweep_id}")
+
+    with open(summary_path, "w") as summary_file:
+        summary_file.write("Grid Search Results Report\n")
+        summary_file.write("===========================\n")
+        summary_file.write(f"Project: {args.project}\n")
+        summary_file.write(f"Dataset: {args.dataset}\n")
+        summary_file.write(f"Dataset Size: {args.dataset_size}\n")
+        summary_file.write(f"Features: {args.features}\n")
+        summary_file.write(f"Output Directory: {args.output_dir}\n")
+        summary_file.write("\n")
+        summary_file.write("Best Runs:\n")
+        summary_file.write("---------------------------\n")
+
+        # Sort runs by the metric (e.g., mae) and get the top results
+        sorted_runs = sorted(sweep.runs, key=lambda run: run.summary.get("mae", float("inf")))
+        for i, run in enumerate(sorted_runs[:10]):  # Top 10 runs
+            summary_file.write(f"Rank {i + 1}:\n")
+            summary_file.write(f"  Run ID: {run.id}\n")
+            summary_file.write(f"  MAE: {run.summary.get('mae')}\n")
+            summary_file.write(f"  Hyperparameters:\n")
+            for param, value in run.config.items():
+                summary_file.write(f"    {param}: {value}\n")
+            summary_file.write("\n")
 
 if __name__ == "__main__":
     main()
