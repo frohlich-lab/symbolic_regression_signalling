@@ -57,7 +57,7 @@ def main():
             'learning_rate': {
                 'min': 1e-5, 
                 'max': 1e-2, 
-                'distribution': 'log_uniform'
+                'distribution': 'log_uniform_values'
             },
             'batch_size': {
                 'values': [512, 1024]
@@ -79,7 +79,7 @@ def main():
             'weight_decay': {
                 'min': 1e-5, 
                 'max': 1e-2, 
-                'distribution': 'log_uniform'
+                'distribution': 'log_uniform_values'
             },
             'activation': {
                 'values': ["ReLU", "SiLU"]
