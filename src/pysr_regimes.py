@@ -136,8 +136,8 @@ def evaluate_models(data, features, temp_dir, dataset_size):
 
         X_pre, pipeline = preprocess_data(X)
         X_sample_pre = pipeline.transform(X_sample)
-        full_data_pre = pd.DataFrame(np.column_stack([X_pre, y]), columns=list(filtered.columns))
-        sample_pre = pd.DataFrame(np.column_stack([X_sample_pre, y_sample]), columns=list(filtered.columns))
+        full_data_pre = pd.DataFrame(np.column_stack([X_pre, np.log(y)]), columns=list(filtered.columns))
+        sample_pre = pd.DataFrame(np.column_stack([X_sample_pre, np.log(y_sample)]), columns=list(filtered.columns))
 
         nn_path = os.path.join(temp_dir, f"nn_{regime}.pth")
         if os.path.exists(nn_path):
