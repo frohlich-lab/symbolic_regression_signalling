@@ -23,7 +23,7 @@ rule all:
         "data/pysr_regimes/regime_loss_comparison.png",
         "data/pysr_regimes/error_landscape_all_regimes.png",
         "data/pysr_regimes/all_pysr_formulas.txt",
-        "data/results/grid_search/grid_search_results.txt",
+        # "data/results/grid_search/grid_search_results.txt",
         "data/pysr_noise/regime_loss_comparison.png",
         "data/pysr_noise/error_landscape_all_regimes.png",
         "data/pysr_noise/all_pysr_formulas.txt",

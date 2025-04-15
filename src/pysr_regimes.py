@@ -525,7 +525,7 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
 
             # Preprocess inputs
             X_varied_inputs_pre = pipeline.transform(varied_inputs)
-            varied_inputs_pre = pd.DataFrame(np.column_stack([X_varied_inputs_pre, np.full(len(varied_inputs_pre), y_true[idx])]), 
+            varied_inputs_pre = pd.DataFrame(np.column_stack([X_varied_inputs_pre, np.full(len(X_varied_inputs_pre), y_true[idx])]), 
                                               columns=list(data.columns))
             
             # NN prediction

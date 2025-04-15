@@ -74,10 +74,9 @@ def train_model(sampled_data, output_path, verbose=False, retrain=True):
     
     X_sampled = sampled_data.iloc[:, :-1].values
     y_sampled = sampled_data.iloc[:, -1].values
-    y_sampled_log = np.log(np.maximum(y_sampled, 1e-100))
 
     X_sampled = torch.tensor(X_sampled, dtype=torch.float32).to(device)
-    y_sampled = torch.tensor(y_sampled_log, dtype=torch.float32).view(-1, 1).to(device)
+    y_sampled = torch.tensor(y_sampled, dtype=torch.float32).view(-1, 1).to(device)
 
     dataset = TensorDataset(X_sampled, y_sampled)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
@@ -156,7 +155,8 @@ def main():
     args = parser.parse_args()
     sampled_data, full_data = load_dataset(args.dataset, args.dataset_size, args.features)
     model = train_model(sampled_data, args.output, verbose=True)
-    evaluate_model(model, full_data)
+    mae, _ = evaluate_model(model, full_data)
+    print("MAE on full data:", mae) 
 
 if __name__ == '__main__':
     main()
