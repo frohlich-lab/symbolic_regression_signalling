@@ -1,6 +1,8 @@
 # config.yaml
 data_type: "dynamic"  # Options: "dynamic" or "static"
 
+enzyme_model: "three_step_enzyme"
+
 # Model selection
 models: ["pysr"] #["pysr", "pysindy", "kan", "dso"] #, "aifeynman", "dso", "kan", "pysr"]
 
@@ -14,8 +16,8 @@ output_extension: {
 
 # Feature lists for static and dynamic datasets
 features:
-  static: "k_off,k_D,k_cat,tK,P_u,kcat_cg"  # Comma-separated list of features for static data
-  dynamic: "k_off,k_D,k_cat,tK,P_u,k_inact,kcat_cg"  # Comma-separated list of features for dynamic data
+  static: "P_u,k_off,k_D,k_cat,tK,kcat_cg"  # Comma-separated list of features for static data
+  dynamic: "P_u,k_off,k_D,k_cat,tK,k_inact,kcat_cg"  # Comma-separated list of features for dynamic data
 
 # Target feature for the dataset
 target_feature: "kcat_cg"  # Target feature to be placed as the last column of the dataset

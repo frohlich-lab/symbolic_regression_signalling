@@ -10,5 +10,5 @@ dependencies:
   - pysr
   - matplotlib
   - scipy
-  - pytorch # required for NN in pysr_regimes.py
   - seaborn
+  - pytorch # required for NN in pysr_regimes.py

@@ -106,10 +106,9 @@ def main():
     wandb.agent(sweep_id, function=train_wandb_trial, project=args.project, count=100)
 
     # Save a summary report of the grid search results
-    results_dir = os.path.join(args.output_dir, "data", "results")
-    os.makedirs(results_dir, exist_ok=True)
+    os.makedirs(args.output_dir, exist_ok=True)
 
-    summary_path = os.path.join(results_dir, "grid_search_results.txt")
+    summary_path = os.path.join(args.output_dir, "grid_search_results.txt")
     api = wandb.Api()
     sweep = api.sweep(f"{wandb.run.entity}/{args.project}/{sweep_id}")
 

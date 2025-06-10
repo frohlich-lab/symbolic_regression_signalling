@@ -105,7 +105,7 @@ def get_model_dir(model_name: str):
 
     :param model_name: name of the model
     """
-    return get_base_dir() / 'base_models' / model_name
+    return get_base_dir() / 'synthetic' / 'base_models' / model_name
 
 
 @dataclasses.dataclass(frozen=True, eq=True, order=True)

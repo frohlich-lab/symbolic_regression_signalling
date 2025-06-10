@@ -3,49 +3,90 @@ configfile: "config.yaml"
 
 # Define data type and parameters from configuration
 data_type = config["data_type"]  # Example: 'dynamic'
+enzyme_model=config["enzyme_model"]
 models = config["models"]  # Example: ['pysindy', 'aifeynman', 'dso', 'kan', 'pysr']
 output_extension = config["output_extension"]
 features = config["features"][data_type]
 
 # Precompute paths for temporary and final formula files
-temp_files = [f"data/temp_results/temp_formula_{model}_{data_type}.{output_extension[model]}" for model in models]
-formula_files = [f"data/results/formula_{model}_{data_type}.txt" for model in models]
+temp_files = [f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_{model}.{output_extension[model]}" for model in models]
+formula_files = [f"data/{enzyme_model}/{data_type}/sr_comparison/results/formula_{model}.txt" for model in models]
 
 
 # Define output files for the entire workflow
 rule all:
     input:
         temp_files,
-        "data/plots/results_plot.png",
-        "data/plots/integrated_results_plot.png",
-        "data/results/loss_comparison.csv",
-        f"data/results/model_nn_{data_type}.pth",
-        "data/pysr_regimes/regime_loss_comparison.png",
-        "data/pysr_regimes/error_landscape_all_regimes.png",
-        "data/pysr_regimes/all_pysr_formulas.txt",
-        "data/results/grid_search/grid_search_results.txt",
-        "data/pysr_noise/regime_loss_comparison.png",
-        "data/pysr_noise/error_landscape_all_regimes.png",
-        "data/pysr_noise/all_pysr_formulas.txt",
+        f"data/{enzyme_model}/{data_type}/sr_comparison/plots/results_plot.png",
+        f"data/{enzyme_model}/{data_type}/sr_comparison/plots/integrated_results_plot.png",
+        f"data/{enzyme_model}/{data_type}/sr_comparison/results/loss_comparison.csv",
+        f"data/{enzyme_model}/{data_type}/sr_comparison/models/nn/model_nn.pth",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/regime_loss_comparison.png",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/error_landscape.png",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/results/pysr/all_pysr_formulas.txt",
+        # "data/{enzyme_model}/{data_type}/sr_comparison/results/nn_grid_search/grid_search_results.txt",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/regime_loss_comparison.png",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/error_landscape.png",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/results/pysr/all_pysr_formulas.txt",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/regime_loss_comparison.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/error_landscape.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/results/pysr/all_pysr_formulas.txt",
 
-# Preprocessing rule to merge and process raw data
-rule preprocessing:
-    input:
-        train=f"data/raw/train_{data_type}_data.csv",
-        test=f"data/raw/test_{data_type}_data.csv",
-        valid=f"data/raw/val_{data_type}_data.csv"
-    output:
-        merged=f"data/processed/{data_type}_merged.csv"
-    conda:
-        "envs/base.yaml"
-    params:
-        target_feature=config["target_feature"]
-    shell:
-        """
-        echo "Starting preprocessing with train, test, and validation datasets"
-        python src/preprocessing.py --train {input.train} --test {input.test} --valid {input.valid} --output {output.merged} --target_feature {params.target_feature}
-        echo "Preprocessing completed: Merged dataset saved to {output.merged}"
-        """
+if enzyme_model == "experimental":
+    
+    rule parameter_inference:
+        input:
+            "data/experimental/static/raw/experimental_data_alexandrov.xlsx"
+        output:
+            "src/experimental/parameter_inference/constants.py"
+        shell:
+            """
+            source amici_env/bin/activate 
+            python src/experimental/parameter_inference/train.py 
+            deactivate
+            """
+
+    rule experimental_preprocessing:
+        input:
+            excel="data/experimental/static/raw/experimental_data_alexandrov.xlsx",
+            cst="src/experimental/parameter_inference/constants.py"
+        output:
+            "data/experimental/static/processed/data_merged.csv"
+        conda:
+            "envs/base.yaml"
+        shell:
+            "python src/experimental/preprocessing.py --input {input.excel} --output {output}"
+
+else:
+
+    rule generate_data_model:
+        output:
+            train=f"data/{enzyme_model}/{data_type}/raw/train_data.csv",
+            test=f"data/{enzyme_model}/{data_type}/raw/test_data.csv",
+            valid=f"data/{enzyme_model}/{data_type}/raw/val_data.csv"
+        shell:
+            """
+            source amici_env/bin/activate 
+            python src/synthetic/generate_data.py {enzyme_model} {data_type}
+            deactivate
+            """
+
+    rule preprocessing_model:
+        input:
+            train=f"data/{enzyme_model}/{data_type}/raw/train_data.csv",
+            test=f"data/{enzyme_model}/{data_type}/raw/test_data.csv",
+            valid=f"data/{enzyme_model}/{data_type}/raw/val_data.csv"
+        output:
+            merged=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
+        conda:
+            "envs/base.yaml"
+        params:
+            target_feature=config["target_feature"]
+        shell:
+            """
+            python src/preprocessing.py --train {input.train} --test {input.test} --valid {input.valid} --output {output.merged} --target_feature {params.target_feature}
+            """
+
 
 # Function to generate shell commands for symbolic regression with timeout and optional installs
 def symbolic_regression_rule(model, dataset, dataset_size, features, temp_file):
@@ -63,9 +104,9 @@ def symbolic_regression_rule(model, dataset, dataset_size, features, temp_file):
 # Rules for symbolic regression for each model
 rule pysindy:
     input:
-        merged=f"data/processed/{data_type}_merged.csv"
+        merged=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
     output:
-        temp_file=temporary(f"data/temp_results/temp_formula_pysindy_{data_type}.txt")
+        temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_pysindy_{data_type}.txt")
     conda:
         "envs/pysindy.yaml"
     params:
@@ -76,9 +117,9 @@ rule pysindy:
 
 rule aifeynman:
     input:
-        merged=f"data/processed/{data_type}_merged.csv"
+        merged=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
     output:
-        temp_file=temporary(f"data/temp_results/temp_formula_aifeynman_{data_type}.txt")
+        temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_aifeynman.txt")
     conda:
         "envs/aifeynman.yaml"
     params:
@@ -89,9 +130,9 @@ rule aifeynman:
 
 rule dso:
     input:
-        merged=f"data/processed/{data_type}_merged.csv"
+        merged=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
     output:
-        temp_file=temporary(f"data/temp_results/temp_formula_dso_{data_type}.txt")
+        temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_dso.txt")
     conda:
         "envs/dso.yaml"
     params:
@@ -102,9 +143,9 @@ rule dso:
 
 rule kan:
     input:
-        merged=f"data/processed/{data_type}_merged.csv"
+        merged=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
     output:
-        temp_file=temporary(f"data/temp_results/temp_formula_kan_{data_type}.txt")
+        temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_kan.txt")
     conda:
         "envs/kan.yaml"
     params:
@@ -115,9 +156,9 @@ rule kan:
 
 rule pysr:
     input:
-        merged=f"data/processed/{data_type}_merged.csv"
+        merged=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
     output:
-        temp_file=temporary(f"data/temp_results/temp_formula_pysr_{data_type}.csv")
+        temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_pysr.csv")
     conda:
         "envs/pysr.yaml"
     params:
@@ -128,9 +169,9 @@ rule pysr:
 
 rule nn:
     input:
-        merged=f"data/processed/{data_type}_merged.csv"
+        merged=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
     output:
-        output=f"data/results/model_nn_{data_type}.pth"
+        output=f"data/{enzyme_model}/{data_type}/sr_comparison/models/nn/model_nn.pth"
     conda:
         "envs/nn.yaml"
     params:
@@ -162,11 +203,11 @@ rule get_best_formula:
 # Rule to integrate and plot results based on formulas from all models
 rule integrate_and_plot_results:
     input:
-        dataset=lambda wildcards: f"data/processed/{data_type}_merged.csv",
+        dataset=lambda wildcards: f"data/{enzyme_model}/{data_type}/processed/data_merged.csv",
         formulas=formula_files
     output:
-        csv="data/results/loss_comparison.csv",
-        plot="data/plots/integrated_results_plot.png"
+        csv=f"data/{enzyme_model}/{data_type}/sr_comparison/results/loss_comparison.csv",
+        plot=f"data/{enzyme_model}/{data_type}/sr_comparison/plots/integrated_results_plot.png"
     conda:
         "envs/base.yaml"
     params:
@@ -185,10 +226,10 @@ rule integrate_and_plot_results:
 # Rule to generate a comparison plot of all methods
 rule plot_methods:
     input:
-        dataset=f"data/processed/{data_type}_merged.csv",
+        dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv",
         formulas=formula_files
     output:
-        "data/plots/results_plot.png"
+        f"data/{enzyme_model}/{data_type}/sr_comparison/plots/results_plot.png"
     conda:
         "envs/base.yaml"
     params:
@@ -200,13 +241,13 @@ rule plot_methods:
         echo "Comparison plot saved to {output}"
         """
 
-rule pysr_regimes:
+rule kinetic_regimes:
     input:
-        dataset=f"data/processed/{data_type}_merged.csv"
+        dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
     output:
-        "data/pysr_regimes/regime_loss_comparison.png",
-        "data/pysr_regimes/error_landscape_all_regimes.png",
-        "data/pysr_regimes/all_pysr_formulas.txt",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/regime_loss_comparison.png",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/error_landscape.png",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/results/pysr/all_pysr_formulas.txt"
     conda:
         "envs/pysr.yaml"
     params:
@@ -214,18 +255,18 @@ rule pysr_regimes:
         features=features
     shell:
         """
-        echo "Running PySR on different biochemical regimes."
-        python src/pysr_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features}
+        echo "Running PySR on different kinetic regimes."
+        python src/kinetic_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features}
         echo "PySR biochemical regime evaluation completed."
         """
 
-rule pysr_noise:
+rule noise_regimes:
     input:
-        dataset=f"data/processed/{data_type}_merged.csv"
+        dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
     output:
-        "data/pysr_noise/regime_loss_comparison.png",
-        "data/pysr_noise/error_landscape_all_regimes.png",
-        "data/pysr_noise/all_pysr_formulas.txt",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/regime_loss_comparison.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/error_landscape.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/results/pysr/all_pysr_formulas.txt"
     conda:
         "envs/pysr.yaml"
     params:
@@ -234,7 +275,26 @@ rule pysr_noise:
     shell:
         """
         echo "Running PySR on different noise regimes."
-        python src/pysr_noise.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features}
+        python src/noise_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features}
+        echo "PySR noise regime evaluation completed."
+        """
+
+rule mm_deviation_regimes:
+    input:
+        dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
+    output:
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/regime_loss_comparison.png",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/error_landscape.png",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/results/pysr/all_pysr_formulas.txt"
+    conda:
+        "envs/pysr.yaml"
+    params:
+        dataset_size=config["dataset_sizes"]["pysr"],
+        features=features
+    shell:
+        """
+        echo "Running PySR on different MM deviation regimes."
+        python src/mm_deviation_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features}
         echo "PySR noise regime evaluation completed."
         """
 
@@ -243,13 +303,13 @@ rule nn_grid_search:
     input:
         merged=f"data/processed/{data_type}_merged.csv"
     output:
-        report="data/results/grid_search/grid_search_results.txt"
+        report=f"data/{enzyme_model}/{data_type}/sr_comparison/results/nn_grid_search/grid_search_results.txt"
     conda:
         "envs/nn.yaml"
     params:
         dataset_size=config["dataset_sizes"]["nn"],
         features=features,
-        output_dir="data/results/grid_search/"
+        output_dir=f"data/{enzyme_model}/{data_type}/sr_comparison/results/nn_grid_search/"
     shell:
         """
         echo "Running grid search over NN hyperparameters."

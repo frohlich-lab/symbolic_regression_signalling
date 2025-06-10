@@ -9,16 +9,16 @@ from sklearn.preprocessing import StandardScaler
 import os
 
 # Hyperparameters for the neural network
-LEARNING_RATE = 1
-BATCH_SIZE = 512
+LEARNING_RATE = 5e-3
+BATCH_SIZE = 1024
 EPOCHS = 600
-HIDDEN_LAYERS = [256, 256, 128, 64]
+HIDDEN_LAYERS = [512, 256, 128]
 ACTIVATION = nn.ReLU  # smooth saturation curve approximation
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class NeuralNet(nn.Module):
-    def __init__(self, input_dim, output_dim, dropout_rate=0.03):
+    def __init__(self, input_dim, output_dim, dropout_rate=0.1):
         super(NeuralNet, self).__init__()
         layers = []
         prev_dim = input_dim
@@ -83,13 +83,13 @@ def train_model(sampled_data, output_path, verbose=False, retrain=True):
 
     model = NeuralNet(input_dim=X_sampled.shape[1], output_dim=1).to(device)
     criterion = nn.L1Loss()
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.5)
 
     best_loss = float('inf')
     best_model_state = None
     epochs_no_improve = 0
-    early_patience = 40
+    early_patience = 30
 
     for epoch in range(EPOCHS):
         model.train()

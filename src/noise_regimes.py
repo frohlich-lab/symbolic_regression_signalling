@@ -27,44 +27,21 @@ import matplotlib.markers as mmarkers
 import matplotlib.colors as mcolors
 from matplotlib.cm import ScalarMappable
 
+from constants import PYSR_CONFIG
+
 # Suppress all warnings
 warnings.filterwarnings("ignore")
 
-# Define biochemical regimes
-REGIMES = {
-    "low_noise": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(
-        df["P_u"], df["tK"], df["k_cat"], df["k_off"], df["k_inact"], df["k_D"]))) < 0.01)],
-    "medium_noise": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(
-        df["P_u"], df["tK"], df["k_cat"], df["k_off"], df["k_inact"], df["k_D"]))) >= 0.01) & 
-        (np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(
-        df["P_u"], df["tK"], df["k_cat"], df["k_off"], df["k_inact"], df["k_D"]))) < 0.1)],
-    "high_noise": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(
-        df["P_u"], df["tK"], df["k_cat"], df["k_off"], df["k_inact"], df["k_D"]))) >= 0.1) & 
-        (np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(
-        df["P_u"], df["tK"], df["k_cat"], df["k_off"], df["k_inact"], df["k_D"]))) < 1.0)],
-    "very_high_noise": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(
-        df["P_u"], df["tK"], df["k_cat"], df["k_off"], df["k_inact"], df["k_D"]))) >= 1.0)],
-}
-
 # PySR configuration
-PYSR_CONFIG = {
-    'niterations': 300,
-    'population_size': 30,
-    'populations': 15,
-    'binary_operators': ["+", "*", "/", "-"],
-    'unary_operators': ["exp", "log"],
-    'maxsize': 20,
-    'parsimony': 1,
-    'verbosity': 0,
-    'batching': True,
-    'annealing': True,
-    'elementwise_loss': "my_loss(x,y)=(log(max(x,0)+1e-25)-log(max(y,0)+1e-25))^2"
-}
+
 def file_exists(path):
     return os.path.isfile(path) and os.path.getsize(path) > 0
 
-def michaelis_menten(P_u, tK, k_cat, k_off, k_inact, k_D):
-    denom = P_u + ((k_cat + k_off + k_inact) / (k_off * k_D))
+def michaelis_menten(P_u, k_off, k_D, k_cat, tK, k_inact=None):
+    if k_inact is not None:
+        denom = P_u + ((k_cat + k_off + k_inact) / (k_off * k_D))
+    else:
+        denom = P_u + ((k_cat + k_off) / k_off * k_D)
     return (tK * P_u) / denom
 
 def load_dataset(file_path, dataset_size=None, features=None):
@@ -76,11 +53,11 @@ def load_dataset(file_path, dataset_size=None, features=None):
 def run_pysr(X, y, model_path, output_file):
     if os.path.exists(model_path):
         print(f"Loading existing PySR model from {model_path}")
-        model = PySRRegressor.from_file(model_path)
+        model = PySRRegressor.from_file(run_directory=os.path.dirname(model_path))
         return model
     else:
         print(f"Training new PySR model and saving to {model_path}")
-        model = PySRRegressor(**PYSR_CONFIG, equation_file=output_file)
+        model = PySRRegressor(**PYSR_CONFIG, temp_equation_file=output_file)
         model.fit(X, y)
         return model
     
@@ -102,6 +79,34 @@ def save_pysr_formulas(model_dict, features, output_path):
 
             f.write(f"{regime}: {formula}    [score={best_row['score']:.4f}, loss={best_row['loss']:.4f}]\n")
 
+def apply_log_space_gaussian_noise(df, std_multiplier):
+    noisy_df = df.copy()
+    target_col = noisy_df.columns[-1]
+    
+    # Apply log transform first (assume positive input)
+    if (noisy_df[target_col] <= 0).any():
+        raise ValueError("Log transform undefined for zero or negative values")
+    log_vals = np.log(noisy_df[target_col])
+
+    # Add Gaussian noise in log space
+    std = log_vals.std()
+    noise = np.random.normal(loc=0, scale=std_multiplier * std, size=len(noisy_df))
+    noisy_df[target_col] = log_vals + noise
+
+    # Reverse log transform
+    noisy_df[target_col] = np.exp(noisy_df[target_col])
+
+
+    return noisy_df 
+
+def define_regimes_from_low_noise(base_df):
+    return {
+        "very_low_noise": base_df,
+        "low_noise": apply_log_space_gaussian_noise(base_df, 1e-2),
+        "medium_noise": apply_log_space_gaussian_noise(base_df, 1e-1),
+        "high_noise": apply_log_space_gaussian_noise(base_df, 1.0),
+    }
+
 def preprocess_data(X):
     pipeline = Pipeline([
         ("log_transform", FunctionTransformer(np.log, validate=True)),
@@ -109,7 +114,7 @@ def preprocess_data(X):
     ])
     return pipeline.fit_transform(X), pipeline
 
-def evaluate_models(data, features, temp_dir, dataset_size):
+def evaluate_models(data, features, output_dir, dataset_size):
         """
         Evaluate models for each noise regime using PySR, Michaelis-Menten, and Neural Network approaches.
         Generate plots and save results for further analysis.
@@ -120,26 +125,45 @@ def evaluate_models(data, features, temp_dir, dataset_size):
             temp_dir (str): Directory to store temporary files and results.
             dataset_size (int): Maximum number of samples to use per regime.
         """
-        os.makedirs(temp_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
         losses, model_dict = {}, {}
 
-        for regime, filter_func in REGIMES.items():
+        # Step 1: Filter base dataset using tight MM threshold
+        base_df = data[
+            (np.abs(np.log(data.iloc[:, -1]) - np.log(michaelis_menten(
+            *data.iloc[:, :-1].values.T
+            ))) < 0.01)
+        ].reset_index(drop=True)
+
+        # Step 2: Generate noise-based regimes
+        regimes = define_regimes_from_low_noise(base_df)
+
+        for regime, filtered in regimes.items():
             # Filter data for the current regime
-            filtered = filter_func(data).reset_index(drop=True)
+            filtered = filtered.reset_index(drop=True)
+
             if filtered.empty:
                 print(f"No data for {regime} regime.")
                 continue
 
+            os.makedirs(os.path.join(output_dir, f"{regime}/processed"), exist_ok=True)
+            os.makedirs(os.path.join(output_dir, f"{regime}/plots"), exist_ok=True)
+            os.makedirs(os.path.join(output_dir, f"{regime}/models/pysr"), exist_ok=True)
+            os.makedirs(os.path.join(output_dir, f"{regime}/models/nn"), exist_ok=True)
+
+            filtered.to_csv(os.path.join(output_dir, f"{regime}/processed/filtered_data.csv"), index=False)
+
             # Sample data for training
             sample = filtered.sample(n=min(dataset_size, len(filtered)))
+            sample.to_csv(os.path.join(output_dir, f"{regime}/processed/filtered_data_train_sample.csv"), index=False)
             X_sample, y_sample = sample.iloc[:, :-1].values, sample.iloc[:, -1].values
             X, y = filtered.iloc[:, :-1].values, filtered.iloc[:, -1].values
 
             print(f"Evaluating {regime} with {len(sample)} samples")
 
             # PySR Model
-            temp_file = os.path.join(temp_dir, f"pysr_{regime}.csv")
-            model_path = os.path.join(temp_dir, f"pysr_{regime}.pkl")
+            temp_file = os.path.join(output_dir, f"{regime}/models/pysr/hall_of_fame.csv")
+            model_path = os.path.join(output_dir, f"{regime}/models/pysr/hall_of_fame.pkl")
             pysr_model = run_pysr(X_sample, y_sample, model_path, temp_file)
             y_pred_pysr = pysr_model.predict(X)
             log_mae = np.mean(np.abs(np.log(np.maximum(y_pred_pysr, 1e-25)) - np.log(np.maximum(y, 1e-25))))
@@ -147,10 +171,7 @@ def evaluate_models(data, features, temp_dir, dataset_size):
             print(f"PySR Loss: {log_mae}")
 
             # Michaelis-Menten Model
-            P_u, tK = filtered["P_u"].values, filtered["tK"].values
-            k_cat, k_off = filtered["k_cat"].values, filtered["k_off"].values
-            k_inact, k_D = filtered["k_inact"].values, filtered["k_D"].values
-            y_pred_mm = michaelis_menten(P_u, tK, k_cat, k_off, k_inact, k_D)
+            y_pred_mm = michaelis_menten(*filtered.iloc[:, :-1].values.T)
             mm_loss = np.mean(np.abs(np.log(np.maximum(y_pred_mm, 1e-25)) - np.log(np.maximum(y, 1e-25))))
             losses[f"{regime}_mm"] = mm_loss
             print(f"Michaelis-Menten Loss: {mm_loss}")
@@ -160,7 +181,7 @@ def evaluate_models(data, features, temp_dir, dataset_size):
             X_sample_pre = pipeline.transform(X_sample)
             full_data_pre = pd.DataFrame(np.column_stack([X_pre, np.log(y)]), columns=list(filtered.columns))
             sample_pre = pd.DataFrame(np.column_stack([X_sample_pre, np.log(y_sample)]), columns=list(filtered.columns))
-            nn_path = os.path.join(temp_dir, f"nn_{regime}.pth")
+            nn_path = os.path.join(output_dir, f"{regime}/models/nn/model.pkl")
             if os.path.exists(nn_path):
                 print(f"Loading existing NN model for {regime}")
                 nn_model = train_model(sample_pre, nn_path, verbose=False, retrain=False)
@@ -181,12 +202,12 @@ def evaluate_models(data, features, temp_dir, dataset_size):
             print()
 
         # Generate plots and save results
-        plot_model_subregimes(model_dict, temp_dir)
-        plot_error_distributions(model_dict, temp_dir)
-        save_pysr_formulas(model_dict, features, os.path.join(temp_dir, "all_pysr_formulas.txt"))
-        plot_input_error_correlation(model_dict, temp_dir)
-        plot_model_error_correlation(model_dict, temp_dir)
-        plot_nn_vs_mm_response_curves_linear(model_dict, temp_dir)
+        plot_model_subregimes(model_dict, output_dir)
+        plot_error_distributions(model_dict, output_dir)
+        save_pysr_formulas(model_dict, features, os.path.join(output_dir, "shared/results/pysr/all_pysr_formulas.txt"))
+        plot_input_error_correlation(model_dict, output_dir)
+        plot_model_error_correlation(model_dict, output_dir)
+        plot_nn_vs_mm_response_curves_linear(model_dict, output_dir)
 
 def plot_error_distributions(model_dict, output_dir):
     """
@@ -207,11 +228,7 @@ def plot_error_distributions(model_dict, output_dir):
         error_records.extend([{'Model': 'PySR', 'Regime': regime, 'Log-MAE': e} for e in err_pysr])
 
         # MM
-        y_pred_mm = michaelis_menten(
-            data["P_u"], data["tK"],
-            data["k_cat"], data["k_off"],
-            data["k_inact"], data["k_D"]
-        )
+        y_pred_mm = michaelis_menten(*data.iloc[:, :-1].values.T)
         err_mm = np.abs(np.log(np.maximum(y_pred_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
         error_records.extend([{'Model': 'Michaelis-Menten', 'Regime': regime, 'Log-MAE': e} for e in err_mm])
 
@@ -246,64 +263,60 @@ def plot_error_distributions(model_dict, output_dir):
 
     plt.suptitle("Log-MAE Error Distributions by Regime", fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
-    plt.savefig(os.path.join(output_dir, "regime_loss_comparison.png"))
-    plt.show()
+    plt.savefig(os.path.join(output_dir, "shared/plots/regime_loss_comparison.png"))
 
 def plot_model_subregimes(model_dict, output_dir):
+    regimes = list(model_dict.keys())
     models = ['pysr', 'mm', 'nn']
+    model_labels = {'pysr': 'PySR', 'mm': 'Michaelis-Menten', 'nn': 'Neural Network'}
+    model_colors = {'pysr': 'green', 'mm': 'red', 'nn': 'blue'}
 
-    regime_colors = {
-        "low_noise": "green",
-        "medium_noise": "orange",
-        "high_noise": "red",
-        "very_high_noise": "purple"
-    }
+    n_rows, n_cols = len(regimes), len(models)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 4.5 * n_rows), sharey=True)
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
     indices = np.random.choice(np.arange(1, 3001), size=600, replace=False)
 
-    for i, model in enumerate(models):
-        ax = axes[i]
+    for row_idx, regime_name in enumerate(regimes):
+        data = model_dict[regime_name]['data'].loc[indices].copy()
+        data_pre = model_dict[regime_name]['preprocessed'].loc[indices]
+        X = data.iloc[:, :-1]
+        y_true = data.iloc[:, -1]
+        y_mm = michaelis_menten(*data.iloc[:, :-1].values.T)
 
-        for regime_name, _ in REGIMES.items():
-            data = model_dict[regime_name]['data'].loc[indices].copy()
-            data_pre = model_dict[regime_name]['preprocessed'].loc[indices]
-            X = data.iloc[:, :-1]
-            data["y_true"] = data.iloc[:, -1]
-            data["y_mm"] = michaelis_menten(
-                data["P_u"], data["tK"],
-                data["k_cat"], data["k_off"],
-                data["k_inact"], data["k_D"]
-            )
+        for col_idx, model in enumerate(models):
+            ax = axes[row_idx, col_idx] if n_rows > 1 else axes[col_idx]
 
             if model == 'pysr':
                 y_pred = model_dict[regime_name]['pysr'].predict(X.values)
             elif model == 'mm':
-                y_pred = data["y_mm"].values
+                y_pred = y_mm
             elif model == 'nn':
                 data_pre_subset = data_pre.loc[data.index]
                 y_pred = evaluate_model(model_dict[regime_name]['nn'], data_pre_subset)[1].detach().cpu().numpy().flatten()
 
-            y_true = data["y_true"].values
             error = np.abs(np.log(np.maximum(y_pred, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
 
             ax.scatter(
-                data["y_true"], error, alpha=0.6, s=20,
-                label=regime_name if regime_name not in ax.get_legend_handles_labels()[1] else None,
-                color=regime_colors[regime_name], edgecolors='k', linewidths=0.2
+                y_true, error, alpha=0.4, s=20,
+                color=model_colors[model], label=model_labels[model],
+                edgecolors='k', linewidths=0.2
             )
 
-        ax.set_xscale('log')
-        ax.set_xlabel("y_{true}", fontsize=11)
-        if i == 0:
-            ax.set_ylabel("Log Error (|log(pred) - log(true)|)", fontsize=11)
-        ax.set_title(f"{model.upper()} Error by Noise Regime", fontsize=13)
-        ax.legend(frameon=False)
+            if row_idx == len(regimes) - 1:
+                ax.set_xlabel("Groundtruth kcat_cg", fontsize=11)
+            if col_idx == 0:
+                ax.set_ylabel("Log-MAE", fontsize=11)
+            if row_idx == 0:
+                ax.set_title(model_labels[model], fontsize=13)
+            if row_idx == 0 and col_idx == 0:
+                ax.legend(frameon=False, loc='upper left')
 
+            ax.set_xscale('log')
+
+    fig.suptitle("Model Error Landscape by Regime and Model", fontsize=16, y=1.02)
     plt.tight_layout()
-    output_path = os.path.join(output_dir, "error_landscape_all_regimes.png")
+    output_path = os.path.join(output_dir, "shared/plots/error_landscape.png")
     plt.savefig(output_path)
-    plt.show()
 
 def plot_input_error_correlation(model_dict, output_dir):
     """
@@ -327,11 +340,7 @@ def plot_input_error_correlation(model_dict, output_dir):
 
         error_df = pd.DataFrame()
         error_df['pysr_error'] = np.abs(np.log(np.maximum(models['pysr'].predict(X.values), 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
-        y_pred_mm = michaelis_menten(
-            data["P_u"], data["tK"],
-            data["k_cat"], data["k_off"],
-            data["k_inact"], data["k_D"]
-        )
+        y_pred_mm = michaelis_menten(*data.iloc[:, :-1].values.T)
         error_df['mm_error'] = np.abs(np.log(np.maximum(y_pred_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
         y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
         error_df['nn_error'] = np.abs(np.log(np.maximum(y_pred_nn, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
@@ -352,7 +361,7 @@ def plot_input_error_correlation(model_dict, output_dir):
 
     plt.suptitle("Feature-Error Correlations by Regime", fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
-    plt.savefig(os.path.join(output_dir, "feature_error_correlation_grid.png"))
+    plt.savefig(os.path.join(output_dir, "shared/plots/feature_error_correlation_grid.png"))
     plt.close()
 
     # Overall correlation
@@ -362,7 +371,7 @@ def plot_input_error_correlation(model_dict, output_dir):
     sns.heatmap(overall_corr, annot=True, cmap='coolwarm', center=0)
     plt.title("Overall Feature-Error Correlation (All Regimes)")
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "feature_error_correlation_overall.png"))
+    plt.savefig(os.path.join(output_dir, "shared/plots/feature_error_correlation_overall.png"))
     plt.close()
 
 def plot_model_error_correlation(model_dict, output_dir):
@@ -386,11 +395,7 @@ def plot_model_error_correlation(model_dict, output_dir):
         X = data.iloc[:, :-1]
 
         err_pysr = np.abs(np.log(np.maximum(models['pysr'].predict(X.values), 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
-        err_mm = np.abs(np.log(np.maximum(michaelis_menten(
-            data["P_u"], data["tK"],
-            data["k_cat"], data["k_off"],
-            data["k_inact"], data["k_D"]
-        ), 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        err_mm = np.abs(np.log(np.maximum(michaelis_menten(*data.iloc[:, :-1].values.T), 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
         err_nn = np.abs(np.log(np.maximum(evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten(), 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
 
         df = pd.DataFrame({'PySR': err_pysr, 'MM': err_mm, 'NN': err_nn})
@@ -406,7 +411,7 @@ def plot_model_error_correlation(model_dict, output_dir):
 
     plt.suptitle("Model Error Correlations by Regime", fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
-    plt.savefig(os.path.join(output_dir, "model_error_correlation_grid.png"))
+    plt.savefig(os.path.join(output_dir, "shared/plots/model_error_correlation_grid.png"))
     plt.close()
 
     # Overall correlation
@@ -416,7 +421,7 @@ def plot_model_error_correlation(model_dict, output_dir):
     sns.heatmap(overall_corr, annot=True, cmap='coolwarm', center=0)
     plt.title("Overall Model Error Correlation (All Regimes)")
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "model_error_correlation_overall.png"))
+    plt.savefig(os.path.join(output_dir, "shared/plots/model_error_correlation_overall.png"))
     plt.close()
 
 def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n_pu_points=200):
@@ -442,11 +447,7 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
 
         _, pipeline = preprocess_data(X)
 
-        y_pred_mm = michaelis_menten(
-            data["P_u"], data["tK"],
-            data["k_cat"], data["k_off"],
-            data["k_inact"], data["k_D"]
-        )
+        y_pred_mm = michaelis_menten(*data.iloc[:, :-1].values.T)
 
         # Full NN prediction and error
         y_pred_nn = evaluate_model(model, preprocessed_data)[1].detach().cpu().numpy().flatten()
@@ -461,19 +462,12 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
             idx = np.argmin(np.abs(log_mae - t))
             chosen_indices.append(idx)
 
-        fig, axs = plt.subplots(2, n_samples // 2, figsize=(20, 8), sharex=False, sharey=False)
+        fig, axs = plt.subplots(2, n_samples // 2, figsize=(20, 10), sharex=False, sharey=False)
         axs = axs.flatten()
 
         for i, idx in enumerate(chosen_indices):
             fixed_sample = X.iloc[idx].copy()
             original_pu = fixed_sample["P_u"]
-            tK = fixed_sample["tK"]
-            k_cat = fixed_sample["k_cat"]
-            k_off = fixed_sample["k_off"]
-            k_inact = fixed_sample["k_inact"]
-            k_D = fixed_sample["k_D"]
-
-            K_M = (k_cat + k_off + k_inact) / (k_off * k_D)
 
             pu_vals = np.linspace(0.01 * original_pu, 5 * original_pu, n_pu_points)
 
@@ -490,25 +484,32 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
             with torch.no_grad():
                 y_nn = np.exp(model(X_varied_inputs_pre))
             # MM prediction
-            y_mm = michaelis_menten(pu_vals, tK, k_cat, k_off, k_inact, k_D)
+            y_mm = michaelis_menten(pu_vals, *data.iloc[idx, 1:-1].values[1:])
 
             # Plot
             ax = axs[i]
             ax.plot(pu_vals, y_nn, label="Neural Network", color='tab:blue')
             ax.plot(pu_vals, y_mm, label="Michaelis-Menten", color='tab:red', linestyle='--')
-            ax.scatter(original_pu, y_true[idx], color='tab:blue', marker='o', s=100, label="Original P_u")
-            ax.axvline(original_pu, color='gray', linestyle=':', linewidth=1.5, label='Original P_u')  # <-- Added
+            ax.scatter(original_pu, y_true[idx], color='tab:blue', marker='o', s=100, label="Groundtruth kcat_cg")
+            ax.axvline(original_pu, color='gray', linestyle=':', linewidth=1.5, label='Sampled P_u')  
             ax.set_xlim(0.01 * original_pu, 5 * original_pu)
             ax.set_xlabel("P_u")
             if i % (n_samples // 2) == 0:
-                ax.set_ylabel("Output")
+                ax.set_ylabel("kcat_cg")
             ax.set_title(f"Sample {i+1} | Log-MAE: NN = {log_mae[idx]:.3f} - MM {log_mae_mm[idx]:.3f}")
 
+        # Add suptitle slightly higher than default
+        fig.suptitle(f"NN vs MM — Response Curves — {regime}", fontsize=16, y=1.07)
+
+        # Add legend below title, but above subplots
         handles, labels = axs[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="upper center", ncol=3)
-        fig.suptitle(f"NN vs MM — Response Curves (Scaled P_u) — {regime}", fontsize=16)
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
-        plt.savefig(os.path.join(output_dir, f"nn_vs_mm_response_curves_scaled_{regime}.png"))
+        fig.legend(handles, labels, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 1.02))
+
+        # Adjust tight layout to allow room for both title and legend
+        plt.tight_layout(rect=[0, 0, 1, 0.95])  # bottom, left, right, top
+
+        # Save cleanly
+        plt.savefig(os.path.join(output_dir, f"{regime}/plots/nn_vs_mm_response_curves_scaled.png"), bbox_inches="tight")
         plt.close()
 
 def main():
@@ -519,7 +520,8 @@ def main():
     args = parser.parse_args()
 
     data = load_dataset(args.dataset, args.dataset_size, args.features)
-    evaluate_models(data, args.features, temp_dir='data/pysr_noise/', dataset_size=args.dataset_size)
+    dir_path = '/'.join(args.dataset.split('/')[:3])
+    evaluate_models(data, args.features, output_dir=dir_path+'/noise_regimes/', dataset_size=args.dataset_size)
 
 if __name__ == '__main__':
     main()

@@ -1,4 +1,7 @@
+amici_env/
+amici_models/
 data/
+data_old/
 .snakemake/
 model/
 src/dso
@@ -12,5 +15,6 @@ results_gen_sym.dat
 results.dat
 qaz.dat
 wandb/
-src/__pycache__/
 .DS_Store
+simulation_venv/
+**/__pycache__/
