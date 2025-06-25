@@ -47,7 +47,7 @@ def load_dataset(file_path, dataset_size=None, features=None):
 
     return data
 
-def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
+def find_best_formula(data, tempdir, n_iterations=N_ITERATIONS):
     """
     Run PySR to find the best formula, saving results to a specified file.
     """
@@ -67,7 +67,8 @@ def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
             batching=BATCHING,
             elementwise_loss=LOG_SPACE_LOSS,
             annealing=ANNEALING,
-            equation_file=temp_file  # Save best formulas to this file
+            output_directory=os.path.dirname(tempdir),  # Save best formulas to this file
+            run_id="temp"
         )
         model.fit(X, y)
 
@@ -88,7 +89,8 @@ def main():
 
     args = parser.parse_args()
     data = load_dataset(args.dataset, args.dataset_size, args.features)
-    find_best_formula(data, args.temp_file)
+    tempdir = os.path.dirname(args.temp_file)
+    find_best_formula(data, tempdir)
 
 if __name__ == '__main__':
     main()

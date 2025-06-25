@@ -12,18 +12,6 @@ import json
 import argparse
 import os
 
-def load_dataset(file_path, discovery_scales):
-    """
-    Load dataset from a CSV file, sample it if specified, 
-    and select specific columns if features are provided.
-    """
-    data = pd.read_csv(file_path)
-    if discovery_scales:
-        data = data.apply(lambda x: np.log(x) if discovery_scales[x.name] else x)
-
-
-    return data
-
 def load_formulas_from_file(file_path):
     """
     Load formulas from a specified file.
@@ -103,7 +91,7 @@ def main():
     parser.add_argument('--discovery-scales', required=True, type=str, help='JSON of method names and their corresponding discovery scales')
  
     args = parser.parse_args()
-    methods = [formula.split('_')[1] for formula in args.formulas]
+    methods = [formula.split('/')[-1].split('_')[1].split('.')[0] for formula in args.formulas]
 
     # Load all formulas from the provided file paths
     formulas = []

@@ -264,6 +264,12 @@ def integrate_and_calculate_loss(data, formulas, discovery_scales, output_path, 
         print("Loss DataFrame contents", loss_df)
         print([loss[2] for loss in loss_df if loss[2] is not None])
         average_log_MAE = np.nanmean([loss[2] for loss in loss_df if loss[2] is not None])
+        valid_losses = [loss[2] for loss in loss_df if loss[2] is not None]
+        if valid_losses:
+            average_log_MAE = np.nanmean(valid_losses)
+        else:
+            print(f"No valid simulation results for {method}. Skipping.")
+            average_log_MAE = np.nan  # or continue to next method
         print(f"Average Log MAE for {method}: {average_log_MAE}")
         loss_results[method] = average_log_MAE
 

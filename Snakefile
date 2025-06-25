@@ -9,7 +9,11 @@ output_extension = config["output_extension"]
 features = config["features"][data_type]
 
 # Precompute paths for temporary and final formula files
-temp_files = [f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_{model}.{output_extension[model]}" for model in models]
+temp_files = [
+    f"data/{enzyme_model}/{data_type}/sr_comparison/temp/hall_of_fame.csv" if model == "pysr" 
+    else f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_{model}.{output_extension[model]}" 
+    for model in models
+]
 formula_files = [f"data/{enzyme_model}/{data_type}/sr_comparison/results/formula_{model}.txt" for model in models]
 
 
@@ -24,13 +28,19 @@ rule all:
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/regime_loss_comparison.png",
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/error_landscape.png",
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/results/pysr/all_pysr_formulas.txt",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae_horizontal_boxplot.png",
         # "data/{enzyme_model}/{data_type}/sr_comparison/results/nn_grid_search/grid_search_results.txt",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/regime_loss_comparison.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/error_landscape.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/results/pysr/all_pysr_formulas.txt",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_horizontal_boxplot.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/regime_loss_comparison.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/error_landscape.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/log_mae_horizontal_boxplot.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes/shared/results/pysr/all_pysr_formulas.txt",
+        "data/panmodel_plots/symbolic_model_r2_scores_bar.png",
+        "data/panmodel_plots/symbolic_model_r2_scores_scatter.png",
+        "data/panmodel_plots/all_symbolic_formulas.txt"
 
 if enzyme_model == "experimental":
     
@@ -106,7 +116,7 @@ rule pysindy:
     input:
         merged=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
     output:
-        temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_pysindy_{data_type}.txt")
+        temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_pysindy.txt")
     conda:
         "envs/pysindy.yaml"
     params:
@@ -158,7 +168,7 @@ rule pysr:
     input:
         merged=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
     output:
-        temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_pysr.csv")
+        temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/hall_of_fame.csv")
     conda:
         "envs/pysr.yaml"
     params:
@@ -247,7 +257,8 @@ rule kinetic_regimes:
     output:
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/regime_loss_comparison.png",
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/error_landscape.png",
-        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/results/pysr/all_pysr_formulas.txt"
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/results/pysr/all_pysr_formulas.txt",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae_horizontal_boxplot.png"
     conda:
         "envs/pysr.yaml"
     params:
@@ -266,7 +277,8 @@ rule noise_regimes:
     output:
         f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/regime_loss_comparison.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/error_landscape.png",
-        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/results/pysr/all_pysr_formulas.txt"
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/results/pysr/all_pysr_formulas.txt",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/log_mae_horizontal_boxplot.png"
     conda:
         "envs/pysr.yaml"
     params:
@@ -285,7 +297,8 @@ rule mm_deviation_regimes:
     output:
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/regime_loss_comparison.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/error_landscape.png",
-        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/results/pysr/all_pysr_formulas.txt"
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/results/pysr/all_pysr_formulas.txt",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_horizontal_boxplot.png"
     conda:
         "envs/pysr.yaml"
     params:
@@ -321,3 +334,16 @@ rule nn_grid_search:
         echo "Grid search completed and saved to {output.report}"
         """
 
+rule pan_enzyme_model_plots:
+    input:
+        formulas=formula_files,
+        root_dir="data",
+        dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
+    output:
+        "data/panmodel_plots/symbolic_model_r2_scores_bar.png",
+        "data/panmodel_plots/symbolic_model_r2_scores_scatter.png",
+        "data/panmodel_plots/all_symbolic_formulas.txt"
+    conda:
+        "envs/base.yaml"
+    shell:
+        "python src/pan_enzyme_model_plots.py --root-dir {input.root_dir} --dataset {input.dataset}"

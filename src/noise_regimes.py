@@ -57,7 +57,7 @@ def run_pysr(X, y, model_path, output_file):
         return model
     else:
         print(f"Training new PySR model and saving to {model_path}")
-        model = PySRRegressor(**PYSR_CONFIG, temp_equation_file=output_file)
+        model = PySRRegressor(**PYSR_CONFIG, output_directory=os.path.dirname(os.path.dirname(model_path)), run_id="pysr")
         model.fit(X, y)
         return model
     
@@ -208,6 +208,7 @@ def evaluate_models(data, features, output_dir, dataset_size):
         plot_input_error_correlation(model_dict, output_dir)
         plot_model_error_correlation(model_dict, output_dir)
         plot_nn_vs_mm_response_curves_linear(model_dict, output_dir)
+        plot_horizontal_boxplot_noise_regimes(model_dict, output_dir)
 
 def plot_error_distributions(model_dict, output_dir):
     """
@@ -511,6 +512,75 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
         # Save cleanly
         plt.savefig(os.path.join(output_dir, f"{regime}/plots/nn_vs_mm_response_curves_scaled.png"), bbox_inches="tight")
         plt.close()
+
+def plot_horizontal_boxplot_noise_regimes(model_dict, output_dir):
+    """
+    Create a vertical stack of horizontal boxplots (1 per noise regime) showing
+    Log-MAE for PySR, Michaelis-Menten, and Neural Network models.
+    Styled for Cell Systems standards.
+    """
+    sns.set(style="whitegrid", font_scale=1.2, rc={"axes.edgecolor": "black", "axes.linewidth": 1.0})
+
+    regimes = ['very_low_noise', 'low_noise', 'medium_noise', 'high_noise']
+    regime_labels = {
+        'very_low_noise': 'Very Low Noise',
+        'low_noise': 'Low Noise',
+        'medium_noise': 'Medium Noise',
+        'high_noise': 'High Noise'
+    }
+
+    fig, axes = plt.subplots(nrows=len(regimes), ncols=1, figsize=(10, 2.8 * len(regimes)), sharex=True)
+
+    for ax, regime in zip(axes, regimes):
+        if regime not in model_dict:
+            continue
+
+        models = model_dict[regime]
+        data = models['data']
+        data_pre = models['preprocessed']
+        y_true = data.iloc[:, -1].values
+        X = data.iloc[:, :-1]
+
+        error_records = []
+
+        # PySR
+        y_pred_pysr = models['pysr'].predict(X.values)
+        err_pysr = np.abs(np.log(np.maximum(y_pred_pysr, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        error_records.extend([{'Model': 'PySR', 'Log-MAE': e} for e in err_pysr])
+
+        # Michaelis-Menten
+        y_pred_mm = michaelis_menten(*X.values.T)
+        err_mm = np.abs(np.log(np.maximum(y_pred_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        error_records.extend([{'Model': 'Michaelis-Menten', 'Log-MAE': e} for e in err_mm])
+
+        # Neural Network
+        y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
+        err_nn = np.abs(np.log(np.maximum(y_pred_nn, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        error_records.extend([{'Model': 'Neural Network', 'Log-MAE': e} for e in err_nn])
+
+        # Convert and plot
+        error_df = pd.DataFrame(error_records)
+        sns.boxplot(
+            data=error_df,
+            x="Log-MAE",
+            y="Model",
+            palette="Set2",
+            orient="h",
+            ax=ax
+        )
+        ax.set_title(regime_labels[regime], fontsize=14, weight='bold')
+        ax.set_ylabel("")  # Avoid repeating "Model" label
+        ax.tick_params(axis='both', labelsize=11)
+
+    # Label only the bottom x-axis
+    axes[-1].set_xlabel("Log-MAE", fontsize=12)
+    for ax in axes[:-1]:
+        ax.set_xlabel("")
+
+    plt.tight_layout()
+    os.makedirs(os.path.join(output_dir, "shared/plots"), exist_ok=True)
+    plt.savefig(os.path.join(output_dir, "shared/plots/log_mae_horizontal_boxplot.png"), dpi=300)
+    plt.close()
 
 def main():
     parser = argparse.ArgumentParser(description='Evaluate noise regimes using symbolic regression and compare with MM and NN.')

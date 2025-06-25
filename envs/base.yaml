@@ -13,6 +13,7 @@ dependencies:
   - pysb
   - openpyxl
   - pytorch
+  - scikit-learn
   - pip:
       - jax
       - diffrax

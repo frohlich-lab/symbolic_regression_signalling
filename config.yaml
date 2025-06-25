@@ -1,10 +1,10 @@
 # config.yaml
 data_type: "dynamic"  # Options: "dynamic" or "static"
 
-enzyme_model: "three_step_enzyme"
+enzyme_model: "three_step_enzyme_dimer"
 
 # Model selection
-models: ["pysr"] #["pysr", "pysindy", "kan", "dso"] #, "aifeynman", "dso", "kan", "pysr"]
+models: ["pysr", "pysindy", "kan", "dso"] #, "aifeynman", 
 
 output_extension: {
     "pysindy": "txt",

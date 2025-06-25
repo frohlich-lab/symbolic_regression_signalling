@@ -20,4 +20,4 @@ conda activate snakemake
 
 # Run your script or command
 snakemake --unlock
-snakemake --printshellcmds --cores=all --use-conda
+snakemake --printshellcmds --cores=all --use-conda --rerun-incomplete

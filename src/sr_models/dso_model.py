@@ -83,8 +83,8 @@ def main():
 
     args = parser.parse_args()
     data = load_dataset(args.dataset, args.dataset_size, args.features)
-    dir_path = args.dataset.split('/')[0:3]
-    dataset_path = "./" + dir_path + "sr_comparison/dso/processed_dataset_dso.csv"
+    dir_path = os.path.join(*args.dataset.split('/')[0:3])
+    dataset_path = os.path.join("./", dir_path, "sr_comparison/dso/processed_dataset_dso.csv")
     os.makedirs(os.path.dirname(dataset_path), exist_ok=True)
     data.to_csv(dataset_path, index=False, header=False)
 
