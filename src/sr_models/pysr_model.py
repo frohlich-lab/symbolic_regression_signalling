@@ -68,7 +68,9 @@ def find_best_formula(data, tempdir, n_iterations=N_ITERATIONS):
             elementwise_loss=LOG_SPACE_LOSS,
             annealing=ANNEALING,
             output_directory=os.path.dirname(tempdir),  # Save best formulas to this file
-            run_id="temp"
+            run_id="temp",
+            parallelism='serial',  # Use serial execution for deterministic results
+            deterministic=True
         )
         model.fit(X, y)
 

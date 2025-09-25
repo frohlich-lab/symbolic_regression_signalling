@@ -32,7 +32,7 @@ def compute_r2(formula, dataset, discovery_scale):
     input_data = [dataset[var].astype(float) for var in variable_names]
 
     try:
-        f = lambdify(formula_symbols, formula, modules='numpy')
+        f = lambdify(list(formula_symbols), formula, modules='numpy')
         y_pred = np.array(f(*input_data), dtype=np.float64)
     except Exception as e:
         print(f"Failed to evaluate formula: {formula} with error {e}")
@@ -168,7 +168,6 @@ def main(root_dir, dataset_path, discovery_scales):
                     method = infer_method_from_name(fname)
                     discovery_scale = discovery_scales.get(method, "log")  # Default to log if unknown
                     r2 = compute_r2(formula, dataset, discovery_scale)
-                    r2 = compute_r2(formula, dataset)
                     complexity = compute_complexity(formula)
 
                     method = infer_method_from_name(fname)

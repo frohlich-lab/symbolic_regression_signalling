@@ -32,6 +32,7 @@ from constants import PYSR_CONFIG
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")
+np.random.seed(42)
 
 # Define biochemical regimes
 REGIMES = {
@@ -590,6 +591,7 @@ def plot_horizontal_boxplot_subregimes(model_dict, output_dir):
         error_records.extend([{'Model': 'PySR', 'Log-MAE': e} for e in err_pysr])
 
         # Michaelis-Menten
+        print(X.columns)
         y_pred_mm = michaelis_menten(*X.values.T)
         err_mm = np.abs(np.log(np.maximum(y_pred_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
         error_records.extend([{'Model': 'Michaelis-Menten', 'Log-MAE': e} for e in err_mm])

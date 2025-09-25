@@ -13,9 +13,11 @@ LEARNING_RATE = 5e-3
 BATCH_SIZE = 1024
 EPOCHS = 600
 HIDDEN_LAYERS = [512, 256, 128]
+SEED = 42
 ACTIVATION = nn.ReLU  # smooth saturation curve approximation
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.manual_seed(SEED)
 
 class NeuralNet(nn.Module):
     def __init__(self, input_dim, output_dim, dropout_rate=0.1):

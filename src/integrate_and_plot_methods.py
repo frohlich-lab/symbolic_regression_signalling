@@ -26,6 +26,7 @@ SIMULATION_MAX_STEPS = 2**23
 N_TIME_STEPS = 22
 
 solver = Kvaerno3()
+np.random.seed(42)
 
 def load_dataset(file_path, features=None, trajectory_column=None, data_proportion=1.0):
     """

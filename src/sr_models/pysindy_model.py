@@ -20,6 +20,7 @@ import re
 
 # Parameters
 N_SAMPLES = 300
+SEED = 42  # Random seed for reproducibility
 N_TIME_STEPS = 22
 N_ITERATIONS = 100
 ALPHA = 1e4
@@ -40,6 +41,8 @@ FUNCTION_NAMES = [
     lambda x, y, z: f"{x}*{y}*{z}",
     lambda x, y, z, t: f"{x}*{y}*{z}*{t}",
 ]
+
+np.random.seed(SEED)  # Set random seed for reproducibility
 
 def load_dataset(
     file_path: str, dataset_size: int = None, features: str = None

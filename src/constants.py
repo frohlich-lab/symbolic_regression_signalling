@@ -9,5 +9,7 @@ PYSR_CONFIG = {
     'verbosity': 0,
     'batching': True,
     'annealing': True,
-    'elementwise_loss': "my_loss(x,y)=(log(max(x,0)+1e-25)-log(max(y,0)+1e-25))^2"
+    'elementwise_loss': "my_loss(x,y)=(log(max(x,0)+1e-25)-log(max(y,0)+1e-25))^2",
+    'parallelism': 'serial',
+    'deterministic': True,
 }

@@ -31,6 +31,7 @@ from constants import PYSR_CONFIG
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")
+np.random.seed(42)
 
 # Define biochemical regimes
 REGIMES = {

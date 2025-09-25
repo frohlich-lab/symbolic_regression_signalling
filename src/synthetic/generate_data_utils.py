@@ -1,6 +1,7 @@
 """Useful functions for generating synthetic data using amici."""
 
 from collections.abc import Sequence
+from unicodedata import name
 
 import amici
 import numpy as np
@@ -110,15 +111,14 @@ def compile_model(model_spec, lb, ub, *, do_compile=True):
     model_spec['amici_model'] = amici_model
     # set sampling bounds
     model_spec['lbs'] = np.asarray([
-        0.0 if name.startswith('phi_') else lb * np.log(10)
-        for name in fpar_names
-    ])
-    # LB = log10(lb) = ln(lb) * ln(10)
-    model_spec['ubs'] = np.asarray([
-        1.0 if name.startswith('phi_') else ub * np.log(10)
+        (0.0 if name.startswith('phi_') else lb * np.log(10))
         for name in fpar_names
     ])
 
+    model_spec['ubs'] = np.asarray([
+        (1.0 if name.startswith('phi_') else ub * np.log(10))
+        for name in fpar_names
+    ])
 
 def setup_static_simulation(
     specs: dict[str, dict],

@@ -16,31 +16,36 @@ temp_files = [
 ]
 formula_files = [f"data/{enzyme_model}/{data_type}/sr_comparison/results/formula_{model}.txt" for model in models]
 
+common_inputs = [
+    temp_files,
+    f"data/{enzyme_model}/{data_type}/sr_comparison/plots/results_plot.png",
+    f"data/{enzyme_model}/{data_type}/sr_comparison/models/nn/model_nn.pth",
+    f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/regime_loss_comparison.png",
+    f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/error_landscape.png",
+    f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/results/pysr/all_pysr_formulas.txt",
+    f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae_horizontal_boxplot.png",
+    f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/regime_loss_comparison.png",
+    f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/error_landscape.png",
+    f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/results/pysr/all_pysr_formulas.txt",
+    f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_horizontal_boxplot.png",
+    f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/regime_loss_comparison.png",
+    f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/error_landscape.png",
+    f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/log_mae_horizontal_boxplot.png",
+    f"data/{enzyme_model}/{data_type}/noise_regimes/shared/results/pysr/all_pysr_formulas.txt",
+    "data/panmodel_plots/symbolic_model_r2_scores_bar.png",
+    "data/panmodel_plots/symbolic_model_r2_scores_scatter.png",
+    "data/panmodel_plots/all_symbolic_formulas.txt"
+]
 
-# Define output files for the entire workflow
-rule all:
-    input:
-        temp_files,
-        f"data/{enzyme_model}/{data_type}/sr_comparison/plots/results_plot.png",
+# Add integrate-and-plot outputs only for static data
+if data_type == "dynamic":
+    common_inputs += [
         f"data/{enzyme_model}/{data_type}/sr_comparison/plots/integrated_results_plot.png",
-        f"data/{enzyme_model}/{data_type}/sr_comparison/results/loss_comparison.csv",
-        f"data/{enzyme_model}/{data_type}/sr_comparison/models/nn/model_nn.pth",
-        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/regime_loss_comparison.png",
-        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/error_landscape.png",
-        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/results/pysr/all_pysr_formulas.txt",
-        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae_horizontal_boxplot.png",
-        # "data/{enzyme_model}/{data_type}/sr_comparison/results/nn_grid_search/grid_search_results.txt",
-        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/regime_loss_comparison.png",
-        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/error_landscape.png",
-        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/results/pysr/all_pysr_formulas.txt",
-        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_horizontal_boxplot.png",
-        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/regime_loss_comparison.png",
-        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/error_landscape.png",
-        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/log_mae_horizontal_boxplot.png",
-        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/results/pysr/all_pysr_formulas.txt",
-        "data/panmodel_plots/symbolic_model_r2_scores_bar.png",
-        "data/panmodel_plots/symbolic_model_r2_scores_scatter.png",
-        "data/panmodel_plots/all_symbolic_formulas.txt"
+        f"data/{enzyme_model}/{data_type}/sr_comparison/results/loss_comparison.csv"
+    ]
+
+rule all:
+    input: common_inputs
 
 if enzyme_model == "experimental":
     
@@ -108,7 +113,7 @@ def symbolic_regression_rule(model, dataset, dataset_size, features, temp_file):
     install_command = install_cmds.get(model, "")
     separator = ";" if install_command else ""
     return f"""
-        {install_command}{separator} timeout {config["timeout_duration"]} python src/sr_models/{model}_model.py --dataset {dataset} --dataset_size {dataset_size} --features {features} --temp_file {temp_file} || true
+        {install_command}{separator} python src/sr_models/{model}_model.py --dataset {dataset} --dataset_size {dataset_size} --features {features} --temp_file {temp_file} || true
     """
 
 # Rules for symbolic regression for each model
@@ -211,27 +216,28 @@ rule get_best_formula:
         """
 
 # Rule to integrate and plot results based on formulas from all models
-rule integrate_and_plot_results:
-    input:
-        dataset=lambda wildcards: f"data/{enzyme_model}/{data_type}/processed/data_merged.csv",
-        formulas=formula_files
-    output:
-        csv=f"data/{enzyme_model}/{data_type}/sr_comparison/results/loss_comparison.csv",
-        plot=f"data/{enzyme_model}/{data_type}/sr_comparison/plots/integrated_results_plot.png"
-    conda:
-        "envs/base.yaml"
-    params:
-        methods=models,
-        data_proportion=config["data_proportion"],
-        features=features,
-        discovery_scales="'" + config["discovery_scales"] + "'",
-        trajectory_column="condition_id"
-    shell:
-        """
-        echo "Integrating and plotting results for methods: {params.methods}"
-        strace -o output_int.log -T -f python src/integrate_and_plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --methods {params.methods}  --discovery-scales {params.discovery_scales} --data-proportion {params.data_proportion} --trajectory-column {params.trajectory_column} --output {output.csv} --plot {output.plot}
-        echo "Integrated results saved to {output.csv}, plot saved to {output.plot}"
-        """
+if data_type == "dynamic":
+    rule integrate_and_plot_results:
+        input:
+            dataset=lambda wildcards: f"data/{enzyme_model}/{data_type}/processed/data_merged.csv",
+            formulas=formula_files
+        output:
+            csv=f"data/{enzyme_model}/{data_type}/sr_comparison/results/loss_comparison.csv",
+            plot=f"data/{enzyme_model}/{data_type}/sr_comparison/plots/integrated_results_plot.png"
+        conda:
+            "envs/base.yaml"
+        params:
+            methods=models,
+            data_proportion=config["data_proportion"],
+            features=features,
+            discovery_scales="'" + config["discovery_scales"] + "'",
+            trajectory_column="condition_id"
+        shell:
+            """
+            echo "Integrating and plotting results for methods: {params.methods}"
+            python src/integrate_and_plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --methods {params.methods}  --discovery-scales {params.discovery_scales} --data-proportion {params.data_proportion} --trajectory-column {params.trajectory_column} --output {output.csv} --plot {output.plot}
+            echo "Integrated results saved to {output.csv}, plot saved to {output.plot}"
+            """
 
 # Rule to generate a comparison plot of all methods
 rule plot_methods:
@@ -247,7 +253,7 @@ rule plot_methods:
     shell:
         """
         echo "Generating comparison plot for all methods."
-        strace -o output_plot.log -T -f python src/plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --output {output} --discovery-scales {params.discovery_scales}
+        python src/plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --output {output} --discovery-scales {params.discovery_scales}
         echo "Comparison plot saved to {output}"
         """
 
@@ -343,7 +349,9 @@ rule pan_enzyme_model_plots:
         "data/panmodel_plots/symbolic_model_r2_scores_bar.png",
         "data/panmodel_plots/symbolic_model_r2_scores_scatter.png",
         "data/panmodel_plots/all_symbolic_formulas.txt"
+    params:
+        discovery_scales="'" + config["discovery_scales"] + "'"
     conda:
         "envs/base.yaml"
     shell:
-        "python src/pan_enzyme_model_plots.py --root-dir {input.root_dir} --dataset {input.dataset}"
+        "python src/pan_enzyme_model_plots.py --root-dir {input.root_dir} --dataset {input.dataset} --discovery-scales {params.discovery_scales}"

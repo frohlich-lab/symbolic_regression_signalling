@@ -32,6 +32,8 @@ from constants import PYSR_CONFIG
 # Suppress all warnings
 warnings.filterwarnings("ignore")
 
+np.random.seed(42)  # Set random seed for reproducibility
+
 # PySR configuration
 
 def file_exists(path):
@@ -485,7 +487,7 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
             with torch.no_grad():
                 y_nn = np.exp(model(X_varied_inputs_pre))
             # MM prediction
-            y_mm = michaelis_menten(pu_vals, *data.iloc[idx, 1:-1].values[1:])
+            y_mm = michaelis_menten(pu_vals, *data.iloc[idx, 1:-1].values.T)
 
             # Plot
             ax = axs[i]

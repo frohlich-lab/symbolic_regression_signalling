@@ -17,7 +17,7 @@ import os
 
 # Hyperparameters
 TRAIN_SIZE = 0.8  # Training set size as a percentage of the dataset
-SEED = 1  # Random seed for reproducibility
+SEED = 42  # Random seed for reproducibility
 
 # Model Settings
 N_ITERATIONS = 3  # Number of KAN model iterations

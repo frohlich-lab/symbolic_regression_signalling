@@ -43,7 +43,7 @@ var = sys.argv[2]  # Pass 'static' or 'dynamic' as the second argument
 save_dir = 'data/' + model_name + '/' + var + '/raw/'
 os.makedirs(save_dir, exist_ok=True)
 
-np.random.seed(0)
+np.random.seed(42)
 
 # import pysb model
 outdir = get_model_dir(model_name)
