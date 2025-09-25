@@ -8,9 +8,14 @@ import sympy as sp
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.cm import get_cmap
 import json
 import argparse
 import os
+from collections import defaultdict
+from pathlib import Path
+
+from plot_style import apply_cell_systems_style
 
 def load_formulas_from_file(file_path):
     """
@@ -26,8 +31,43 @@ def load_formulas_from_file(file_path):
         formulas = file.readlines()
     return [formula.strip() for formula in formulas]
 
-def compute_log_MAE_loss(formula, dataset, discovery_scale):
-    """Compute the mean squared error (MAE) loss between predictions of the formula and the target in log-space data."""
+EPS = 1e-20
+apply_cell_systems_style()
+
+METHOD_LABELS = {
+    'pysr': 'PySR',
+    'aifeynman': 'AI Feynman',
+    'dso': 'DSO',
+    'kan': 'KAN',
+    'pysindy': 'PySINDy',
+    'unknown': 'Unknown'
+}
+
+METHOD_COLORS = {
+    'pysr': '#1f77b4',
+    'aifeynman': '#ff7f0e',
+    'dso': '#2ca02c',
+    'kan': '#d62728',
+    'pysindy': '#9467bd',
+    'unknown': '#7f7f7f'
+}
+
+def _map_xi_to_columns(formula_str, dataset_columns):
+    cols = list(dataset_columns[:-1])
+    mapped = formula_str
+    for i, col in enumerate(cols):
+        mapped = mapped.replace(f"x_{i}", col)
+        mapped = mapped.replace(f"x{i}", col)
+    return mapped
+
+def compute_log_MAE_loss(formula, dataset, discovery_scale=None):
+    """Compute MAE in log-space between predictions and target.
+
+    Assumptions:
+    - `dataset` target (last column) is in linear space.
+    - If `discovery_scale == 'log'`, the formula predicts log(target).
+    - If `discovery_scale == 'linear'`, the formula predicts target in linear space.
+    """
     formula_symbols = formula.free_symbols
     formula_variable_names = [str(symbol) for symbol in formula_symbols]  # Extract variable names in formula
     relevant_columns = [col for col in dataset.columns if col in formula_variable_names]
@@ -35,49 +75,125 @@ def compute_log_MAE_loss(formula, dataset, discovery_scale):
     feature_symbols = sp.symbols(relevant_columns)
     target_column = dataset.columns[-1]  # Assuming the last column is the target
 
-    # Lambdify the formula function for relevant columns only
-    formula_func = sp.lambdify(feature_symbols, formula, modules=['numpy', 'sympy'])
+    # Lambdify the formula function for relevant columns only; formulas evaluated in linear space
+    formula_func = sp.lambdify(feature_symbols, formula, modules=['numpy'])
 
     # Calculate predictions
     predicted_values = formula_func(*[dataset[col].astype(float) for col in relevant_columns])
 
-    # Compute MAE directly
-    if discovery_scale == 'log':
-        loss = np.mean(np.abs(predicted_values - dataset[target_column]))
-    else:
-        loss = np.mean(np.abs(np.log10(np.clip(predicted_values, a_min=1e-20, a_max=None) - np.log10(dataset[target_column]))))
+    # Compute uniform log-space MAE: treat all formulas as linear
+    y_true = dataset[target_column].astype(float).values
+    pred_log = np.log(np.clip(np.asarray(predicted_values, dtype=float), a_min=EPS, a_max=None))
+    y_log = np.log(np.clip(y_true, a_min=EPS, a_max=None))
+
+    loss = np.mean(np.abs(pred_log - y_log))
     return loss
 
 def calculate_complexity(formula):
     """Calculate the complexity of a formula based on the number of elements."""
     return len(formula.atoms(sp.Symbol, sp.Number)) + len(formula.atoms(sp.Add, sp.Mul, sp.Pow, sp.Function))
 
-def scatter_plot_formulas(methods, formulas, discovery_scales, dataset, output_file):
+def scatter_plot_formulas(methods, formulas, dataset, output_file, plot_context=None, dataset_context=None):
     """Generate a scatter plot of log-space MAE loss versus formula complexity and save it to a file."""
-    complexities, losses = [], []
+    grouped_points = defaultdict(lambda: {'complexity': [], 'loss': []})
 
     for method, formula in zip(methods, formulas):
         complexity = calculate_complexity(formula)
-        if discovery_scales[method] == 'log':
-            loss = compute_log_MAE_loss(formula, dataset, discovery_scale='log')
-        elif discovery_scales[method] == 'linear':
-            dataset_linear = dataset.apply(lambda x: np.exp(x) if x.name in dataset.columns[2:] else x)
-            loss = compute_log_MAE_loss(formula, dataset_linear, discovery_scale='linear')
-        else:
-            raise ValueError(f"Unsupported discovery scale: {discovery_scales[method]}")
-        complexities.append(complexity)
-        losses.append(loss)
+        loss = compute_log_MAE_loss(formula, dataset)
 
-    plt.figure()
-    plt.scatter(complexities, losses)
-    for i, method in enumerate(methods):
-        plt.annotate(method, (complexities[i], losses[i]), fontsize=8)
-    plt.xlabel('Formula Complexity')
-    plt.ylabel('Log-Space Loss (MAE)')
-    plt.title('Scatter Plot of Log-Space MAE Loss vs. Formula Complexity')
-    plt.grid(True)
-    plt.savefig(output_file)
+        if not np.isfinite(loss):
+            continue
+
+        grouped_points[method]['complexity'].append(complexity)
+        grouped_points[method]['loss'].append(loss)
+
+    if not grouped_points:
+        plt.figure(figsize=(8, 6))
+        plt.text(0.5, 0.5, 'No valid data to plot', ha='center', va='center')
+        plt.axis('off')
+        plt.tight_layout()
+        plt.savefig(output_file, dpi=300)
+        plt.close()
+        return
+
+    unique_methods = list(grouped_points.keys())
+    cmap = get_cmap('tab10')
+
+    plt.figure(figsize=(8, 6))
+    ax = plt.gca()
+
+    for idx, method in enumerate(unique_methods):
+        color = METHOD_COLORS.get(method, cmap(idx % cmap.N))
+        label = METHOD_LABELS.get(method, method.replace('_', ' ').title())
+        complexities = grouped_points[method]['complexity']
+        losses = grouped_points[method]['loss']
+
+        ax.scatter(
+            complexities,
+            losses,
+            label=label,
+            color=color,
+            edgecolor='k',
+            linewidth=0.4,
+            s=70,
+            alpha=0.85
+        )
+
+        for x, y in zip(complexities, losses):
+            ax.annotate(
+                label,
+                (x, y),
+                textcoords='offset points',
+                xytext=(0, 6),
+                ha='center',
+                fontsize=9,
+                color=color
+            )
+
+    ax.set_xlabel('Symbolic Formula Complexity')
+    ax.set_ylabel('Log-space MAE: Mean |ln(y_hat + ε) − ln(y + ε)| (ε = 1e−20)')
+
+    context_bits = []
+    if plot_context:
+        context_bits.append(plot_context)
+    if dataset_context:
+        context_bits.append(dataset_context)
+    context_str = f" ({'; '.join(context_bits)})" if context_bits else ''
+    ax.set_title(f'Symbolic Regression Complexity vs Log-MAE{context_str}')
+
+    ax.grid(True, linestyle='--', alpha=0.4)
+    ax.legend(title='Symbolic Regression Method', frameon=False, loc='best')
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=300)
     plt.close()
+
+
+def _infer_method_from_formula_path(path):
+    fname = os.path.basename(path).lower()
+    if 'pysindy' in fname or 'sindy' in fname:
+        return 'pysindy'
+    for key in METHOD_LABELS:
+        if key in fname:
+            return key
+    parts = fname.split('_')
+    if len(parts) > 1:
+        return parts[1].split('.')[0]
+    return 'unknown'
+
+
+def _build_dataset_context(dataset_path):
+    path = Path(dataset_path)
+    parts = [part.lower() for part in path.parts]
+    enzyme = next((p for p in parts if p.endswith('enzyme')), None)
+    regime = 'dynamic' if 'dynamic' in parts else 'static' if 'static' in parts else None
+
+    labels = []
+    if enzyme:
+        labels.append(enzyme.replace('_', ' ').title())
+    if regime:
+        labels.append(regime.capitalize())
+
+    return ' · '.join(labels) if labels else None
 
 def main():
     """
@@ -88,24 +204,38 @@ def main():
     parser.add_argument('--formulas', nargs='+', required=True, help='List of file paths containing formulas')
     parser.add_argument('--dataset', required=True, help='File path to a CSV dataset')
     parser.add_argument('--output', required=True, help='File path to save the generated plot')
-    parser.add_argument('--discovery-scales', required=True, type=str, help='JSON of method names and their corresponding discovery scales')
+    parser.add_argument('--discovery-scales', required=False, type=str, help='(ignored) Discovery scales')
  
     args = parser.parse_args()
-    methods = [formula.split('/')[-1].split('_')[1].split('.')[0] for formula in args.formulas]
+    methods = [_infer_method_from_formula_path(formula) for formula in args.formulas]
+
+    # Load dataset from CSV file
+    dataset = pd.read_csv(args.dataset)
+    # Evaluate everything in linear space by exponentiating only numeric columns
+    for col in dataset.columns:
+        if pd.api.types.is_numeric_dtype(dataset[col]):
+            dataset[col] = np.exp(dataset[col].astype(float))
 
     # Load all formulas from the provided file paths
     formulas = []
     for file_path in args.formulas:
         with open(file_path, 'r') as f:
-            formula = f.readline().strip()  # Assuming each file contains only one formula
-            formulas.append(sp.sympify(formula))  # Convert to sympy expression
+            raw = f.readline().strip()
+            mapped = _map_xi_to_columns(raw, dataset.columns)
+            formulas.append(sp.sympify(mapped))
 
-    # Load dataset from CSV file
-    dataset = pd.read_csv(args.dataset)
-    discovery_scales = json.loads(args.discovery_scales)
+    plot_context = 'Integrated Error' if 'integrated' in os.path.basename(args.output).lower() else 'Pointwise Error'
+    dataset_context = _build_dataset_context(args.dataset)
 
     # Generate and save the scatter plot
-    scatter_plot_formulas(methods, formulas, discovery_scales, dataset, args.output)
+    scatter_plot_formulas(
+        methods,
+        formulas,
+        dataset,
+        args.output,
+        plot_context=plot_context,
+        dataset_context=dataset_context
+    )
 
 if __name__ == '__main__':
     main()

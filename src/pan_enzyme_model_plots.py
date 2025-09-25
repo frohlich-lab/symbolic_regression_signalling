@@ -8,17 +8,28 @@ import json
 from sympy.utilities.lambdify import lambdify
 from sklearn.metrics import r2_score
 from matplotlib.cm import get_cmap
+from plot_style import apply_cell_systems_style
 
-# Set Helvetica styling
-plt.rcParams.update({
-    'font.family': 'sans-serif',
-    'font.sans-serif': ['Helvetica', 'Arial', 'DejaVu Sans'],
-    'font.size': 12,
-    'axes.labelsize': 14,
-    'axes.titlesize': 15,
-    'xtick.labelsize': 11,
-    'ytick.labelsize': 11,
-})
+# Apply consistent publication styling
+apply_cell_systems_style()
+
+METHOD_LABELS = {
+    'pysr': 'PySR',
+    'aifeynman': 'AI Feynman',
+    'dso': 'DSO',
+    'kan': 'KAN',
+    'pysindy': 'PySINDy',
+    'unknown': 'Unknown'
+}
+
+METHOD_COLORS = {
+    'pysr': '#1f77b4',
+    'aifeynman': '#ff7f0e',
+    'dso': '#2ca02c',
+    'kan': '#d62728',
+    'pysindy': '#9467bd',
+    'unknown': '#7f7f7f'
+}
 
 def load_formula(formula_path):
     with open(formula_path, 'r') as f:
@@ -27,9 +38,12 @@ def load_formula(formula_path):
 
 def compute_r2(formula, dataset, discovery_scale):
     target_column = dataset.columns[-1]
-    formula_symbols = formula.free_symbols
+    # Ensure deterministic ordering of symbols for lambdify (avoid set ordering)
+    formula_symbols_set = formula.free_symbols
+    formula_symbols = sorted(list(formula_symbols_set), key=lambda s: s.name)
     variable_names = [str(s) for s in formula_symbols]
-    input_data = [dataset[var].astype(float) for var in variable_names]
+    # The processed dataset stores variables in log space; convert to linear for evaluation.
+    input_data = [np.exp(dataset[var].astype(float)) for var in variable_names]
 
     try:
         f = lambdify(formula_symbols, formula, modules='numpy')
@@ -38,87 +52,211 @@ def compute_r2(formula, dataset, discovery_scale):
         print(f"Failed to evaluate formula: {formula} with error {e}")
         return np.nan
 
-    y_true = dataset[target_column].astype(float).values
+    # Targets are also stored in log space in the processed CSV; compare in linear space.
+    y_true = np.exp(dataset[target_column].astype(float).values)
 
-    # Handle log/linear conversion
-    if discovery_scale == "linear":
-        # Model predicts in linear space → take exp(target) to match
-        y_true = np.exp(y_true)
-    elif discovery_scale == "log":
-        # Model predicts in log space → take log(predicted) to match
-        y_pred = np.log(np.clip(y_pred, a_min=1e-20, a_max=None))
-
-    # Guard against invalid values
-    if not np.all(np.isfinite(y_pred)) or not np.all(np.isfinite(y_true)):
-        print("Invalid values in R² computation.")
+    # For pan plots: treat formulas as linear and compute R² on finite subset
+    y_pred = np.asarray(y_pred, dtype=float)
+    mask = np.isfinite(y_pred) & np.isfinite(y_true)
+    if mask.sum() < 2:
+        print("Insufficient finite values for R² computation.")
         return np.nan
-
-    return r2_score(y_true, y_pred)
+    score = r2_score(y_true[mask], y_pred[mask])
+    # Negative R² indicates the model is worse than a mean baseline; cap at zero for visualization.
+    return max(score, 0.0)
 
 def compute_complexity(formula):
     return len(formula.atoms(sp.Symbol, sp.Number)) + len(formula.atoms(sp.Add, sp.Mul, sp.Pow, sp.Function))
 
-def generate_bar_plot(r2_scores, output_path_base):
-    if not r2_scores:
+def generate_bar_plot(entries, output_path_base):
+    if not entries:
         print("No R² scores to plot.")
         return
 
-    sorted_items = sorted(r2_scores.items(), key=lambda x: x[1] if x[1] is not None else -1, reverse=True)
-    model_names, scores = zip(*sorted_items)
+    sorted_entries = sorted(
+        entries,
+        key=lambda e: (float('-inf') if e['score'] is None or np.isnan(e['score']) else e['score']),
+        reverse=True
+    )
 
-    plt.figure(figsize=(10, 5))
-    bars = plt.bar(model_names, scores, color='skyblue')
+    positions = np.arange(len(sorted_entries))
+    display_scores = []
+    annotations = []
+    tick_labels = []
+    bar_colors = []
 
-    for i, score in enumerate(scores):
-        if not np.isnan(score):
-            plt.text(i, score + 0.01, f"{score:.2f}", ha='center', va='bottom', fontsize=10)
+    for entry in sorted_entries:
+        raw_score = entry['score']
+        score_for_plot = 0.0 if raw_score is None or np.isnan(raw_score) else raw_score
+        score_for_plot = max(score_for_plot, 0.0)
+        display_scores.append(score_for_plot)
 
-    plt.axhline(y=0.8, color='red', linestyle='--', label='Reference R² = 0.80')
-    plt.legend()
+        if raw_score is None or np.isnan(raw_score):
+            annotations.append('N/A')
+        else:
+            annotations.append(f"{raw_score:.2f}")
 
-    plt.ylabel('R² Score')
-    plt.xlabel('Enzyme Model')
-    plt.title('Symbolic Model R² Score per Enzyme System')
-    plt.xticks(rotation=45, ha='right')
+        method = entry['method']
+        method_label = _method_label(method)
+        enzyme_label = _format_enzyme_name(entry['enzyme_model'])
+        regime_label = entry['regime'].capitalize()
+        tick_labels.append(f"{enzyme_label}\n{regime_label} · {method_label}")
+
+        bar_colors.append(_method_color(method, '#1f77b4'))
+
+    plt.figure(figsize=(12, 6))
+    bars = plt.bar(positions, display_scores, color=bar_colors, edgecolor='black', linewidth=0.4)
+
+    for bar, annotation in zip(bars, annotations):
+        height = bar.get_height()
+        y_pos = max(height, 0.02)
+        plt.text(bar.get_x() + bar.get_width() / 2, y_pos, annotation,
+                 ha='center', va='bottom', fontsize=10)
+
+    plt.ylabel('R² Score (capped at 0 for display)')
+    plt.xlabel('Enzyme Model, Regime, and Method')
+    plt.title('Symbolic Model Performance Across Enzyme Systems')
+    plt.xticks(positions, tick_labels, rotation=30, ha='right')
     plt.tight_layout()
-    plt.grid(axis='y')
+    plt.grid(axis='y', linestyle='--', alpha=0.4)
+
+    legend_handles = []
+    seen_methods = set()
+    for entry, color in zip(sorted_entries, bar_colors):
+        method = entry['method']
+        if method in seen_methods:
+            continue
+        seen_methods.add(method)
+        legend_handles.append(
+            plt.Line2D([0], [0], marker='s', color='w', markerfacecolor=color,
+                       markeredgecolor='black', label=_method_label(method))
+        )
+    if legend_handles:
+        plt.legend(handles=legend_handles, title='Symbolic Regression Method', frameon=False, loc='upper right')
 
     plt.savefig(f"{output_path_base}_bar.png", dpi=300)
     plt.close()
 
 def generate_scatter_plot(points, output_path_base):
+    # Always produce a file to satisfy workflow expectations, even if empty
     if not points:
-        print("No data to plot in scatter.")
+        plt.figure(figsize=(8, 6))
+        plt.text(0.5, 0.5, 'No data to plot', ha='center', va='center')
+        plt.axis('off')
+        plt.tight_layout()
+        plt.savefig(f"{output_path_base}_scatter.png", dpi=300)
+        plt.close()
+        print("Saved empty scatter placeholder due to no data.")
         return
 
-    methods = list(set(p['method'] for p in points))
-    colors = get_cmap("tab10")
-    color_map = {m: colors(i % 10) for i, m in enumerate(methods)}
+    valid_points = [p for p in points if p['r2'] is not None and not np.isnan(p['r2'])]
+    if not valid_points:
+        plt.figure(figsize=(8, 6))
+        plt.text(0.5, 0.5, 'All R² scores are NaN', ha='center', va='center')
+        plt.axis('off')
+        plt.tight_layout()
+        plt.savefig(f"{output_path_base}_scatter.png", dpi=300)
+        plt.close()
+        print("Saved empty scatter placeholder due to NaN scores.")
+        return
+
+    methods = sorted(set(p['method'] for p in valid_points))
+    cmap = get_cmap("tab10")
+    color_map = {m: _method_color(m, cmap(i % cmap.N)) for i, m in enumerate(methods)}
 
     plt.figure(figsize=(8, 6))
-    for p in points:
-        plt.scatter(p['complexity'], p['r2'], color=color_map[p['method']],
-                    label=p['method'], alpha=0.7, edgecolor='k')
-        plt.annotate(p['model'], (p['complexity'], p['r2']), fontsize=8)
+    ax = plt.gca()
 
-    plt.xlabel("Formula Complexity")
-    plt.ylabel("R² Score")
-    plt.title("Complexity vs. Accuracy Across Enzyme and SR Models")
-    handles = [plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=color_map[m],
-                          markeredgecolor='k', label=m) for m in methods]
-    plt.legend(handles=handles, title="Method")
-    plt.grid(True)
+    for method in methods:
+        method_points = [p for p in valid_points if p['method'] == method]
+        label = _method_label(method)
+        color = color_map[method]
+
+        complexities = [p['complexity'] for p in method_points]
+        scores = [p['r2'] for p in method_points]
+
+        ax.scatter(
+            complexities,
+            scores,
+            color=color,
+            label=label,
+            alpha=0.85,
+            edgecolor='k',
+            linewidth=0.4,
+            s=70
+        )
+
+        for x, y, point in zip(complexities, scores, method_points):
+            annotation = label
+            if point.get('regime'):
+                annotation = f"{annotation} · {point['regime'].capitalize()}"
+            if point.get('enzyme_model'):
+                annotation = f"{annotation} · {_format_enzyme_name(point['enzyme_model'])}"
+            ax.annotate(
+                annotation,
+                (x, y),
+                textcoords='offset points',
+                xytext=(0, 6),
+                ha='center',
+                fontsize=9,
+                color=color
+            )
+
+    ax.set_xlabel("Symbolic Formula Complexity")
+    ax.set_ylabel("R² Score (capped at 0 for display)")
+
+    regime_context = sorted({p['regime'].capitalize() for p in valid_points if p.get('regime')})
+    enzyme_context = sorted({_format_enzyme_name(p['enzyme_model']) for p in valid_points if p.get('enzyme_model')})
+    context_bits = []
+    if enzyme_context:
+        context_bits.append(f"{len(enzyme_context)} enzyme systems")
+    if regime_context:
+        context_bits.append("Regimes: " + ", ".join(regime_context))
+    context_suffix = f" ({'; '.join(context_bits)})" if context_bits else ""
+
+    ax.set_title(f"Symbolic Regression Accuracy vs Formula Complexity{context_suffix}")
+    ax.grid(True, linestyle='--', alpha=0.4)
+    ax.legend(title="Symbolic Regression Method", frameon=False, loc='best')
     plt.tight_layout()
     print(f"Saving scatter plot to {output_path_base}_scatter.png")
     plt.savefig(f"{output_path_base}_scatter.png", dpi=300)
     plt.close()
 
-def infer_method_from_name(folder_name):
-    keywords = ['pysr', 'aifeynman', 'dso', 'sindy', 'kan']
-    for kw in keywords:
-        if kw.lower() in folder_name.lower():
-            return kw
+def infer_method_from_name(fname):
+    name = fname.lower()
+    if 'pysr' in name:
+        return 'pysr'
+    if 'aifeynman' in name:
+        return 'aifeynman'
+    if 'dso' in name:
+        return 'dso'
+    if 'kan' in name:
+        return 'kan'
+    # Normalize any sindy variants to pysindy key
+    if 'pysindy' in name or 'sindy' in name:
+        return 'pysindy'
     return 'unknown'
+
+
+def _method_label(method):
+    return METHOD_LABELS.get(method, method.replace('_', ' ').title())
+
+
+def _method_color(method, fallback):
+    return METHOD_COLORS.get(method, fallback)
+
+
+def _format_enzyme_name(name):
+    return name.replace('_', ' ').title()
+
+def _map_xi_to_columns(formula_str, dataset_columns):
+    # Replace x0, x1, ... (and x_0) with dataset column names in order (excluding target at the end)
+    cols = list(dataset_columns[:-1])
+    mapped = formula_str
+    for i, col in enumerate(cols):
+        mapped = mapped.replace(f"x_{i}", col)
+        mapped = mapped.replace(f"x{i}", col)
+    return mapped
 
 def write_all_formulas(formula_registry, output_path):
     with open(output_path, 'w') as f:
@@ -130,9 +268,9 @@ def main(root_dir, dataset_path, discovery_scales):
     output_dir = os.path.join(root_dir, "panmodel_plots")
     os.makedirs(output_dir, exist_ok=True)
 
-    r2_scores = {}
     scatter_data = []
     formula_registry = []
+    bar_entries = []
 
     for enzyme_model in os.listdir(root_dir):
         enzyme_model_path = os.path.join(root_dir, enzyme_model)
@@ -161,18 +299,17 @@ def main(root_dir, dataset_path, discovery_scales):
                 method_name = fname.replace("formula_", "").replace(".txt", "")
                 model_key = f"{enzyme_model}_{regime}_{method_name}"
                 equation_path = os.path.join(results_dir, fname)
+                method = infer_method_from_name(fname)
+                discovery_scale = discovery_scales.get(method, "log")  # Default to log if unknown
 
                 try:
-                    formula = load_formula(equation_path)
+                    raw_formula = open(equation_path, 'r').readline().strip()
+                    replaced = _map_xi_to_columns(raw_formula, dataset.columns)
+                    formula = sp.sympify(replaced)
 
-                    method = infer_method_from_name(fname)
-                    discovery_scale = discovery_scales.get(method, "log")  # Default to log if unknown
                     r2 = compute_r2(formula, dataset, discovery_scale)
-                    r2 = compute_r2(formula, dataset)
                     complexity = compute_complexity(formula)
 
-                    method = infer_method_from_name(fname)
-                    
                     formula_registry.append({
                         'enzyme_model': enzyme_model,
                         'regime': regime,
@@ -180,20 +317,32 @@ def main(root_dir, dataset_path, discovery_scales):
                         'formula': str(formula)
                     })
 
-                    r2_scores[model_key] = r2
+                    bar_entries.append({
+                        'enzyme_model': enzyme_model,
+                        'regime': regime,
+                        'method': method,
+                        'score': r2
+                    })
                     scatter_data.append({
                         'model': model_key,
                         'method': method,
                         'r2': r2,
                         'complexity': complexity,
-                        'regime': regime
+                        'regime': regime,
+                        'formula': str(formula),
+                        'enzyme_model': enzyme_model
                     })
                 except Exception as e:
                     print(f"Error processing {equation_path}: {e}")
-                    r2_scores[model_key] = np.nan
+                    bar_entries.append({
+                        'enzyme_model': enzyme_model,
+                        'regime': regime,
+                        'method': method,
+                        'score': np.nan
+                    })
 
     output_base = os.path.join(output_dir, "symbolic_model_r2_scores")
-    generate_bar_plot(r2_scores, output_base)
+    generate_bar_plot(bar_entries, output_base)
     generate_scatter_plot(scatter_data, output_base)
 
     formula_output_path = os.path.join(output_dir, "all_symbolic_formulas.txt")

@@ -1,0 +1,12 @@
+
+The following have been reloaded with a version change:
+  1) GCCcore/11.3.0 => GCCcore/8.3.0
+
+
+The following have been reloaded with a version change:
+  1) GCCcore/8.3.0 => GCCcore/12.2.0
+
+/nemo/lab/froehlichf/home/users/pomeret/symbolic_regression_signalling/src/sr_sweep/agent.py:386: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+slurmstepd: error: *** JOB 30449610 ON cn008 CANCELLED AT 2025-09-19T11:02:02 ***
+slurmstepd: error: *** JOB 30448869 ON cn035 CANCELLED AT 2025-09-19T11:02:02 ***

@@ -29,28 +29,23 @@ import matplotlib.colors as mcolors
 from matplotlib.cm import ScalarMappable
 
 from constants import PYSR_CONFIG
+from plot_style import apply_cell_systems_style
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")
+apply_cell_systems_style()
 
-# Define biochemical regimes
+# Numerical stability constant for logs
+EPS = 1e-20
+
+# Define biochemical regimes (decoupled)
+# Pair A: P_u vs tK
+# Pair B: K_M vs P_u
 REGIMES = {
-    "regime1": lambda df, r: df[(df["P_u"] / df["tK"]) >= r],
-    "regime1_1": lambda df, r: df[((df["P_u"] / df["tK"]) >= r) & 
-                                  (((df["k_off"] + df["k_cat"] + (df["k_inact"] if "k_inact" in df and not df["k_inact"].isnull().all() else 0)) / 
-                                    (df["k_D"] * df["k_off"])) / df["P_u"] >= r)],
-    "regime1_2": lambda df, r: df[((df["P_u"] / df["tK"]) >= r) & 
-                                  (df["P_u"] / 
-                                   ((df["k_off"] + df["k_cat"] + (df["k_inact"] if "k_inact" in df and not df["k_inact"].isnull().all() else 0)) / 
-                                    (df["k_D"] * df["k_off"])) >= r)],
-    "regime2": lambda df, r: df[(df["tK"] / df["P_u"]) >= r],
-    "regime2_1": lambda df, r: df[((df["tK"] / df["P_u"]) >= r) & 
-                                  (((df["k_off"] + df["k_cat"] + (df["k_inact"] if "k_inact" in df and not df["k_inact"].isnull().all() else 0)) / 
-                                    (df["k_D"] * df["k_off"])) / df["tK"] >= r)],
-    "regime2_2": lambda df, r: df[((df["tK"] / df["P_u"]) >= r) & 
-                                  (df["tK"] / 
-                                   ((df["k_off"] + df["k_cat"] + (df["k_inact"] if "k_inact" in df and not df["k_inact"].isnull().all() else 0)) / 
-                                    (df["k_D"] * df["k_off"])) >= r)],
+    "pu_over_tk_high": lambda df, r: df[(df["P_u"] / df["tK"]) >= r],
+    "pu_over_tk_low": lambda df, r: df[(df["tK"] / df["P_u"]) >= r],
+    "km_over_pu_high": lambda df, r: df[(((df["k_off"] + df["k_cat"] + (df["k_inact"] if "k_inact" in df and not df["k_inact"].isnull().all() else 0)) / (df["k_D"] * df["k_off"])) / df["P_u"]) >= r],
+    "km_over_pu_low": lambda df, r: df[(df["P_u"] / ((df["k_off"] + df["k_cat"] + (df["k_inact"] if "k_inact" in df and not df["k_inact"].isnull().all() else 0)) / (df["k_D"] * df["k_off"])) ) >= r],
 }
 def file_exists(path):
     return os.path.isfile(path) and os.path.getsize(path) > 0
@@ -69,15 +64,29 @@ def load_dataset(file_path, dataset_size=None, features=None):
     return data.map(np.exp)
 
 def run_pysr(X, y, model_path, output_file):
-    if os.path.exists(model_path):
-        print(f"Loading existing PySR model from {model_path}")
-        model = PySRRegressor.from_file(run_directory=os.path.dirname(model_path))
-        return model
-    else:
-        print(f"Training new PySR model and saving to {model_path}")
-        model = PySRRegressor(**PYSR_CONFIG, output_directory=os.path.dirname(os.path.dirname(model_path)), run_id="pysr")
-        model.fit(X, y)
-        return model
+    run_dir = os.path.dirname(model_path)
+    # Consider the run cached if either a pickle or the CSV artifacts exist
+    cached = (
+        os.path.exists(model_path)
+        or os.path.exists(os.path.join(run_dir, "hall_of_fame.csv"))
+        or os.path.exists(os.path.join(run_dir, "equations.csv"))
+    )
+    if cached:
+        print(f"Loading existing PySR model from run directory: {run_dir}")
+        return PySRRegressor.from_file(run_directory=run_dir)
+    print(f"Training new PySR model; run directory: {run_dir}")
+    model = PySRRegressor(
+        **PYSR_CONFIG,
+        output_directory=os.path.dirname(run_dir),
+        run_id="pysr",
+    )
+    model.fit(X, y)
+    # Persist artifacts for future reuse
+    try:
+        model.save()
+    except Exception:
+        pass
+    return model
     
 def save_pysr_formulas(model_dict, features, output_path):
     with open(output_path, "w") as f:
@@ -109,7 +118,8 @@ def evaluate_models(data, features, output_dir, dataset_size):
     losses, model_dict = {}, {}
 
     for regime, filter_func in REGIMES.items():
-        filtered = filter_func(data, 1.0).reset_index(drop=True)
+        # Use a 1000x threshold for splits (≥1000 or ≤0.001)
+        filtered = filter_func(data, 1000.0).reset_index(drop=True)
         if filtered.empty:
             continue
 
@@ -131,12 +141,12 @@ def evaluate_models(data, features, output_dir, dataset_size):
         pysr_model = run_pysr(X_sample, y_sample, model_path, temp_file)
         y_pred_pysr = pysr_model.predict(X)
 
-        log_mae = np.mean(np.abs(np.log(np.maximum(y_pred_pysr, 1e-25)) - np.log(np.maximum(y, 1e-25))))
+        log_mae = np.mean(np.abs(np.log(np.maximum(y_pred_pysr, EPS)) - np.log(np.maximum(y, EPS))))
         losses[regime] = log_mae
         print(f"PySR Loss: {log_mae}")
 
         y_pred_mm = michaelis_menten(*filtered.iloc[:, :-1].values.T)
-        mm_loss = np.mean(np.abs(np.log(np.maximum(y_pred_mm, 1e-25)) - np.log(np.maximum(y, 1e-25))))
+        mm_loss = np.mean(np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y, EPS))))
         losses[f"{regime}_mm"] = mm_loss
         print(f"Michaelis-Menten Loss: {mm_loss}")
 
@@ -171,6 +181,8 @@ def evaluate_models(data, features, output_dir, dataset_size):
     plot_model_error_correlation(model_dict, output_dir)
     plot_nn_vs_mm_response_curves_linear(model_dict, output_dir)
     plot_horizontal_boxplot_subregimes(model_dict, output_dir)
+    plot_vertical_boxplot_subregimes(model_dict, output_dir)
+    plot_kinetic_sanity_scatters(model_dict, output_dir, full_dataset=data)
 
 def plot_error_distributions(model_dict, output_dir):
     """
@@ -187,17 +199,17 @@ def plot_error_distributions(model_dict, output_dir):
 
         # PySR
         y_pred_pysr = models['pysr'].predict(X)
-        err_pysr = np.abs(np.log(np.maximum(y_pred_pysr, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        err_pysr = np.abs(np.log(np.maximum(y_pred_pysr, EPS)) - np.log(np.maximum(y_true, EPS)))
         error_records.extend([{'Model': 'PySR', 'Regime': regime, 'Log-MAE': e} for e in err_pysr])
 
         # MM
         y_pred_mm = michaelis_menten(*data.iloc[:, :-1].values.T)
-        err_mm = np.abs(np.log(np.maximum(y_pred_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        err_mm = np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_true, EPS)))
         error_records.extend([{'Model': 'Michaelis-Menten', 'Regime': regime, 'Log-MAE': e} for e in err_mm])
 
         # NN
         y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
-        err_nn = np.abs(np.log(np.maximum(y_pred_nn, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        err_nn = np.abs(np.log(np.maximum(y_pred_nn, EPS)) - np.log(np.maximum(y_true, EPS)))
         error_records.extend([{'Model': 'Neural Network', 'Regime': regime, 'Log-MAE': e} for e in err_nn])
 
     error_df = pd.DataFrame(error_records)
@@ -216,7 +228,7 @@ def plot_error_distributions(model_dict, output_dir):
         ax.set_title(regime)
         ax.set_xlabel('')
         if i % ncols == 0:
-            ax.set_ylabel('Log-MAE')
+            ax.set_ylabel('Log-space MAE\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)')
         else:
             ax.set_ylabel('')
 
@@ -224,22 +236,21 @@ def plot_error_distributions(model_dict, output_dir):
     for j in range(i + 1, len(axes)):
         fig.delaxes(axes[j])
 
-    plt.suptitle("Log-MAE Error Distributions by Regime", fontsize=16)
+    plt.suptitle("Log-space MAE Error Distributions by Regime", fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.savefig(os.path.join(output_dir, "shared/plots/regime_loss_comparison.png"))
 
 def plot_model_subregimes(model_dict, output_dir):
 
     models = ['pysr', 'mm', 'nn']
+    # Use decoupled Pair A (P_u vs tK) only for this landscape
     regimes_per_column = {
-        0: ['regime2_1', 'regime2_2'],  # P_u / tK < 1 — LEFT COLUMN
-        1: ['regime1_1', 'regime1_2'],  # P_u / tK > 1 — RIGHT COLUMN
+        0: ['pu_over_tk_low'],   # P_u / tK < 1 — LEFT COLUMN
+        1: ['pu_over_tk_high'],  # P_u / tK > 1 — RIGHT COLUMN
     }
     regime_markers = {
-        'regime1_1': 'o',
-        'regime1_2': 's',
-        'regime2_1': '^',
-        'regime2_2': 'D'
+        'pu_over_tk_low': '^',
+        'pu_over_tk_high': 'o',
     }
     cmap = cm.get_cmap('plasma', 256)  # Use a diverging colormap for better distinction
     fig, axes = plt.subplots(3, 2, figsize=(14, 14), sharex=False, sharey=False)
@@ -271,8 +282,13 @@ def plot_model_subregimes(model_dict, output_dir):
                 elif model == 'nn':
                     y_pred = evaluate_model(model_dict[regime]['nn'], data_pre)[1].detach().cpu().numpy().flatten()
 
-                error = np.abs(np.log(np.maximum(y_pred, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
-                all_errors.extend(error)
+                error = np.abs(np.log(np.maximum(y_pred, EPS)) - np.log(np.maximum(y_true, EPS)))
+                if error.size:
+                    all_errors.extend(error)
+
+    if len(all_errors) == 0:
+        print("Skipping error landscape plot: no matching regimes present.")
+        return
 
     vmin = np.percentile(all_errors, 1)
     vmax = np.percentile(all_errors, 99)
@@ -301,13 +317,13 @@ def plot_model_subregimes(model_dict, output_dir):
 
                 error = np.abs(np.log(np.maximum(y_pred, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
                 x_vals = (data["P_u"] / data["tK"]).values
-
-                if regime.startswith("regime1"):
+                # Map Pair A subregimes to y scaling similar to prior convention
+                if regime == 'pu_over_tk_high':
                     y_vals = michaelis_menten(*data.iloc[:, :-1].values.T) / data["P_u"]
-                elif regime.startswith("regime2"):
+                elif regime == 'pu_over_tk_low':
                     y_vals = michaelis_menten(*data.iloc[:, :-1].values.T) / data["tK"]
                 else:
-                    raise ValueError(f"Unknown regime {regime}")
+                    continue
 
                 marker = regime_markers[regime]
                 sc = ax.scatter(
@@ -331,7 +347,7 @@ def plot_model_subregimes(model_dict, output_dir):
                 ylabel = r"K$_\mathsf{M}$ / P$_\mathsf{u}$"
             ax.set_ylabel(ylabel)
 
-            regime_label = "< 1" if col == 0 else "> 1"
+            regime_label = "< 0.001" if col == 0 else "≥ 1000"
             ax.set_title(f"{model.upper()} | P_u/tK {regime_label}")
             ax.axhline(y=1, color='gray', linestyle='--', linewidth=0.8, alpha=0.7)
 
@@ -341,7 +357,7 @@ def plot_model_subregimes(model_dict, output_dir):
         sm.set_array([])
         cbar_ax = fig.add_axes([0.92, 0.72 - 0.30 * row, 0.015, 0.18])
         cbar = plt.colorbar(sm, cax=cbar_ax)
-        cbar.set_label(f"{model.upper()} Log-MAE", fontsize=11)
+        cbar.set_label(f"{model.upper()} Log-space MAE", fontsize=11)
 
     fig.legend(all_handles, all_labels, loc='upper center', ncol=4, frameon=False, fontsize=11)
     plt.tight_layout(rect=[0, 0, 0.9, 0.94])
@@ -368,11 +384,11 @@ def plot_input_error_correlation(model_dict, output_dir):
         X = data.iloc[:, :-1]
 
         error_df = pd.DataFrame()
-        error_df['pysr_error'] = np.abs(np.log(np.maximum(models['pysr'].predict(X.values), 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        error_df['pysr_error'] = np.abs(np.log(np.maximum(models['pysr'].predict(X.values), EPS)) - np.log(np.maximum(y_true, EPS)))
         y_pred_mm = michaelis_menten(*data.iloc[:, :-1].values.T)
-        error_df['mm_error'] = np.abs(np.log(np.maximum(y_pred_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        error_df['mm_error'] = np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_true, EPS)))
         y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
-        error_df['nn_error'] = np.abs(np.log(np.maximum(y_pred_nn, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        error_df['nn_error'] = np.abs(np.log(np.maximum(y_pred_nn, EPS)) - np.log(np.maximum(y_true, EPS)))
 
         for col in X.columns:
             error_df[col] = X[col].values
@@ -423,9 +439,9 @@ def plot_model_error_correlation(model_dict, output_dir):
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1]
 
-        err_pysr = np.abs(np.log(np.maximum(models['pysr'].predict(X.values), 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
-        err_mm = np.abs(np.log(np.maximum(michaelis_menten(*data.iloc[:, :-1].values.T), 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
-        err_nn = np.abs(np.log(np.maximum(evaluate_model(models['nn'], models['preprocessed'])[1].detach().cpu().numpy().flatten(), 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        err_pysr = np.abs(np.log(np.maximum(models['pysr'].predict(X.values), EPS)) - np.log(np.maximum(y_true, EPS)))
+        err_mm = np.abs(np.log(np.maximum(michaelis_menten(*data.iloc[:, :-1].values.T), EPS)) - np.log(np.maximum(y_true, EPS)))
+        err_nn = np.abs(np.log(np.maximum(evaluate_model(models['nn'], models['preprocessed'])[1].detach().cpu().numpy().flatten(), EPS)) - np.log(np.maximum(y_true, EPS)))
 
         df = pd.DataFrame({'PySR': err_pysr, 'MM': err_mm, 'NN': err_nn})
         all_model_error_df.append(df)
@@ -478,7 +494,7 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
 
         # Full NN prediction and error
         y_pred_nn = evaluate_model(model, preprocessed_data)[1].detach().cpu().numpy().flatten()
-        log_mae = np.abs(np.log(np.maximum(y_pred_nn, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        log_mae = np.abs(np.log(np.maximum(y_pred_nn, EPS)) - np.log(np.maximum(y_true, EPS)))
 
         # Select samples from across log-MAE distribution
         percentiles = np.linspace(0, 100, n_samples + 2)[1:-1]
@@ -548,32 +564,265 @@ def plot_horizontal_boxplot_subregimes(model_dict, output_dir):
     """
     sns.set(style="whitegrid", font_scale=1.2, rc={"axes.edgecolor": "black", "axes.linewidth": 1.0})
 
-    subregimes = ['regime1_1', 'regime1_2', 'regime2_1', 'regime2_2']
+    subregimes = ['pu_over_tk_high', 'pu_over_tk_low', 'km_over_pu_high', 'km_over_pu_low']
     subregime_labels = {
-        'regime1_1': 'Regime 1.1',
-        'regime1_2': 'Regime 1.2',
-        'regime2_1': 'Regime 2.1',
-        'regime2_2': 'Regime 2.2'
+        'pu_over_tk_high': 'P_u / tK ≥ 1000',
+        'pu_over_tk_low': 'P_u / tK ≤ 0.001',
+        'km_over_pu_high': 'K_M / P_u ≥ 1000',
+        'km_over_pu_low': 'K_M / P_u ≤ 0.001',
     }
-
-    def theoretical_regime_formula(regime):
-        P_u, tK, k_off, k_D, k_cat, k_inact = symbols("P_u tK k_off k_D k_cat k_inact")
-        KM = (k_cat + k_off + k_inact) / (k_D * k_off)
-        if regime == "regime1_1":
-            return (tK * P_u) / KM
-        elif regime == "regime1_2":
-            return tK
-        elif regime == "regime2_1":
-            return (P_u / KM) * tK
-        elif regime == "regime2_2":
-            return P_u
-        else:
-            return None
 
     fig, axes = plt.subplots(nrows=len(subregimes), ncols=1, figsize=(10, 2.8 * len(subregimes)), sharex=True)
 
     for ax, regime in zip(axes, subregimes):
         if regime not in model_dict:
+            continue
+
+        models = model_dict[regime]
+        data = models['data']
+        data_pre = models['preprocessed']
+        y_true = data.iloc[:, -1].values
+        X = data.iloc[:, :-1]
+
+        error_records = []
+
+        # PySR
+        y_pred_pysr = models['pysr'].predict(X.values)
+        err_pysr = np.abs(np.log(np.maximum(y_pred_pysr, EPS)) - np.log(np.maximum(y_true, EPS)))
+        error_records.extend([{'Model': 'PySR', 'Log-MAE': e} for e in err_pysr])
+
+        # Michaelis-Menten
+        y_pred_mm = michaelis_menten(*X.values.T)
+        err_mm = np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_true, EPS)))
+        error_records.extend([{'Model': 'Michaelis-Menten', 'Log-MAE': e} for e in err_mm])
+
+        # Neural Network
+        y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
+        err_nn = np.abs(np.log(np.maximum(y_pred_nn, EPS)) - np.log(np.maximum(y_true, EPS)))
+        error_records.extend([{'Model': 'Neural Network', 'Log-MAE': e} for e in err_nn])
+
+        # No "Theory" line for decoupled regimes
+
+        # Plot for this regime
+        error_df = pd.DataFrame(error_records)
+        sns.boxplot(
+            data=error_df,
+            x="Log-MAE",
+            y="Model",
+            palette="Set2",
+            orient="h",
+            ax=ax
+        )
+        ax.set_title(subregime_labels[regime], fontsize=14, weight='bold')
+        ax.set_ylabel("")  # remove repeated label
+        ax.tick_params(axis='both', labelsize=11)
+
+    # Only label bottom subplot's x-axis
+    axes[-1].set_xlabel("Log-space MAE\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)", fontsize=12)
+    for ax in axes[:-1]:
+        ax.set_xlabel("")
+
+    plt.tight_layout()
+    os.makedirs(os.path.join(output_dir, "shared/plots"), exist_ok=True)
+    plt.savefig(os.path.join(output_dir, "shared/plots/log_mae_horizontal_boxplot.png"), dpi=300)
+    plt.close()
+
+    # Also save a no-outliers version of the horizontal boxplots
+    fig, axes = plt.subplots(nrows=len(subregimes), ncols=1, figsize=(10, 2.8 * len(subregimes)), sharex=True)
+    for ax, regime in zip(axes, subregimes):
+        if regime not in model_dict:
+            continue
+        models = model_dict[regime]
+        data = models['data']
+        data_pre = models['preprocessed']
+        y_true = data.iloc[:, -1].values
+        X = data.iloc[:, :-1]
+
+        error_records = []
+        y_pred_pysr = models['pysr'].predict(X.values)
+        err_pysr = np.abs(np.log(np.maximum(y_pred_pysr, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        error_records.extend([{'Model': 'PySR', 'Log-MAE': e} for e in err_pysr])
+
+        y_pred_mm = michaelis_menten(*X.values.T)
+        err_mm = np.abs(np.log(np.maximum(y_pred_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        error_records.extend([{'Model': 'Michaelis-Menten', 'Log-MAE': e} for e in err_mm])
+
+        y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
+        err_nn = np.abs(np.log(np.maximum(y_pred_nn, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        error_records.extend([{'Model': 'Neural Network', 'Log-MAE': e} for e in err_nn])
+
+        error_df = pd.DataFrame(error_records)
+        sns.boxplot(
+            data=error_df,
+            x="Log-MAE",
+            y="Model",
+            palette="Set2",
+            orient="h",
+            ax=ax,
+            showfliers=False,
+        )
+        ax.set_title(subregime_labels[regime], fontsize=14, weight='bold')
+        ax.set_ylabel("")
+        ax.tick_params(axis='both', labelsize=11)
+    axes[-1].set_xlabel("Log-space MAE\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)", fontsize=12)
+    for ax in axes[:-1]:
+        ax.set_xlabel("")
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "shared/plots/log_mae_horizontal_boxplot_no_outliers.png"), dpi=300)
+    plt.close()
+
+def plot_kinetic_sanity_scatters(model_dict, output_dir, full_dataset=None):
+    """
+    Generate sanity scatter plots:
+    - Plot A: x = P_u/tK, y = log-MAE of Michaelis-Menten, color = K_M/P_u
+    - Plot B: x = K_M/P_u, y = log-MAE of Michaelis-Menten, color = K_M/P_u
+    - Plot C: x = K_M/P_u, y = log-MAE of first-order approx (tK*P_u/K_M), color = K_M/P_u
+    - Plot D: x = K_M/P_u, y = log-MAE of zero-order approx (tK), color = K_M/P_u
+    Saved to shared/plots.
+    """
+    sns.set(style="whitegrid", font_scale=1.1, rc={"axes.edgecolor": "black", "axes.linewidth": 1.0})
+
+    def get_full_df():
+        if full_dataset is not None:
+            return full_dataset.reset_index(drop=True)
+        # Fallback to union of any available regime data
+        frames = [v['data'] for k, v in model_dict.items() if 'data' in v]
+        if not frames:
+            return None
+        return pd.concat(frames, axis=0, ignore_index=True).drop_duplicates()
+
+    os.makedirs(os.path.join(output_dir, "shared/plots"), exist_ok=True)
+
+    # Helper to compute K_M per row
+    def compute_km(df):
+        k_inact = df['k_inact'] if 'k_inact' in df.columns else 0.0
+        KM = (df['k_cat'] + df['k_off'] + k_inact) / (df['k_D'] * df['k_off'])
+        return KM
+
+    # A: x = P_u/tK, y = MM log-MAE (use all samples) + aligned histogram below
+    dfA = get_full_df()
+    if dfA is not None and not dfA.empty:
+        y_true = dfA.iloc[:, -1].values
+        y_mm = michaelis_menten(*dfA.iloc[:, :-1].values.T)
+        err_mm = np.abs(np.log(np.maximum(y_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        x_ratio = (dfA['P_u'] / dfA['tK']).values
+
+        fig, axs = plt.subplots(2, 1, figsize=(7.0, 5.4), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+        # Scatter (top)
+        axs[0].scatter(x_ratio, err_mm, color='tab:blue', s=14, alpha=0.6, edgecolors='none')
+        axs[0].set_xscale('log', base=10)
+        axs[0].set_yscale('log', base=10)
+        axs[0].set_ylabel("Log-space MAE (MM)\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)")
+        axs[0].set_title("MM Error vs P_u/tK")
+        # Histogram (bottom)
+        finite_x = x_ratio[np.isfinite(x_ratio) & (x_ratio > 0)]
+        if finite_x.size > 0:
+            min_exp = int(np.floor(np.log10(finite_x.min())))
+            max_exp = int(np.ceil(np.log10(finite_x.max())))
+            edges = 10.0 ** np.arange(min_exp, max_exp + 1)
+            axs[1].hist(finite_x, bins=edges, color='gray', alpha=0.8)
+        axs[1].set_xscale('log', base=10)
+        axs[1].set_ylabel("Count")
+        axs[1].set_xlabel("P_u / tK")
+        plt.tight_layout()
+        fig.savefig(os.path.join(output_dir, "shared/plots/sanity_scatter_mm_vs_pu_over_tk.png"), dpi=300)
+        plt.close(fig)
+
+    # B: x = K_M/P_u, y = MM log-MAE (use all samples) + aligned histogram below
+    dfB = get_full_df()
+    if dfB is not None and not dfB.empty:
+        y_true = dfB.iloc[:, -1].values
+        y_mm = michaelis_menten(*dfB.iloc[:, :-1].values.T)
+        err_mm = np.abs(np.log(np.maximum(y_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        km = compute_km(dfB).values
+        x_ratio = km / dfB['P_u'].values
+
+        fig, axs = plt.subplots(2, 1, figsize=(7.0, 5.4), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+        axs[0].scatter(x_ratio, err_mm, color='tab:blue', s=14, alpha=0.6, edgecolors='none')
+        axs[0].set_xscale('log', base=10)
+        axs[0].set_yscale('log', base=10)
+        axs[0].set_ylabel("Log-space MAE (MM)\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)")
+        axs[0].set_title("MM Error vs K_M/P_u")
+        finite_x = x_ratio[np.isfinite(x_ratio) & (x_ratio > 0)]
+        if finite_x.size > 0:
+            min_exp = int(np.floor(np.log10(finite_x.min())))
+            max_exp = int(np.ceil(np.log10(finite_x.max())))
+            edges = 10.0 ** np.arange(min_exp, max_exp + 1)
+            axs[1].hist(finite_x, bins=edges, color='gray', alpha=0.8)
+        axs[1].set_xscale('log', base=10)
+        axs[1].set_ylabel("Count")
+        axs[1].set_xlabel("K_M / P_u")
+        plt.tight_layout()
+        fig.savefig(os.path.join(output_dir, "shared/plots/sanity_scatter_mm_vs_km_over_pu.png"), dpi=300)
+        plt.close(fig)
+
+        # C: First-order approx error vs K_M/P_u + aligned histogram
+        y_first = (dfB['tK'].values * dfB['P_u'].values) / np.maximum(km, 1e-25)
+        err_first = np.abs(np.log(np.maximum(y_first, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        fig, axs = plt.subplots(2, 1, figsize=(7.0, 5.4), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+        axs[0].scatter(x_ratio, err_first, color='tab:blue', s=14, alpha=0.6, edgecolors='none')
+        axs[0].set_xscale('log', base=10)
+        axs[0].set_yscale('log', base=10)
+        axs[0].set_ylabel("Log-space MAE (First-order)\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)")
+        axs[0].set_title("First-order Approx Error vs K_M/P_u")
+        finite_x = x_ratio[np.isfinite(x_ratio) & (x_ratio > 0)]
+        if finite_x.size > 0:
+            min_exp = int(np.floor(np.log10(finite_x.min())))
+            max_exp = int(np.ceil(np.log10(finite_x.max())))
+            edges = 10.0 ** np.arange(min_exp, max_exp + 1)
+            axs[1].hist(finite_x, bins=edges, color='gray', alpha=0.8)
+        axs[1].set_xscale('log', base=10)
+        axs[1].set_ylabel("Count")
+        axs[1].set_xlabel("K_M / P_u")
+        plt.tight_layout()
+        fig.savefig(os.path.join(output_dir, "shared/plots/sanity_scatter_first_order_vs_km_over_pu.png"), dpi=300)
+        plt.close(fig)
+
+        # D: Zero-order approx error vs K_M/P_u + aligned histogram
+        y_zero = dfB['tK'].values
+        err_zero = np.abs(np.log(np.maximum(y_zero, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        fig, axs = plt.subplots(2, 1, figsize=(7.0, 5.4), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+        axs[0].scatter(x_ratio, err_zero, color='tab:blue', s=14, alpha=0.6, edgecolors='none')
+        axs[0].set_xscale('log', base=10)
+        axs[0].set_yscale('log', base=10)
+        axs[0].set_ylabel("Log-space MAE (Zero-order)\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)")
+        axs[0].set_title("Zero-order Approx Error vs K_M/P_u")
+        finite_x = x_ratio[np.isfinite(x_ratio) & (x_ratio > 0)]
+        if finite_x.size > 0:
+            min_exp = int(np.floor(np.log10(finite_x.min())))
+            max_exp = int(np.ceil(np.log10(finite_x.max())))
+            edges = 10.0 ** np.arange(min_exp, max_exp + 1)
+            axs[1].hist(finite_x, bins=edges, color='gray', alpha=0.8)
+        axs[1].set_xscale('log', base=10)
+        axs[1].set_ylabel("Count")
+        axs[1].set_xlabel("K_M / P_u")
+        plt.tight_layout()
+        fig.savefig(os.path.join(output_dir, "shared/plots/sanity_scatter_zero_order_vs_km_over_pu.png"), dpi=300)
+        plt.close(fig)
+
+def plot_vertical_boxplot_subregimes(model_dict, output_dir):
+    """
+    Create a single-row panel of vertical boxplots, one per subregime,
+    comparing log-MAE errors for PySR, Michaelis-Menten, Neural Network, and Theory.
+    Each subplot has its own y-scale; style matches the horizontal version.
+    """
+    sns.set(style="whitegrid", font_scale=1.2, rc={"axes.edgecolor": "black", "axes.linewidth": 1.0})
+
+    subregimes = ['pu_over_tk_high', 'pu_over_tk_low', 'km_over_pu_high', 'km_over_pu_low']
+    subregime_labels = {
+        'pu_over_tk_high': 'P_u / tK ≥ 1000',
+        'pu_over_tk_low': 'P_u / tK ≤ 0.001',
+        'km_over_pu_high': 'K_M / P_u ≥ 1000',
+        'km_over_pu_low': 'K_M / P_u ≤ 0.001',
+    }
+
+    fig, axes = plt.subplots(nrows=1, ncols=len(subregimes), figsize=(3.2 * len(subregimes), 4.5), sharey=False)
+    if len(subregimes) == 1:
+        axes = [axes]
+
+    for ax, regime in zip(axes, subregimes):
+        if regime not in model_dict:
+            ax.set_visible(False)
             continue
 
         models = model_dict[regime]
@@ -599,42 +848,70 @@ def plot_horizontal_boxplot_subregimes(model_dict, output_dir):
         err_nn = np.abs(np.log(np.maximum(y_pred_nn, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
         error_records.extend([{'Model': 'Neural Network', 'Log-MAE': e} for e in err_nn])
 
-        # Theory
-        formula = theoretical_regime_formula(regime)
-        if formula is not None:
-            subs = [data[c].values for c in ['P_u', 'tK', 'k_off', 'k_D', 'k_cat']]
-            k_inact = data['k_inact'].values if 'k_inact' in data.columns else np.zeros_like(subs[0])
-            subs.append(k_inact)
-            f = lambdify((symbols("P_u tK k_off k_D k_cat k_inact")), formula, modules='numpy')
-            try:
-                y_pred_theory = f(*subs)
-                err_theory = np.abs(np.log(np.maximum(y_pred_theory, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
-                error_records.extend([{'Model': 'Theory', 'Log-MAE': e} for e in err_theory])
-            except Exception as e:
-                print(f"Failed to compute theoretical predictions for {regime}: {e}")
+        # No "Theory" line for decoupled regimes
 
-        # Plot for this regime
+        # Plot for this regime (vertical orientation)
         error_df = pd.DataFrame(error_records)
         sns.boxplot(
             data=error_df,
-            x="Log-MAE",
-            y="Model",
+            x="Model",
+            y="Log-MAE",
             palette="Set2",
-            orient="h",
+            orient="v",
             ax=ax
         )
         ax.set_title(subregime_labels[regime], fontsize=14, weight='bold')
-        ax.set_ylabel("")  # remove repeated label
         ax.tick_params(axis='both', labelsize=11)
-
-    # Only label bottom subplot's x-axis
-    axes[-1].set_xlabel("Log-MAE", fontsize=12)
-    for ax in axes[:-1]:
-        ax.set_xlabel("")
+        for label in ax.get_xticklabels():
+            label.set_rotation(25)
+            label.set_horizontalalignment('right')
+        if ax != axes[0]:
+            ax.set_ylabel("")
+        else:
+            ax.set_ylabel("Log-space MAE\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)", fontsize=12)
 
     plt.tight_layout()
     os.makedirs(os.path.join(output_dir, "shared/plots"), exist_ok=True)
-    plt.savefig(os.path.join(output_dir, "shared/plots/log_mae_horizontal_boxplot.png"), dpi=300)
+    plt.savefig(os.path.join(output_dir, "shared/plots/log_mae_vertical_boxplot.png"), dpi=300)
+    plt.close()
+
+    # No-outliers version (vertical)
+    fig, axes = plt.subplots(nrows=1, ncols=len(subregimes), figsize=(3.2 * len(subregimes), 4.5), sharey=False)
+    if len(subregimes) == 1:
+        axes = [axes]
+    for ax, regime in zip(axes, subregimes):
+        if regime not in model_dict:
+            ax.set_visible(False)
+            continue
+        models = model_dict[regime]
+        data = models['data']
+        data_pre = models['preprocessed']
+        y_true = data.iloc[:, -1].values
+        X = data.iloc[:, :-1]
+        error_records = []
+        y_pred_pysr = models['pysr'].predict(X.values)
+        err_pysr = np.abs(np.log(np.maximum(y_pred_pysr, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        error_records.extend([{'Model': 'PySR', 'Log-MAE': e} for e in err_pysr])
+        y_pred_mm = michaelis_menten(*X.values.T)
+        err_mm = np.abs(np.log(np.maximum(y_pred_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        error_records.extend([{'Model': 'Michaelis-Menten', 'Log-MAE': e} for e in err_mm])
+        y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
+        err_nn = np.abs(np.log(np.maximum(y_pred_nn, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
+        error_records.extend([{'Model': 'Neural Network', 'Log-MAE': e} for e in err_nn])
+        # No "Theory" line for decoupled regimes
+        error_df = pd.DataFrame(error_records)
+        sns.boxplot(data=error_df, x="Model", y="Log-MAE", palette="Set2", orient="v", ax=ax, showfliers=False)
+        ax.set_title(subregime_labels[regime], fontsize=14, weight='bold')
+        ax.tick_params(axis='both', labelsize=11)
+        for label in ax.get_xticklabels():
+            label.set_rotation(25)
+            label.set_horizontalalignment('right')
+        if ax != axes[0]:
+            ax.set_ylabel("")
+        else:
+            ax.set_ylabel("Log-space MAE\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)", fontsize=12)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "shared/plots/log_mae_vertical_boxplot_no_outliers.png"), dpi=300)
     plt.close()
 
 def main():

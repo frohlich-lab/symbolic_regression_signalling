@@ -17,10 +17,9 @@ temp_files = [
 formula_files = [f"data/{enzyme_model}/{data_type}/sr_comparison/results/formula_{model}.txt" for model in models]
 
 
-# Define output files for the entire workflow
+# Define output files for the entire workflow (Snakemake will skip existing ones)
 rule all:
     input:
-        temp_files,
         f"data/{enzyme_model}/{data_type}/sr_comparison/plots/results_plot.png",
         f"data/{enzyme_model}/{data_type}/sr_comparison/plots/integrated_results_plot.png",
         f"data/{enzyme_model}/{data_type}/sr_comparison/results/loss_comparison.csv",
@@ -29,15 +28,27 @@ rule all:
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/error_landscape.png",
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/results/pysr/all_pysr_formulas.txt",
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae_horizontal_boxplot.png",
-        # "data/{enzyme_model}/{data_type}/sr_comparison/results/nn_grid_search/grid_search_results.txt",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae_vertical_boxplot.png",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae_horizontal_boxplot_no_outliers.png",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae_vertical_boxplot_no_outliers.png",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/sanity_scatter_mm_vs_pu_over_tk.png",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/sanity_scatter_mm_vs_km_over_pu.png",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/sanity_scatter_first_order_vs_km_over_pu.png",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/sanity_scatter_zero_order_vs_km_over_pu.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/regime_loss_comparison.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/error_landscape.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/results/pysr/all_pysr_formulas.txt",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_horizontal_boxplot.png",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_vertical_boxplot.png",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_horizontal_boxplot_no_outliers.png",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_vertical_boxplot_no_outliers.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/regime_loss_comparison.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/error_landscape.png",
-        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/log_mae_horizontal_boxplot.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes/shared/results/pysr/all_pysr_formulas.txt",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/log_mae_horizontal_boxplot.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/log_mae_vertical_boxplot.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/log_mae_horizontal_boxplot_no_outliers.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/log_mae_vertical_boxplot_no_outliers.png",
         "data/panmodel_plots/symbolic_model_r2_scores_bar.png",
         "data/panmodel_plots/symbolic_model_r2_scores_scatter.png",
         "data/panmodel_plots/all_symbolic_formulas.txt"
@@ -108,7 +119,7 @@ def symbolic_regression_rule(model, dataset, dataset_size, features, temp_file):
     install_command = install_cmds.get(model, "")
     separator = ";" if install_command else ""
     return f"""
-        {install_command}{separator} timeout {config["timeout_duration"]} python src/sr_models/{model}_model.py --dataset {dataset} --dataset_size {dataset_size} --features {features} --temp_file {temp_file} || true
+        {install_command}{separator} timeout {config["timeout_duration"]} python src/sr_models/{model}_model.py --dataset {dataset} --dataset_size {dataset_size} --features {features} --temp_file {temp_file} || || test -s {temp_file}
     """
 
 # Rules for symbolic regression for each model
@@ -258,7 +269,14 @@ rule kinetic_regimes:
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/regime_loss_comparison.png",
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/error_landscape.png",
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/results/pysr/all_pysr_formulas.txt",
-        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae_horizontal_boxplot.png"
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae_horizontal_boxplot.png",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae_vertical_boxplot.png",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae_horizontal_boxplot_no_outliers.png",
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae_vertical_boxplot_no_outliers.png"
+        , f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/sanity_scatter_mm_vs_pu_over_tk.png"
+        , f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/sanity_scatter_mm_vs_km_over_pu.png"
+        , f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/sanity_scatter_first_order_vs_km_over_pu.png"
+        , f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/sanity_scatter_zero_order_vs_km_over_pu.png"
     conda:
         "envs/pysr.yaml"
     params:
@@ -278,7 +296,10 @@ rule noise_regimes:
         f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/regime_loss_comparison.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/error_landscape.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes/shared/results/pysr/all_pysr_formulas.txt",
-        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/log_mae_horizontal_boxplot.png"
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/log_mae_horizontal_boxplot.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/log_mae_vertical_boxplot.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/log_mae_horizontal_boxplot_no_outliers.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes/shared/plots/log_mae_vertical_boxplot_no_outliers.png"
     conda:
         "envs/pysr.yaml"
     params:
@@ -298,7 +319,10 @@ rule mm_deviation_regimes:
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/regime_loss_comparison.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/error_landscape.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/results/pysr/all_pysr_formulas.txt",
-        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_horizontal_boxplot.png"
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_horizontal_boxplot.png",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_vertical_boxplot.png",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_horizontal_boxplot_no_outliers.png",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_vertical_boxplot_no_outliers.png"
     conda:
         "envs/pysr.yaml"
     params:
@@ -345,5 +369,7 @@ rule pan_enzyme_model_plots:
         "data/panmodel_plots/all_symbolic_formulas.txt"
     conda:
         "envs/base.yaml"
+    params:
+        discovery_scales="'" + config["discovery_scales"] + "'"
     shell:
-        "python src/pan_enzyme_model_plots.py --root-dir {input.root_dir} --dataset {input.dataset}"
+        "python src/pan_enzyme_model_plots.py --root-dir {input.root_dir} --dataset {input.dataset} --discovery-scales {params.discovery_scales}"

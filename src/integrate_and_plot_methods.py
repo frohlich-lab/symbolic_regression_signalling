@@ -7,7 +7,10 @@ import json
 import argparse
 import sympy
 import matplotlib.pyplot as plt
+from matplotlib.cm import get_cmap
+from pathlib import Path
 from diffrax import ODETerm, diffeqsolve, Kvaerno3, SaveAt, SteadyStateEvent, PIDController, ImplicitAdjoint
+from plot_style import apply_cell_systems_style
 
 # Solver parameters
 STEADY_STATE_ATOL = 1e-14
@@ -26,6 +29,29 @@ SIMULATION_MAX_STEPS = 2**23
 N_TIME_STEPS = 22
 
 solver = Kvaerno3()
+apply_cell_systems_style()
+
+METHOD_LABELS = {
+    'pysr': 'PySR',
+    'aifeynman': 'AI Feynman',
+    'dso': 'DSO',
+    'kan': 'KAN',
+    'pysindy': 'PySINDy',
+    'nn': 'Neural Network',
+    'mm': 'Michaelis-Menten',
+    'unknown': 'Unknown'
+}
+
+METHOD_COLORS = {
+    'pysr': '#1f77b4',
+    'aifeynman': '#ff7f0e',
+    'dso': '#2ca02c',
+    'kan': '#d62728',
+    'pysindy': '#9467bd',
+    'nn': '#17becf',
+    'mm': '#bcbd22',
+    'unknown': '#7f7f7f'
+}
 
 def load_dataset(file_path, features=None, trajectory_column=None, data_proportion=1.0):
     """
@@ -137,31 +163,103 @@ def integrate_simulation(ode_term, initial_values, params, solver, ts):
         print(f"Error during forward simulation: {e}")
         return None
 
+EPS = 1e-20
+
 def calculate_loss(groundtruth, simulation_output):
     print("Calculating log MAE loss between ground truth and simulation output.")
-    log_groundtruth = np.log10(np.clip(groundtruth, a_min=1e-20, a_max=None))
-    log_simulation_output = np.log10(np.clip(simulation_output, a_min=1e-20, a_max=None))
+    log_groundtruth = np.log(np.clip(groundtruth, a_min=EPS, a_max=None))
+    log_simulation_output = np.log(np.clip(simulation_output, a_min=EPS, a_max=None))
     loss = np.mean(np.abs(log_groundtruth - log_simulation_output), axis=0)
     print("Log MAE loss calculated:", loss)
     return loss
 
-def plot_log_MAE(loss_results, plot_path):
-    """Plot the log MAE results for each method and save to the specified file."""
-    methods = list(loss_results.keys())
-    losses = list(loss_results.values())
+def calculate_complexity(formula):
+    return len(formula.atoms(sympy.Symbol, sympy.Number)) + len(
+        formula.atoms(sympy.Add, sympy.Mul, sympy.Pow, sympy.Function)
+    )
 
-    plt.figure()
-    plt.bar(methods, losses)
-    plt.xlabel('Method')
-    plt.ylabel('Average Log MAE')
-    plt.title('Log MAE by Method')
-    plt.xticks(rotation=45)
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
+
+def _build_dataset_context(dataset_path):
+    path = Path(dataset_path)
+    parts = [part.lower() for part in path.parts]
+    enzyme = next((p for p in parts if p.endswith('enzyme')), None)
+    regime = 'dynamic' if 'dynamic' in parts else 'static' if 'static' in parts else None
+
+    labels = []
+    if enzyme:
+        labels.append(enzyme.replace('_', ' ').title())
+    if regime:
+        labels.append(regime.capitalize())
+
+    return ' · '.join(labels) if labels else None
+
+
+def plot_log_MAE_scatter(entries, plot_path, plot_context=None, dataset_context=None):
+    valid_entries = [e for e in entries if e['loss'] is not None and np.isfinite(e['loss'])]
+
+    if not valid_entries:
+        plt.figure(figsize=(8, 6))
+        plt.text(0.5, 0.5, 'No valid integrated results to plot', ha='center', va='center')
+        plt.axis('off')
+        plt.tight_layout()
+        plt.savefig(plot_path, dpi=300)
+        plt.close()
+        return
+
+    methods = sorted({entry['method'] for entry in valid_entries})
+    cmap = get_cmap('tab10')
+
+    plt.figure(figsize=(8, 6))
+    ax = plt.gca()
+
+    for idx, method in enumerate(methods):
+        color = METHOD_COLORS.get(method, cmap(idx % cmap.N))
+        label = METHOD_LABELS.get(method, method.replace('_', ' ').title())
+        method_entries = [entry for entry in valid_entries if entry['method'] == method]
+
+        complexities = [entry['complexity'] for entry in method_entries]
+        losses = [entry['loss'] for entry in method_entries]
+
+        ax.scatter(
+            complexities,
+            losses,
+            label=label,
+            color=color,
+            edgecolor='k',
+            linewidth=0.4,
+            s=70,
+            alpha=0.85
+        )
+
+        for x, y in zip(complexities, losses):
+            ax.annotate(
+                label,
+                (x, y),
+                textcoords='offset points',
+                xytext=(0, 6),
+                ha='center',
+                fontsize=9,
+                color=color
+            )
+
+    ax.set_xlabel('Symbolic Formula Complexity')
+    ax.set_ylabel('Log-space MAE: Mean |ln(y_hat + ε) − ln(y + ε)| (ε = 1e−20)')
+
+    context_bits = []
+    if plot_context:
+        context_bits.append(plot_context)
+    if dataset_context:
+        context_bits.append(dataset_context)
+    context_suffix = f" ({'; '.join(context_bits)})" if context_bits else ''
+
+    ax.set_title(f'Symbolic Regression Complexity vs Log-MAE{context_suffix}')
+    ax.grid(True, linestyle='--', alpha=0.4)
+    ax.legend(title='Symbolic Regression Method', frameon=False, loc='best')
     plt.tight_layout()
-    plt.savefig(plot_path)
+    plt.savefig(plot_path, dpi=300)
     plt.close()
 
-def integrate_and_calculate_loss(data, formulas, discovery_scales, output_path, plot_path):
+def integrate_and_calculate_loss(data, formulas, discovery_scales, output_path, plot_path, dataset_path):
     """
     Integrate ODE systems and calculate loss for multiple methods.
 
@@ -173,6 +271,7 @@ def integrate_and_calculate_loss(data, formulas, discovery_scales, output_path, 
     """
     print("Starting integration and loss calculation for all methods...")
     loss_results = {}
+    plot_entries = []
 
     for method, formula_path in formulas.items():
         print(f"\nProcessing method: {method}")
@@ -180,7 +279,9 @@ def integrate_and_calculate_loss(data, formulas, discovery_scales, output_path, 
 
         # Load and parse the formula
         with open(formula_path, 'r') as f:
-            expression = sympy.sympify(f.read().strip())
+            formula_str = f.read().strip()
+        expression = sympy.sympify(formula_str)
+        complexity = calculate_complexity(expression)
         arguments = ['k_off', 'k_D', 'k_cat', 'k_inact', 'tK', 'P_u']
 
         if discovery_scales[method] == 'log':
@@ -272,6 +373,11 @@ def integrate_and_calculate_loss(data, formulas, discovery_scales, output_path, 
             average_log_MAE = np.nan  # or continue to next method
         print(f"Average Log MAE for {method}: {average_log_MAE}")
         loss_results[method] = average_log_MAE
+        plot_entries.append({
+            'method': method,
+            'loss': average_log_MAE,
+            'complexity': complexity
+        })
 
     print("Saving loss results to:", output_path)
     with open(output_path, 'w') as f:
@@ -280,7 +386,13 @@ def integrate_and_calculate_loss(data, formulas, discovery_scales, output_path, 
     print("Loss results saved.")
 
     print("Plotting log MAE results...")
-    plot_log_MAE(loss_results, plot_path)
+    dataset_context = _build_dataset_context(dataset_path)
+    plot_log_MAE_scatter(
+        plot_entries,
+        plot_path,
+        plot_context='Integrated Error',
+        dataset_context=dataset_context
+    )
     print("Log MAE plot saved to:", plot_path)
     print("Integration and loss calculation completed for all methods.")
 
@@ -304,7 +416,14 @@ def main():
     formulas = dict(zip(args.methods, args.formulas))
     data = load_dataset(args.dataset, args.features, args.trajectory_column, args.data_proportion)
     discovery_scales = json.loads(args.discovery_scales)
-    integrate_and_calculate_loss(data, formulas, discovery_scales, args.output, args.plot)
+    integrate_and_calculate_loss(
+        data,
+        formulas,
+        discovery_scales,
+        args.output,
+        args.plot,
+        dataset_path=args.dataset
+    )
 
 if __name__ == '__main__':
     main()

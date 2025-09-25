@@ -1,0 +1,15 @@
+name: sr-michaelis-menten
+method: grid
+metric:
+  name: loss
+  goal: minimize
+parameters:
+  placeholder:
+    values: [0]
+  method:
+    values:
+      - pysr
+      - pysindy
+      - dso
+      - kan
+      - aifeynman

@@ -1,0 +1,21 @@
+pysr:
+  n_iterations: [150, 250]
+  population_size: [30, 60]
+  max_size: [18, 24]
+  parsimony: [1.0, 0.1]
+pysindy:
+  alpha: [1000, 10000, 100000]
+  threshold: [0.001, 0.0001]
+dso:
+  n_iterations: [50, 100]
+  n_samples: [128, 256]
+  learning_rate: [0.0005, 0.001]
+kan:
+  n_iterations: [2, 3]
+  steps: [120, 180]
+  threshold: [0.005, 0.01]
+  hidden_width: ['5,7,5,1', '6,8,6,1']
+aifeynman:
+  bf_try_time: [20, 40]
+  nn_epochs: [30, 50]
+  polyfit_degree: [3, 4]
