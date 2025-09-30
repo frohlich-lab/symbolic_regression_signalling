@@ -1,5 +1,10 @@
+import os
 import matplotlib as mpl
+import matplotlib.pyplot as plt
 import seaborn as sns
+
+
+_SAVEFIG_PATCHED = False
 
 
 def apply_cell_systems_style(context: str = "paper") -> None:
@@ -11,6 +16,8 @@ def apply_cell_systems_style(context: str = "paper") -> None:
     - Subtle grid (when enabled by caller)
     - High-resolution export and tight bounding box
     """
+    global _SAVEFIG_PATCHED
+
     mpl.rcParams.update({
         # Fonts
         "font.family": "sans-serif",
@@ -40,3 +47,18 @@ def apply_cell_systems_style(context: str = "paper") -> None:
         "grid.color": "#e5e5e5",
     })
 
+    if not _SAVEFIG_PATCHED:
+        original_savefig = plt.savefig
+
+        def savefig_dual(fname, *args, **kwargs):
+            original_savefig(fname, *args, **kwargs)
+            root, ext = os.path.splitext(fname)
+            if ext.lower() == ".svg":
+                return
+            svg_path = root + ".svg"
+            svg_kwargs = dict(kwargs)
+            svg_kwargs.pop("format", None)
+            original_savefig(svg_path, format="svg", **svg_kwargs)
+
+        plt.savefig = savefig_dual
+        _SAVEFIG_PATCHED = True

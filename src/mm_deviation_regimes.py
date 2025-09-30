@@ -19,6 +19,7 @@ import torch
 
 from pysr import PySRRegressor
 from scipy.optimize import curve_fit
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, FunctionTransformer
 from sklearn.pipeline import Pipeline
 
@@ -37,12 +38,12 @@ apply_cell_systems_style()
 # Define biochemical regimes
 EPS = 1e-20
 REGIMES = {
-    "low_noise": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(*df.iloc[:, :-1].values.T))) < 0.01)],
-    "medium_noise": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(*df.iloc[:, :-1].values.T))) >= 0.01) & 
+    "low_deviation": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(*df.iloc[:, :-1].values.T))) < 0.01)],
+    "medium_deviation": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(*df.iloc[:, :-1].values.T))) >= 0.01) & 
         (np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(*df.iloc[:, :-1].values.T))) < 0.1)],
-    "high_noise": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(*df.iloc[:, :-1].values.T))) >= 0.1) & 
+    "large_deviation": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(*df.iloc[:, :-1].values.T))) >= 0.1) & 
         (np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(*df.iloc[:, :-1].values.T))) < 1.0)],
-    "very_high_noise": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(*df.iloc[:, :-1].values.T))) >= 1.0)],
+    "very_large_deviation": lambda df: df[(np.abs(np.log(df["kcat_cg"]) - np.log(michaelis_menten(*df.iloc[:, :-1].values.T))) >= 1.0)],
 }
 
 def file_exists(path):
@@ -109,9 +110,20 @@ def preprocess_data(X):
     ])
     return pipeline.fit_transform(X), pipeline
 
+def _get_eval_partition(models):
+    eval_df = models.get('test_data')
+    if eval_df is None:
+        eval_df = models.get('data')
+
+    eval_pre = models.get('test_preprocessed')
+    if eval_pre is None:
+        eval_pre = models.get('preprocessed')
+
+    return eval_df, eval_pre
+
 def evaluate_models(data, features, output_dir, dataset_size):
         """
-        Evaluate models for each noise regime using PySR, Michaelis-Menten, and Neural Network approaches.
+        Evaluate models for each deviation regime using PySR, Michaelis-Menten, and Neural Network approaches.
         Generate plots and save results for further analysis.
 
         Args:
@@ -127,7 +139,7 @@ def evaluate_models(data, features, output_dir, dataset_size):
             # Filter data for the current regime
             filtered = filter_func(data).reset_index(drop=True)
             if filtered.empty:
-                print(f"No data for {regime} regime.")
+                print(f"No data for {regime.replace('_', ' ')} regime.")
                 continue
 
             os.makedirs(os.path.join(output_dir, f"{regime}/processed"), exist_ok=True)
@@ -138,50 +150,105 @@ def evaluate_models(data, features, output_dir, dataset_size):
             filtered.to_csv(os.path.join(output_dir, f"{regime}/processed/filtered_data.csv"), index=False)
 
             # Sample data for training
-            sample = filtered.sample(n=min(dataset_size, len(filtered)))
-            sample.to_csv(os.path.join(output_dir, f"{regime}/processed/filtered_data_train_sample.csv"), index=False)
-            X_sample, y_sample = sample.iloc[:, :-1].values, sample.iloc[:, -1].values
-            X, y = filtered.iloc[:, :-1].values, filtered.iloc[:, -1].values
+            capped_size = min(dataset_size, len(filtered)) if dataset_size else len(filtered)
+            sample = (
+                filtered.sample(n=capped_size, random_state=42)
+                if capped_size < len(filtered)
+                else filtered.copy()
+            )
+            sample = sample.reset_index(drop=True)
+            sample.to_csv(
+                os.path.join(output_dir, f"{regime}/processed/filtered_data_model_sample.csv"),
+                index=False,
+            )
 
-            print(f"Evaluating {regime} with {len(sample)} samples")
+            if len(sample) < 2:
+                print(f"Skipping {regime}: need at least 2 samples for train/test split.")
+                continue
+
+            test_size = max(1, int(np.ceil(len(sample) * 0.2)))
+            if len(sample) - test_size < 1:
+                print(f"Skipping {regime}: insufficient samples after applying test split.")
+                continue
+
+            train_df, test_df = train_test_split(
+                sample, test_size=test_size, random_state=42, shuffle=True
+            )
+            train_df = train_df.reset_index(drop=True)
+            test_df = test_df.reset_index(drop=True)
+
+            train_df.to_csv(
+                os.path.join(output_dir, f"{regime}/processed/filtered_data_train.csv"),
+                index=False,
+            )
+            test_df.to_csv(
+                os.path.join(output_dir, f"{regime}/processed/filtered_data_test.csv"),
+                index=False,
+            )
+
+            X_train, y_train = train_df.iloc[:, :-1].values, train_df.iloc[:, -1].values
+            X_test, y_test = test_df.iloc[:, :-1].values, test_df.iloc[:, -1].values
+            X_full, y_full = sample.iloc[:, :-1].values, sample.iloc[:, -1].values
+
+            print(f"Evaluating {regime} with {len(train_df)} train / {len(test_df)} test samples")
 
             # PySR Model
             temp_file = os.path.join(output_dir, f"{regime}/models/pysr/hall_of_fame.csv")
             model_path = os.path.join(output_dir, f"{regime}/models/pysr/hall_of_fame.pkl")
-            pysr_model = run_pysr(X_sample, y_sample, model_path, temp_file)
-            y_pred_pysr = pysr_model.predict(X)
-            log_mae = np.mean(np.abs(np.log(np.maximum(y_pred_pysr, EPS)) - np.log(np.maximum(y, EPS))))
+            pysr_model = run_pysr(X_train, y_train, model_path, temp_file)
+            y_pred_pysr = pysr_model.predict(X_test)
+            log_mae = np.mean(
+                np.abs(np.log(np.maximum(y_pred_pysr, EPS)) - np.log(np.maximum(y_test, EPS)))
+            )
             losses[regime] = log_mae
-            print(f"PySR Loss: {log_mae}")
+            print(f"PySR Loss (test): {log_mae}")
 
             # Michaelis-Menten Model
-            y_pred_mm = michaelis_menten(*filtered.iloc[:, :-1].values.T)
-            mm_loss = np.mean(np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y, EPS))))
+            y_pred_mm = michaelis_menten(*test_df.iloc[:, :-1].values.T)
+            mm_loss = np.mean(
+                np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_test, EPS)))
+            )
             losses[f"{regime}_mm"] = mm_loss
-            print(f"Michaelis-Menten Loss: {mm_loss}")
+            print(f"Michaelis-Menten Loss (test): {mm_loss}")
 
             # Neural Network Model
-            X_pre, pipeline = preprocess_data(X)
-            X_sample_pre = pipeline.transform(X_sample)
-            full_data_pre = pd.DataFrame(np.column_stack([X_pre, np.log(y)]), columns=list(filtered.columns))
-            sample_pre = pd.DataFrame(np.column_stack([X_sample_pre, np.log(y_sample)]), columns=list(filtered.columns))
+            X_train_pre, pipeline = preprocess_data(X_train)
+            X_test_pre = pipeline.transform(X_test)
+            X_full_pre = pipeline.transform(X_full)
+            train_pre = pd.DataFrame(
+                np.column_stack([X_train_pre, np.log(y_train)]),
+                columns=list(train_df.columns),
+            )
+            test_pre = pd.DataFrame(
+                np.column_stack([X_test_pre, np.log(y_test)]),
+                columns=list(test_df.columns),
+            )
+            full_pre = pd.DataFrame(
+                np.column_stack([X_full_pre, np.log(y_full)]),
+                columns=list(sample.columns),
+            )
             nn_path = os.path.join(output_dir, f"{regime}/models/nn/model.pkl")
             if os.path.exists(nn_path):
                 print(f"Loading existing NN model for {regime}")
-                nn_model = train_model(sample_pre, nn_path, verbose=False, retrain=False)
+                nn_model = train_model(train_pre, nn_path, verbose=False, retrain=False)
             else:
                 print(f"Training new NN model for {regime}")
-                nn_model = train_model(sample_pre, nn_path, verbose=False)
-            losses[f"{regime}_nn"], _ = evaluate_model(nn_model, full_data_pre)
-            print(f"NN Loss: {losses[f'{regime}_nn']}")
+                nn_model = train_model(train_pre, nn_path, verbose=False)
+            nn_loss, _ = evaluate_model(nn_model, test_pre)
+            losses[f"{regime}_nn"] = nn_loss
+            print(f"NN Loss (test): {nn_loss}")
 
             # Store models and data for the current regime
             model_dict[regime] = {
-                'data': filtered,
+                'data': sample,
+                'train_data': train_df,
+                'test_data': test_df,
                 'pysr': pysr_model,
                 'mm': y_pred_mm,
                 'nn': nn_model,
-                'preprocessed': full_data_pre
+                'preprocessed': full_pre,
+                'train_preprocessed': train_pre,
+                'test_preprocessed': test_pre,
             }
             print()
 
@@ -203,8 +270,9 @@ def plot_error_distributions(model_dict, output_dir):
     error_records = []
 
     for regime, models in model_dict.items():
-        data = models['data']
-        data_pre = models['preprocessed']
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            continue
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1].values
 
@@ -225,7 +293,7 @@ def plot_error_distributions(model_dict, output_dir):
 
     error_df = pd.DataFrame(error_records)
 
-    regimes = model_dict.keys()
+    regimes = [reg for reg in model_dict.keys() if reg in error_df['Regime'].unique()]
     ncols = 4
     nrows = 1
 
@@ -260,12 +328,26 @@ def plot_model_subregimes(model_dict, output_dir):
     n_rows, n_cols = len(regimes), len(models)
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 4.5 * n_rows), sharey=True)
 
-    indices = np.random.choice(np.arange(1, 3001), size=600, replace=False)
+    sampled_indices = {}
+    for regime_name in regimes:
+        eval_data, _ = _get_eval_partition(model_dict.get(regime_name, {}))
+        if eval_data is None or eval_data.empty:
+            continue
+        sample_size = min(len(eval_data), 600)
+        sampled_indices[regime_name] = np.random.choice(
+            eval_data.index.values,
+            size=sample_size,
+            replace=False,
+        )
 
     for row_idx, regime_name in enumerate(regimes):
-        print(model_dict[regime_name]['data'].index)
-        data = model_dict[regime_name]['data'].loc[indices].copy()
-        data_pre = model_dict[regime_name]['preprocessed'].loc[indices]
+        eval_data, eval_pre = _get_eval_partition(model_dict.get(regime_name, {}))
+        indices = sampled_indices.get(regime_name)
+        if eval_data is None or eval_data.empty or indices is None or len(indices) == 0:
+            continue
+
+        data = eval_data.loc[indices].copy()
+        data_pre = eval_pre.loc[indices] if eval_pre is not None else None
         X = data.iloc[:, :-1]
         y_true = data.iloc[:, -1]
         y_mm = michaelis_menten(*data.iloc[:, :-1].values.T)
@@ -278,6 +360,8 @@ def plot_model_subregimes(model_dict, output_dir):
             elif model == 'mm':
                 y_pred = y_mm
             elif model == 'nn':
+                if data_pre is None:
+                    continue
                 data_pre_subset = data_pre.loc[data.index]
                 y_pred = evaluate_model(model_dict[regime_name]['nn'], data_pre_subset)[1].detach().cpu().numpy().flatten()
                 
@@ -320,8 +404,9 @@ def plot_input_error_correlation(model_dict, output_dir):
     all_error_df = []
 
     for idx, (regime, models) in enumerate(model_dict.items()):
-        data = models['data']
-        data_pre = models['preprocessed']
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            continue
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1]
 
@@ -376,14 +461,23 @@ def plot_model_error_correlation(model_dict, output_dir):
     all_model_error_df = []
 
     for idx, (regime, models) in enumerate(model_dict.items()):
-        data = models['data']
-        data_pre = models['preprocessed']
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            continue
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1]
 
         err_pysr = np.abs(np.log(np.maximum(models['pysr'].predict(X.values), EPS)) - np.log(np.maximum(y_true, EPS)))
         err_mm = np.abs(np.log(np.maximum(michaelis_menten(*data.iloc[:, :-1].values.T), EPS)) - np.log(np.maximum(y_true, EPS)))
-        err_nn = np.abs(np.log(np.maximum(evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten(), EPS)) - np.log(np.maximum(y_true, EPS)))
+        err_nn = np.abs(
+            np.log(
+                np.maximum(
+                    evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten(),
+                    EPS,
+                )
+            )
+            - np.log(np.maximum(y_true, EPS))
+        )
 
         df = pd.DataFrame({'PySR': err_pysr, 'MM': err_mm, 'NN': err_nn})
         all_model_error_df.append(df)
@@ -424,8 +518,11 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
     for regime, models in model_dict.items():
         print(f"Generating scaled response curves for {regime}...")
 
-        data = models['data'].copy()
-        preprocessed_data = models['preprocessed']
+        data, preprocessed_data = _get_eval_partition(models)
+        if data is None or data.empty:
+            print(f"Skipping {regime}: no evaluation data available.")
+            continue
+        data = data.copy()
         model = models['nn']
 
         y_true = data.iloc[:, -1].values
@@ -502,18 +599,18 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
 
 def plot_horizontal_boxplot_noise_regimes(model_dict, output_dir):
     """
-    Create a vertical stack of horizontal boxplots (1 per noise regime) showing
+    Create a vertical stack of horizontal boxplots (1 per deviation regime) showing
     Log-MAE for PySR, Michaelis-Menten, and Neural Network models.
     Output styled for Cell Systems standard.
     """
     sns.set(style="whitegrid", font_scale=1.2, rc={"axes.edgecolor": "black", "axes.linewidth": 1.0})
     
-    regimes = ['low_noise', 'medium_noise', 'high_noise', 'very_high_noise']
+    regimes = ['low_deviation', 'medium_deviation', 'large_deviation', 'very_large_deviation']
     regime_labels = {
-        'low_noise': 'Low Noise',
-        'medium_noise': 'Medium Noise',
-        'high_noise': 'High Noise',
-        'very_high_noise': 'Very High Noise'
+        'low_deviation': 'Low Deviation',
+        'medium_deviation': 'Medium Deviation',
+        'large_deviation': 'Large Deviation',
+        'very_large_deviation': 'Very Large Deviation'
     }
 
     fig, axes = plt.subplots(nrows=len(regimes), ncols=1, figsize=(10, 2.5 * len(regimes)), sharex=True)
@@ -523,8 +620,9 @@ def plot_horizontal_boxplot_noise_regimes(model_dict, output_dir):
             continue
 
         models = model_dict[regime]
-        data = models['data']
-        data_pre = models['preprocessed']
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            continue
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1]
 
@@ -576,8 +674,9 @@ def plot_horizontal_boxplot_noise_regimes(model_dict, output_dir):
         if regime not in model_dict:
             continue
         models = model_dict[regime]
-        data = models['data']
-        data_pre = models['preprocessed']
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            continue
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1]
         error_records = []
@@ -604,18 +703,18 @@ def plot_horizontal_boxplot_noise_regimes(model_dict, output_dir):
 
 def plot_vertical_boxplot_noise_regimes(model_dict, output_dir):
     """
-    Create a single-row of vertical boxplots (1 per noise regime) showing
+    Create a single-row of vertical boxplots (1 per deviation regime) showing
     Log-MAE for PySR, Michaelis-Menten, and Neural Network models.
     Each subplot has its own y-scale; style matches the horizontal version.
     """
     sns.set(style="whitegrid", font_scale=1.2, rc={"axes.edgecolor": "black", "axes.linewidth": 1.0})
 
-    regimes = ['low_noise', 'medium_noise', 'high_noise', 'very_high_noise']
+    regimes = ['low_deviation', 'medium_deviation', 'large_deviation', 'very_large_deviation']
     regime_labels = {
-        'low_noise': 'Low Noise',
-        'medium_noise': 'Medium Noise',
-        'high_noise': 'High Noise',
-        'very_high_noise': 'Very High Noise'
+        'low_deviation': 'Low Deviation',
+        'medium_deviation': 'Medium Deviation',
+        'large_deviation': 'Large Deviation',
+        'very_large_deviation': 'Very Large Deviation'
     }
 
     fig, axes = plt.subplots(nrows=1, ncols=len(regimes), figsize=(3.2 * len(regimes), 4.5), sharey=False)
@@ -628,8 +727,10 @@ def plot_vertical_boxplot_noise_regimes(model_dict, output_dir):
             continue
 
         models = model_dict[regime]
-        data = models['data']
-        data_pre = models['preprocessed']
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            ax.set_visible(False)
+            continue
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1]
 
@@ -684,8 +785,10 @@ def plot_vertical_boxplot_noise_regimes(model_dict, output_dir):
             ax.set_visible(False)
             continue
         models = model_dict[regime]
-        data = models['data']
-        data_pre = models['preprocessed']
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            ax.set_visible(False)
+            continue
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1]
         error_records = []
@@ -714,7 +817,7 @@ def plot_vertical_boxplot_noise_regimes(model_dict, output_dir):
     plt.close()
 
 def main():
-    parser = argparse.ArgumentParser(description='Evaluate noise regimes using symbolic regression and compare with MM and NN.')
+    parser = argparse.ArgumentParser(description='Evaluate deviation regimes using symbolic regression and compare with MM and NN.')
     parser.add_argument('--dataset', required=True, help='CSV dataset path')
     parser.add_argument('--dataset_size', type=int, help='Max samples to use')
     parser.add_argument('--features', type=str, help='Comma-separated list of features or "all"')

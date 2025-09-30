@@ -1,5 +1,6 @@
 import argparse
 import os
+from pathlib import Path
 # Removed unused import
 # Removed unused import
 import torch.nn as nn
@@ -12,7 +13,7 @@ ACTIVATION_LOOKUP = {
 }
 
 def train_wandb_trial():
-    wandb.init()  # Initialize wandb before accessing its config
+    wandb.init(settings=wandb.Settings(_service_wait=120))  # Allow more time for the service to start
     config = wandb.config
 
     setting_name = (
@@ -102,15 +103,29 @@ def main():
         }
     }
     wandb.login(relogin=False)
-    sweep_id = args.sweep_id or wandb.sweep(sweep_config, project=args.project)
-    wandb.agent(sweep_id, function=train_wandb_trial, project=args.project, count=100)
+    # Use per-run project names so each sweep gets its own W&B project
+    project_name = args.project
+    if args.sweep_id is None:
+        # Derive enzyme/data type from dataset path (e.g., data/enzyme/dynamic/processed/...)
+        parts = Path(args.dataset).parts
+        try:
+            enzyme_idx = parts.index('data') + 1
+            enzyme = parts[enzyme_idx]
+            regime = parts[enzyme_idx + 1]
+            project_name = f"{args.project}_{enzyme}_{regime}"
+        except (ValueError, IndexError):
+            project_name = f"{args.project}_custom"
+
+    sweep_id = args.sweep_id or wandb.sweep(sweep_config, project=project_name)
+    wandb.agent(sweep_id, function=train_wandb_trial, project=project_name, count=100)
 
     # Save a summary report of the grid search results
     os.makedirs(args.output_dir, exist_ok=True)
 
     summary_path = os.path.join(args.output_dir, "grid_search_results.txt")
     api = wandb.Api()
-    sweep = api.sweep(f"{wandb.run.entity}/{args.project}/{sweep_id}")
+    sweep_path = f"{api.default_entity}/{project_name}/{sweep_id}"
+    sweep = api.sweep(sweep_path)
 
     with open(summary_path, "w") as summary_file:
         summary_file.write("Grid Search Results Report\n")

@@ -79,14 +79,37 @@ def compute_log_MAE_loss(formula, dataset, discovery_scale=None):
     formula_func = sp.lambdify(feature_symbols, formula, modules=['numpy'])
 
     # Calculate predictions
-    predicted_values = formula_func(*[dataset[col].astype(float) for col in relevant_columns])
+    args = [dataset[col].astype(float).values for col in relevant_columns]
+    predicted_values = formula_func(*args)
+
+    predicted_values = np.asarray(predicted_values)
+    if predicted_values.ndim > 1:
+        predicted_values = predicted_values.squeeze()
+
+    if predicted_values.size != len(dataset):
+        predicted_values = np.broadcast_to(predicted_values, len(dataset))
+
+    if predicted_values.dtype == object:
+        converted = []
+        for val in predicted_values:
+            if hasattr(val, 'evalf'):
+                val = val.evalf()
+            try:
+                converted.append(float(val))
+            except (TypeError, ValueError):
+                converted.append(np.nan)
+        predicted_values = np.asarray(converted, dtype=float)
 
     # Compute uniform log-space MAE: treat all formulas as linear
     y_true = dataset[target_column].astype(float).values
     pred_log = np.log(np.clip(np.asarray(predicted_values, dtype=float), a_min=EPS, a_max=None))
     y_log = np.log(np.clip(y_true, a_min=EPS, a_max=None))
 
-    loss = np.mean(np.abs(pred_log - y_log))
+    mask = np.isfinite(pred_log) & np.isfinite(y_log)
+    if not np.any(mask):
+        return np.nan
+
+    loss = np.mean(np.abs(pred_log[mask] - y_log[mask]))
     return loss
 
 def calculate_complexity(formula):

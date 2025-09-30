@@ -20,6 +20,7 @@ import torch
 from sympy import symbols, lambdify
 from pysr import PySRRegressor
 from scipy.optimize import curve_fit
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, FunctionTransformer
 from sklearn.pipeline import Pipeline
 
@@ -113,6 +114,17 @@ def preprocess_data(X):
     ])
     return pipeline.fit_transform(X), pipeline
 
+def _get_eval_partition(models):
+    eval_df = models.get('test_data')
+    if eval_df is None:
+        eval_df = models.get('data')
+
+    eval_pre = models.get('test_preprocessed')
+    if eval_pre is None:
+        eval_pre = models.get('preprocessed')
+
+    return eval_df, eval_pre
+
 def evaluate_models(data, features, output_dir, dataset_size):
     os.makedirs(output_dir, exist_ok=True)
     losses, model_dict = {}, {}
@@ -130,47 +142,103 @@ def evaluate_models(data, features, output_dir, dataset_size):
 
         filtered.to_csv(os.path.join(output_dir, f"{regime}/processed/filtered_data.csv"), index=False)
 
-        sample = filtered.sample(n=min(dataset_size, len(filtered)))
-        sample.to_csv(os.path.join(output_dir, f"{regime}/processed/filtered_data_train_sample.csv"), index=False)        
-        X_sample, y_sample = sample.iloc[:, :-1].values, sample.iloc[:, -1].values
-        X, y = filtered.iloc[:, :-1].values, filtered.iloc[:, -1].values
+        capped_size = min(dataset_size, len(filtered)) if dataset_size else len(filtered)
+        sample = (
+            filtered.sample(n=capped_size, random_state=42)
+            if capped_size < len(filtered)
+            else filtered.copy()
+        )
+        sample = sample.reset_index(drop=True)
+        sample.to_csv(
+            os.path.join(output_dir, f"{regime}/processed/filtered_data_model_sample.csv"),
+            index=False,
+        )
 
-        print(f"Evaluating {regime} with {len(sample)} samples")
+        if len(sample) < 2:
+            print(f"Skipping {regime}: need at least 2 samples for train/test split.")
+            continue
+
+        test_size = max(1, int(np.ceil(len(sample) * 0.2)))
+        if len(sample) - test_size < 1:
+            print(f"Skipping {regime}: insufficient samples after applying test split.")
+            continue
+
+        train_df, test_df = train_test_split(
+            sample, test_size=test_size, random_state=42, shuffle=True
+        )
+        train_df = train_df.reset_index(drop=True)
+        test_df = test_df.reset_index(drop=True)
+
+        train_df.to_csv(
+            os.path.join(output_dir, f"{regime}/processed/filtered_data_train.csv"),
+            index=False,
+        )
+        test_df.to_csv(
+            os.path.join(output_dir, f"{regime}/processed/filtered_data_test.csv"),
+            index=False,
+        )
+
+        X_train, y_train = train_df.iloc[:, :-1].values, train_df.iloc[:, -1].values
+        X_test, y_test = test_df.iloc[:, :-1].values, test_df.iloc[:, -1].values
+        X_full, y_full = sample.iloc[:, :-1].values, sample.iloc[:, -1].values
+
+        print(f"Evaluating {regime} with {len(train_df)} train / {len(test_df)} test samples")
         temp_file = os.path.join(output_dir, f"{regime}/models/pysr/hall_of_fame.csv")
         model_path = os.path.join(output_dir, f"{regime}/models/pysr/hall_of_fame.pkl")
-        pysr_model = run_pysr(X_sample, y_sample, model_path, temp_file)
-        y_pred_pysr = pysr_model.predict(X)
+        pysr_model = run_pysr(X_train, y_train, model_path, temp_file)
+        y_pred_pysr = pysr_model.predict(X_test)
 
-        log_mae = np.mean(np.abs(np.log(np.maximum(y_pred_pysr, EPS)) - np.log(np.maximum(y, EPS))))
+        log_mae = np.mean(
+            np.abs(np.log(np.maximum(y_pred_pysr, EPS)) - np.log(np.maximum(y_test, EPS)))
+        )
         losses[regime] = log_mae
-        print(f"PySR Loss: {log_mae}")
+        print(f"PySR Loss (test): {log_mae}")
 
-        y_pred_mm = michaelis_menten(*filtered.iloc[:, :-1].values.T)
-        mm_loss = np.mean(np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y, EPS))))
+        y_pred_mm = michaelis_menten(*test_df.iloc[:, :-1].values.T)
+        mm_loss = np.mean(
+            np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_test, EPS)))
+        )
         losses[f"{regime}_mm"] = mm_loss
-        print(f"Michaelis-Menten Loss: {mm_loss}")
+        print(f"Michaelis-Menten Loss (test): {mm_loss}")
 
-        X_pre, pipeline = preprocess_data(X)
-        X_sample_pre = pipeline.transform(X_sample)
-        full_data_pre = pd.DataFrame(np.column_stack([X_pre, np.log(y)]), columns=list(filtered.columns))
-        sample_pre = pd.DataFrame(np.column_stack([X_sample_pre, np.log(y_sample)]), columns=list(filtered.columns))
+        X_train_pre, pipeline = preprocess_data(X_train)
+        X_test_pre = pipeline.transform(X_test)
+        X_full_pre = pipeline.transform(X_full)
+
+        train_pre = pd.DataFrame(
+            np.column_stack([X_train_pre, np.log(y_train)]),
+            columns=list(train_df.columns),
+        )
+        test_pre = pd.DataFrame(
+            np.column_stack([X_test_pre, np.log(y_test)]),
+            columns=list(test_df.columns),
+        )
+        full_pre = pd.DataFrame(
+            np.column_stack([X_full_pre, np.log(y_full)]),
+            columns=list(sample.columns),
+        )
 
         nn_path = os.path.join(output_dir, f"{regime}/models/nn/model.pth")
         if os.path.exists(nn_path):
             print(f"Loading existing NN model for {regime}")
-            nn_model = train_model(sample_pre, nn_path, verbose=False, retrain=False)
+            nn_model = train_model(train_pre, nn_path, verbose=False, retrain=False)
         else:
             print(f"Training new NN model for {regime}")
-            nn_model = train_model(sample_pre, nn_path, verbose=False)
-        losses[f"{regime}_nn"], _ = evaluate_model(nn_model, full_data_pre)
-        print(f"NN Loss: {losses[f'{regime}_nn']}")
+            nn_model = train_model(train_pre, nn_path, verbose=False)
+        nn_loss, _ = evaluate_model(nn_model, test_pre)
+        losses[f"{regime}_nn"] = nn_loss
+        print(f"NN Loss (test): {nn_loss}")
 
         model_dict[regime] = {
-            'data': filtered,
+            'data': sample,
+            'train_data': train_df,
+            'test_data': test_df,
             'pysr': pysr_model,
             'mm': y_pred_mm,
             'nn': nn_model,
-            'preprocessed': full_data_pre
+            'preprocessed': full_pre,
+            'train_preprocessed': train_pre,
+            'test_preprocessed': test_pre,
         }
         print()
 
@@ -192,8 +260,9 @@ def plot_error_distributions(model_dict, output_dir):
     error_records = []
 
     for regime, models in model_dict.items():
-        data = models['data']
-        data_pre = models['preprocessed']
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            continue
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1].values
 
@@ -255,12 +324,17 @@ def plot_model_subregimes(model_dict, output_dir):
     cmap = cm.get_cmap('plasma', 256)  # Use a diverging colormap for better distinction
     fig, axes = plt.subplots(3, 2, figsize=(14, 14), sharex=False, sharey=False)
     all_handles, all_labels = [], []
-
-    indices = np.random.choice(
-        np.arange(1, 3001),
-        size=600,
-        replace=False
-    )
+    regime_indices = {}
+    for regime, models_entry in model_dict.items():
+        eval_data, _ = _get_eval_partition(models_entry)
+        if eval_data is None or eval_data.empty:
+            continue
+        sample_size = min(len(eval_data), 600)
+        regime_indices[regime] = np.random.choice(
+            eval_data.index.values,
+            size=sample_size,
+            replace=False,
+        )
 
     # Collect all errors across all models and regimes for global vmin/vmax
     all_errors = []
@@ -269,9 +343,13 @@ def plot_model_subregimes(model_dict, output_dir):
             for regime in regimes_per_column[col]:
                 if regime not in model_dict:
                     continue
+                indices = regime_indices.get(regime)
+                if indices is None or len(indices) == 0:
+                    continue
 
-                data = model_dict[regime]['data'].loc[indices]
-                data_pre = model_dict[regime]['preprocessed'].loc[indices]
+                eval_data, eval_pre = _get_eval_partition(model_dict[regime])
+                data = eval_data.loc[indices]
+                data_pre = eval_pre.loc[indices] if eval_pre is not None else None
                 y_true = data.iloc[:, -1].values
                 X = data.iloc[:, :-1]
 
@@ -280,6 +358,8 @@ def plot_model_subregimes(model_dict, output_dir):
                 elif model == 'mm':
                     y_pred = michaelis_menten(*data.iloc[:, :-1].values.T)
                 elif model == 'nn':
+                    if data_pre is None:
+                        continue
                     y_pred = evaluate_model(model_dict[regime]['nn'], data_pre)[1].detach().cpu().numpy().flatten()
 
                 error = np.abs(np.log(np.maximum(y_pred, EPS)) - np.log(np.maximum(y_true, EPS)))
@@ -302,9 +382,13 @@ def plot_model_subregimes(model_dict, output_dir):
             for regime in subregimes:
                 if regime not in model_dict:
                     continue
+                indices = regime_indices.get(regime)
+                if indices is None or len(indices) == 0:
+                    continue
 
-                data = model_dict[regime]['data'].loc[indices]
-                data_pre = model_dict[regime]['preprocessed'].loc[indices]
+                eval_data, eval_pre = _get_eval_partition(model_dict[regime])
+                data = eval_data.loc[indices]
+                data_pre = eval_pre.loc[indices] if eval_pre is not None else None
                 y_true = data.iloc[:, -1].values
                 X = data.iloc[:, :-1]
 
@@ -313,6 +397,8 @@ def plot_model_subregimes(model_dict, output_dir):
                 elif model == 'mm':
                     y_pred = michaelis_menten(*data.iloc[:, :-1].values.T)
                 elif model == 'nn':
+                    if data_pre is None:
+                        continue
                     y_pred = evaluate_model(model_dict[regime]['nn'], data_pre)[1].detach().cpu().numpy().flatten()
 
                 error = np.abs(np.log(np.maximum(y_pred, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
@@ -378,8 +464,9 @@ def plot_input_error_correlation(model_dict, output_dir):
     all_error_df = []
 
     for idx, (regime, models) in enumerate(model_dict.items()):
-        data = models['data']
-        data_pre = models['preprocessed']
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            continue
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1]
 
@@ -434,14 +521,23 @@ def plot_model_error_correlation(model_dict, output_dir):
     all_model_error_df = []
 
     for idx, (regime, models) in enumerate(model_dict.items()):
-        data = models['data']
-        data_pre = models['preprocessed']
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            continue
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1]
 
         err_pysr = np.abs(np.log(np.maximum(models['pysr'].predict(X.values), EPS)) - np.log(np.maximum(y_true, EPS)))
         err_mm = np.abs(np.log(np.maximum(michaelis_menten(*data.iloc[:, :-1].values.T), EPS)) - np.log(np.maximum(y_true, EPS)))
-        err_nn = np.abs(np.log(np.maximum(evaluate_model(models['nn'], models['preprocessed'])[1].detach().cpu().numpy().flatten(), EPS)) - np.log(np.maximum(y_true, EPS)))
+        err_nn = np.abs(
+            np.log(
+                np.maximum(
+                    evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten(),
+                    EPS,
+                )
+            )
+            - np.log(np.maximum(y_true, EPS))
+        )
 
         df = pd.DataFrame({'PySR': err_pysr, 'MM': err_mm, 'NN': err_nn})
         all_model_error_df.append(df)
@@ -482,8 +578,11 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
     for regime, models in model_dict.items():
         print(f"Generating scaled response curves for {regime}...")
 
-        data = models['data'].copy()
-        preprocessed_data = models['preprocessed']
+        data, preprocessed_data = _get_eval_partition(models)
+        if data is None or data.empty:
+            print(f"Skipping {regime}: no evaluation data available.")
+            continue
+        data = data.copy()
         model = models['nn']
 
         y_true = data.iloc[:, -1].values
@@ -579,8 +678,9 @@ def plot_horizontal_boxplot_subregimes(model_dict, output_dir):
             continue
 
         models = model_dict[regime]
-        data = models['data']
-        data_pre = models['preprocessed']
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            continue
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1]
 
@@ -633,8 +733,9 @@ def plot_horizontal_boxplot_subregimes(model_dict, output_dir):
         if regime not in model_dict:
             continue
         models = model_dict[regime]
-        data = models['data']
-        data_pre = models['preprocessed']
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            continue
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1]
 
@@ -826,8 +927,10 @@ def plot_vertical_boxplot_subregimes(model_dict, output_dir):
             continue
 
         models = model_dict[regime]
-        data = models['data']
-        data_pre = models['preprocessed']
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            ax.set_visible(False)
+            continue
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1]
 
@@ -884,8 +987,10 @@ def plot_vertical_boxplot_subregimes(model_dict, output_dir):
             ax.set_visible(False)
             continue
         models = model_dict[regime]
-        data = models['data']
-        data_pre = models['preprocessed']
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            ax.set_visible(False)
+            continue
         y_true = data.iloc[:, -1].values
         X = data.iloc[:, :-1]
         error_records = []
