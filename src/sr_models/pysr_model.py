@@ -12,11 +12,8 @@ import argparse
 from pysr import PySRRegressor
 import os
 
-<<<<<<< ours
 TARGET_COLUMN = 'kcat_cg'
 
-=======
->>>>>>> theirs
 # Hyperparameters for PySR (Python Symbolic Regression)
 N_ITERATIONS = 200  # Total iterations for model training
 POPULATION_SIZE = 30  # Symbolic expressions in the population
