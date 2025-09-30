@@ -1,6 +1,7 @@
 import json
 import argparse
 import pandas as pd
+import numpy as np
 import os
 from dso import DeepSymbolicRegressor
 
@@ -49,13 +50,29 @@ def create_dso_config(dataset_path):
         json.dump(config, json_file, indent=4)
     print(f"Configuration file created at: {CONFIG_FILE_PATH}")
 
+TARGET_COLUMN = 'kcat_cg'
+
+
 def load_dataset(file_path, dataset_size=None, features=None):
     """Loads dataset from a CSV file, samples if specified, and selects specified features."""
     data = pd.read_csv(file_path)
+    target = TARGET_COLUMN if TARGET_COLUMN in data.columns else data.columns[-1]
     if features and features != "all":
-        data = data[features.split(',')]
+        requested = [col.strip() for col in features.split(',')]
+        available = [col for col in requested if col in data.columns]
+        missing = [col for col in requested if col not in data.columns]
+        if missing:
+            print(f"Warning: missing features for DSO: {missing}. Using available columns {available}.")
+        selected = available + ([target] if target not in available else [])
+    else:
+        selected = list(data.columns)
+    data = data[selected]
     if dataset_size:
         data = data.sample(n=min(dataset_size, len(data)))
+
+    if not data.empty:
+        input_cols = data.columns[:-1]
+        data.loc[:, input_cols] = np.exp(data.loc[:, input_cols])
     return data
 
 def run_dso_training(temp_file):

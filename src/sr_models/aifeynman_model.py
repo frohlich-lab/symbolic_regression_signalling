@@ -14,6 +14,8 @@ import shutil
 from aifeynman import S_run_aifeynman
 import tempfile
 
+TARGET_COLUMN = 'kcat_cg'
+
 # Hyperparameters for AI Feynman
 OPERATORS = '+*-D~ILEA'  # Operators used in symbolic regression
 BF_TRY_TIME = 30  # Max time (seconds) for brute-force search step
@@ -26,10 +28,24 @@ FILENAME = 'mystery.txt'  # Dataset file name
 def load_dataset(file_path, dataset_size=None, features=None):
     """Loads a dataset from CSV, samples it if specified, and selects columns if features are provided."""
     data = pd.read_csv(file_path)
+    target = TARGET_COLUMN if TARGET_COLUMN in data.columns else data.columns[-1]
     if features and features != "all":
-        data = data[features.split(',')]
+        requested = [col.strip() for col in features.split(',')]
+        available = [col for col in requested if col in data.columns]
+        missing = [col for col in requested if col not in data.columns]
+        if missing:
+            print(f"Warning: missing features for AI Feynman: {missing}. Using available columns {available}.")
+        selected = available + ([target] if target not in available else [])
+    else:
+        selected = list(data.columns)
+    data = data[selected]
     if dataset_size:
         data = data.sample(n=min(dataset_size, len(data)))
+
+    # Convert inputs back to linear scale while leaving the target in log space
+    if not data.empty:
+        input_cols = data.columns[:-1]
+        data.loc[:, input_cols] = np.exp(data.loc[:, input_cols])
     return data
 
 def run_feynman(data, temp_file, features):

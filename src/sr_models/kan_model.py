@@ -15,6 +15,8 @@ from kan import KAN
 from tqdm import tqdm
 import os
 
+TARGET_COLUMN = 'kcat_cg'
+
 # Hyperparameters
 TRAIN_SIZE = 0.8  # Training set size as a percentage of the dataset
 SEED = 1  # Random seed for reproducibility
@@ -41,10 +43,25 @@ def load_dataset(file_path, dataset_size=None, features=None):
     and select specific columns if features are provided.
     """
     data = pd.read_csv(file_path)
+
+    target = TARGET_COLUMN if TARGET_COLUMN in data.columns else data.columns[-1]
     if features and features != "all":
-        data = data[features.split(',')]
+        requested = [col.strip() for col in features.split(',')]
+        available = [col for col in requested if col in data.columns]
+        missing = [col for col in requested if col not in data.columns]
+        if missing:
+            print(f"Warning: missing features for KAN: {missing}. Using available columns {available}.")
+        selected = available + ([target] if target not in available else [])
+    else:
+        selected = list(data.columns)
+    data = data[selected]
+
     if dataset_size:
         data = data.sample(n=min(dataset_size, len(data)))
+
+    if not data.empty:
+        input_cols = data.columns[:-1]
+        data.loc[:, input_cols] = np.exp(data.loc[:, input_cols])
     return data
 
 def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):

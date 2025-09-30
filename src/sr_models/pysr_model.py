@@ -12,6 +12,11 @@ import argparse
 from pysr import PySRRegressor
 import os
 
+<<<<<<< ours
+TARGET_COLUMN = 'kcat_cg'
+
+=======
+>>>>>>> theirs
 # Hyperparameters for PySR (Python Symbolic Regression)
 N_ITERATIONS = 200  # Total iterations for model training
 POPULATION_SIZE = 30  # Symbolic expressions in the population
@@ -34,10 +39,20 @@ def load_dataset(file_path, dataset_size=None, features=None):
     and select specific features if provided.
     """
     data = pd.read_csv(file_path)
-    
+
+    target = TARGET_COLUMN if TARGET_COLUMN in data.columns else data.columns[-1]
+
     # Select specific columns if features are provided
     if features and features != "all":
-        data = data[features.split(',')]
+        requested = [col.strip() for col in features.split(',')]
+        available = [col for col in requested if col in data.columns]
+        missing = [col for col in requested if col not in data.columns]
+        if missing:
+            print(f"Warning: missing features for PySR: {missing}. Using available columns {available}.")
+        selected = available + ([target] if target not in available else [])
+    else:
+        selected = list(data.columns)
+    data = data[selected]
 
     # Sample the dataset if dataset size is specified
     if dataset_size:

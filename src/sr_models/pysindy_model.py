@@ -14,6 +14,8 @@ import argparse
 import pysindy as ps
 from tqdm import tqdm
 
+TARGET_COLUMN = 'kcat_cg'
+
 from sympy import symbols, diff, symbols, Derivative, Eq, simplify, solve
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication_application
 import re
@@ -46,10 +48,20 @@ def load_dataset(
 ) -> pd.DataFrame:
     """Load a dataset, sample it, and select specified features."""
     data = pd.read_csv(file_path)
-    
+
+    target = TARGET_COLUMN if TARGET_COLUMN in data.columns else data.columns[-1]
+
     if features and features != "all":
-        feature_list = ['P_p'] + features.split(',')
-        data = data[['time'] + feature_list].dropna()
+        requested = [col.strip() for col in features.split(',')]
+        feature_list = [col for col in requested if col in data.columns]
+        missing = [col for col in requested if col not in data.columns]
+        if missing:
+            print(f"Warning: missing features for PySINDy: {missing}. Using available columns {feature_list}.")
+        cols_to_use = ['time'] if 'time' in data.columns else []
+        cols_to_use += feature_list
+        if target not in cols_to_use:
+            cols_to_use.append(target)
+        data = data[cols_to_use].dropna()
 
     if dataset_size:
         dataset_size = min(dataset_size, len(data))
