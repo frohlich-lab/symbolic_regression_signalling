@@ -13,6 +13,7 @@ The prefix can be customised with ``--output-prefix``.
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
@@ -36,10 +37,28 @@ DEFAULT_PROTEINS = [
     "p-MAPKAPK2",
     "p-PDK1",
     "p-MKK3-6",
-    "p-S6",
 ]
 
-STATS_PROTEINS = {"p-ERK1-2", "p-MEK1-2", "p-S6"}
+STATS_PROTEINS = {"p-ERK1-2", "p-MEK1-2"}
+
+
+LOGGER = logging.getLogger("generate_functional_group_inputs")
+if not LOGGER.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter("[%(asctime)s] %(levelname)s | %(message)s", "%H:%M:%S")
+    )
+    LOGGER.addHandler(handler)
+LOGGER.setLevel(logging.INFO)
+LOGGER.propagate = False
+
+
+def log_progress(stage: str, current: int, total: int) -> None:
+    if total <= 0:
+        LOGGER.info("%s [%d]", stage, current)
+        return
+    percent = (current / total) * 100.0
+    LOGGER.info("%s [%d/%d | %.1f%%]", stage, current, total, percent)
 
 
 def parse_args() -> argparse.Namespace:
@@ -139,9 +158,10 @@ def fit_marker_bin(
     proteins: Sequence[str],
     min_points: int,
     extra_times: np.ndarray,
-) -> Tuple[dict, List[Tuple[str, float, float]]]:
+) -> Tuple[dict, List[Tuple[str, float, float]], List[Tuple[str, float, int]]]:
     updates = {}
     extra_updates: List[Tuple[str, float, float]] = []
+    r2_metrics: List[Tuple[str, float, int]] = []
 
     if curve_fit is None:
         warnings.warn(
@@ -188,6 +208,12 @@ def fit_marker_bin(
         curve_extended = rise_and_fall(extended_times, *popt)
         deriv_extended = rise_and_fall_derivative(extended_times, *popt)
 
+        y_pred_data = rise_and_fall(x_data, *popt)
+        ss_res = float(np.sum((y_data - y_pred_data) ** 2))
+        ss_tot = float(np.sum((y_data - np.mean(y_data)) ** 2))
+        r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+        r2_metrics.append((protein, r_squared, int(valid.sum())))
+
         updates.setdefault(protein, {})
         for idx, t in enumerate(x_full):
             updates[protein][t] = (curve_main[idx], deriv_main[idx])
@@ -204,7 +230,7 @@ def fit_marker_bin(
         for idx, t in enumerate(extended_times):
             extra_updates.append(
                 (
-                    protein,
+                    f"{protein}_fit",
                     float(t),
                     curve_extended[idx],
                 )
@@ -227,7 +253,7 @@ def fit_marker_bin(
         if protein in STATS_PROTEINS:
             updates[protein]["stats"] = stats
 
-    return updates, extra_updates
+    return updates, extra_updates, r2_metrics
 
 
 def apply_updates(
@@ -305,6 +331,7 @@ def build_filtered(time_trajectories: pd.DataFrame) -> pd.DataFrame:
 
 
 def run_processing(args: argparse.Namespace) -> None:
+    LOGGER.info("Loading time-course data from %s", args.time_course)
     time_course = pd.read_csv(args.time_course)
     if {"marker", "GFP", "timepoint"} - set(time_course.columns):
         missing = {"marker", "GFP", "timepoint"} - set(time_course.columns)
@@ -312,30 +339,71 @@ def run_processing(args: argparse.Namespace) -> None:
 
     time_course = time_course.copy()
     time_course["timepoint"] = time_course["timepoint"].astype(float)
+    LOGGER.info("Assigning GFP bins with %d quantiles", args.gfp_bins)
     time_course["GFP_bin"] = assign_gfp_bins(time_course, args.gfp_bins)
     time_course = time_course.dropna(subset=["GFP_bin"])  # drop markers lacking variation
     time_course["GFP_bin"] = time_course["GFP_bin"].astype(int)
 
-    numeric_cols = time_course.select_dtypes(include=[np.number]).columns
+    group_keys = {"marker", "GFP_bin", "timepoint"}
+    numeric_cols = [
+        col
+        for col in time_course.select_dtypes(include=[np.number]).columns
+        if col not in group_keys
+    ]
     time_trajectories = (
         time_course.groupby(["marker", "GFP_bin", "timepoint"])[numeric_cols]
         .mean()
         .sort_index()
     )
 
+    raw_timepoints = np.sort(time_course["timepoint"].dropna().unique())
+    marker_bins = time_trajectories.index.droplevel("timepoint").unique()
+    # Ensure every marker/bin has rows allocated for all measured timepoints so
+    # later .loc updates never extend the index out of lexsorted order.
+    base_index = pd.MultiIndex.from_tuples(
+        [
+            (marker, gfp_bin, float(t))
+            for marker, gfp_bin in marker_bins
+            for t in raw_timepoints
+        ],
+        names=time_trajectories.index.names,
+    )
+    time_trajectories = time_trajectories.reindex(base_index).sort_index()
+
     initialise_columns(time_trajectories, DEFAULT_PROTEINS)
     extra_fit = initialise_extra_frame(time_trajectories, DEFAULT_PROTEINS)
 
     markers = time_trajectories.index.get_level_values("marker").unique()
-    raw_timepoints = np.sort(time_course["timepoint"].dropna().unique())
     extra_times = np.array(args.extra_times, dtype=float)
+    extended_timepoints = np.unique(np.concatenate([raw_timepoints, extra_times]))
+    # Preallocate rows for every marker/bin at all requested times to keep the
+    # MultiIndex lexsorted and avoid assignment warnings downstream.
+    full_index = pd.MultiIndex.from_tuples(
+        [
+            (marker, gfp_bin, float(t))
+            for marker, gfp_bin in marker_bins
+            for t in extended_timepoints
+        ],
+        names=time_trajectories.index.names,
+    )
+    extra_fit = extra_fit.reindex(full_index).sort_index()
 
-    for marker in markers:
+    total_markers = len(markers)
+    LOGGER.info("Processing %d markers", total_markers)
+    for marker_idx, marker in enumerate(markers, start=1):
+        log_progress("Markers", marker_idx, total_markers)
+        LOGGER.info("Fitting marker %s (%d/%d)", marker, marker_idx, total_markers)
         marker_slice = time_trajectories.loc[marker]
-        for gfp_bin in marker_slice.index.get_level_values("GFP_bin").unique():
+        gfp_bins = list(marker_slice.index.get_level_values("GFP_bin").unique())
+        if not gfp_bins:
+            LOGGER.info("Marker %s has no GFP bins after preprocessing", marker)
+            continue
+        LOGGER.info("Marker %s has %d GFP bins", marker, len(gfp_bins))
+        for bin_idx, gfp_bin in enumerate(gfp_bins, start=1):
+            log_progress(f"{marker} bins", bin_idx, len(gfp_bins))
             bin_slice = marker_slice.loc[gfp_bin]
             bin_slice = bin_slice.reindex(raw_timepoints)
-            updates, extra_updates = fit_marker_bin(
+            updates, extra_updates, r2_metrics = fit_marker_bin(
                 marker,
                 int(gfp_bin),
                 bin_slice,
@@ -345,6 +413,9 @@ def run_processing(args: argparse.Namespace) -> None:
                 extra_times,
             )
             if not updates and not extra_updates:
+                LOGGER.debug(
+                    "Marker %s bin %s yielded no fit updates", marker, gfp_bin
+                )
                 continue
             apply_updates(
                 time_trajectories,
@@ -354,25 +425,65 @@ def run_processing(args: argparse.Namespace) -> None:
                 updates,
                 extra_updates,
             )
+            valid_r2 = [score for _, score, _ in r2_metrics if not np.isnan(score)]
+            avg_r2 = float(np.mean(valid_r2)) if valid_r2 else float("nan")
+            total_points = sum(count for _, _, count in r2_metrics)
+            r2_summary = ", ".join(
+                f"{protein}={score:.3f}" if not np.isnan(score) else f"{protein}=nan"
+                for protein, score, _ in r2_metrics
+            )
+            LOGGER.info(
+                "Applied updates for marker %s bin %s (proteins=%d, extra_rows=%d, avg_R²=%s, samples=%d, R²s=[%s])",
+                marker,
+                gfp_bin,
+                len(r2_metrics),
+                len(extra_updates),
+                f"{avg_r2:.3f}" if not np.isnan(avg_r2) else "nan",
+                total_points,
+                r2_summary,
+            )
 
+    LOGGER.info("Filling extra GFP means for timepoints: %s", args.extra_times)
     fill_extra_gfp_means(extra_fit, args.extra_times)
 
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     base = args.output_prefix
-    time_trajectories.reset_index().to_csv(
-        output_dir / f"{base}_time_trajectories.csv",
-        index=False,
+    for frame_name, frame in {
+        "time_trajectories": time_trajectories,
+        "extra_fit": extra_fit,
+    }.items():
+        overlap = set(frame.columns).intersection(frame.index.names)
+        if overlap:
+            raise ValueError(
+                f"{frame_name} has columns that overlap index names: {sorted(overlap)}"
+            )
+
+    LOGGER.info("Writing outputs to %s with prefix '%s'", output_dir, base)
+    time_df = time_trajectories.reset_index()
+    filtered_df = build_filtered(time_trajectories)
+    extra_df = (
+        extra_fit.reset_index().sort_values(["marker", "GFP_bin", "timepoint"])
     )
-    build_filtered(time_trajectories).to_csv(
-        output_dir / f"{base}_filtered_features.csv",
-        index=False,
-    )
-    extra_fit.reset_index().sort_values(["marker", "GFP_bin", "timepoint"]).to_csv(
-        output_dir / f"{base}_extra_fit_trajectories.csv",
-        index=False,
-    )
+    drop_cols = [protein for protein in DEFAULT_PROTEINS if protein in extra_df.columns]
+    if drop_cols:
+        LOGGER.info("Dropping raw measurement columns from extra output: %s", drop_cols)
+        extra_df = extra_df.drop(columns=drop_cols)
+
+    output_payload = {
+        "time_trajectories.csv": time_df,
+        "filtered_features.csv": filtered_df,
+        "extra_fit_trajectories.csv": extra_df,
+    }
+
+    for suffix, frame in output_payload.items():
+        prefixed_path = output_dir / f"{base}_{suffix}"
+        alias_path = output_dir / suffix
+        frame.to_csv(prefixed_path, index=False)
+        frame.to_csv(alias_path, index=False)
+        LOGGER.info("Wrote %s and %s", prefixed_path.name, alias_path.name)
+    LOGGER.info("Finished generating functional group inputs")
 
 
 if __name__ == "__main__":

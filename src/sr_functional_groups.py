@@ -10,14 +10,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.ticker import MaxNLocator
 from pysr import PySRRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
@@ -25,6 +24,25 @@ from sklearn.utils import resample
 
 # Columns that should not be passed to the regression model as inputs.
 EXCLUDE_COLUMNS = {"p-ERK1-2_dt", "p-MEK1-2_dt", "marker", "timepoint", "GFP_bin"}
+
+
+LOGGER = logging.getLogger("sr.functional_groups")
+if not LOGGER.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter("[%(asctime)s] %(levelname)s | %(message)s", "%H:%M:%S")
+    )
+    LOGGER.addHandler(handler)
+LOGGER.setLevel(logging.INFO)
+LOGGER.propagate = False
+
+
+def log_progress(stage: str, current: int, total: int) -> None:
+    if total <= 0:
+        LOGGER.info("%s [%d]", stage, current)
+        return
+    percent = (current / total) * 100.0
+    LOGGER.info("%s [%d/%d | %.1f%%]", stage, current, total, percent)
 
 
 @dataclass
@@ -39,6 +57,45 @@ class GroupResult:
     test_r2: Optional[float]
     test_samples: int
     train_samples: int
+
+
+GROUPS_FRESH: Dict[str, List[str]] = {
+    # ===== Predicted pERK ↑ (drivers / upstream) =====
+    "RTK_tri_alt_EMF": ["EGFR", "MET", "FGFR1"],
+    "RTK_tri_alt_BMF": ["ERBB2", "MET", "FGFR1"],
+    "RTK_quad_noFGFR1": ["EGFR", "ERBB2", "MET", "MST1R"],
+    "RTK_quad_noERBB2": ["EGFR", "FGFR1", "MET", "MST1R"],
+    "RTK_MEK_crosstalk_1": ["EGFR", "TYRO3", "MAP2K2"],
+    "RTK_MEK_crosstalk_2": ["ERBB2", "ABL1", "MAP2K2"],
+    "RTK_RAF_bridge": ["MST1R", "ARAF", "EGFR"],
+    "RAF_with_cytTK": ["ARAF", "ABL1", "TEC"],
+    "MEK_with_cytTK": ["MAP2K2", "TYRO3", "TEC"],
+    "RTK_cyt_duo_BA": ["ERBB2", "ABL1"],
+    "RTK_cyt_duo_MT": ["MET", "TEC"],
+    "RTK_cyt_duo_FT": ["FGFR1", "TYRO3"],
+    "ERK_pair_plus_EGFR": ["MAPK1", "MAPK3", "EGFR"],
+    "ERK_pair_plus_MEK": ["MAPK1", "MAPK3", "MAP2K2"],
+    # ===== Predicted pERK ↓ (phosphatases / feedback brakes) =====
+    "DUSP_PTPN_mix_1": ["DUSP4", "PTPN2 (P1)"],
+    "DUSP_PTPN_mix_2": ["DUSP7", "PTPN7"],
+    "DUSP_trio_noDUSP7": ["DUSP4", "DUSP10 (P2)", "DUSP16"],
+    "PTPN_DUSP_combo": ["PTPN5", "DUSP7"],
+    "RSK_PKA_combo_alt": ["RPS6KA3", "RPS6KA6", "PRKACA"],
+    "AKT_PKA_gate": ["AKT3", "PRKACA"],
+    "PIK3R1_with_RSK1": ["PIK3R1", "RPS6KA1"],
+    "AKT_with_RSK3": ["AKT3", "RPS6KA3"],
+    "PTPN_trio_tilted": ["PTPN2 (P1)", "PTPN5", "DUSP10 (P2)"],
+    "DUSP_pair_alt": ["DUSP10 (P2)", "DUSP7"],
+    # ===== Ambiguous / modulators =====
+    "Stress_mod_trio_A": ["TBK1", "DYRK2", "PIP5K3"],
+    "Stress_mod_trio_B": ["MAP4K2", "DYRK3", "MAST2"],
+    "Scaffold_traffic_pair": ["MAST2", "PIP5K3"],
+    "DYRK_TBK_axis": ["DYRK2", "TBK1"],
+    "MAP4K2_scaffold_axis": ["MAP4K2", "ALPK2"],
+    "Scaffold_mix_with_TEC": ["MAST2", "ALPK2", "TEC"],
+    "DYRK_scaffold_mix": ["DYRK3", "MAST2", "PIP5K3"],
+    "Trafficking_with_FGFR1": ["PIP5K3", "FGFR1"],
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -182,10 +239,19 @@ def parse_args() -> argparse.Namespace:
         dest="batching",
         help="Disable PySR mini-batching.",
     )
+    parser.add_argument(
+        "--include-fresh-groups",
+        action="store_true",
+        help="Augment the default marker groups with the curated fresh set defined in the script.",
+    )
     return parser.parse_args()
 
 
-def load_marker_groups(dataset: pd.DataFrame, json_path: Optional[Path]) -> Dict[str, List[str]]:
+def load_marker_groups(
+    dataset: pd.DataFrame,
+    json_path: Optional[Path],
+    include_fresh: bool,
+) -> Dict[str, List[str]]:
     if json_path is not None:
         with json_path.open("r", encoding="utf-8") as fh:
             payload = json.load(fh)
@@ -193,44 +259,72 @@ def load_marker_groups(dataset: pd.DataFrame, json_path: Optional[Path]) -> Dict
 
     # Default groups mirror the expanded sets used in the notebook.
     groups: Dict[str, List[str]] = {
-        "MAPK_core": ["MAP2K2", "MAPK1", "MAPK3"],
-        "MAPK_RSK": ["MAPK1", "MAPK3", "RPS6KA1"],
-        "MAPK_upstream": ["MAP2K2", "MAP4K2", "ARAF"],
-        "RTKs_1": ["EGFR", "ERBB2", "FGFR1"],
-        "RTKs_2": ["MET", "MST1R", "FGFR1"],
-        "RTKs_combo": ["EGFR", "ERBB2", "MET", "MST1R", "FGFR1"],
-        "PI3K_AKT": ["AKT3", "PIK3R1", "PIP5K3", "PRKACA"],
-        "PI3K_AKT_short": ["AKT3", "PRKACA", "PIP5K3"],
-        "DUSPs": ["DUSP4", "DUSP7", "DUSP10 (P2)", "DUSP16"],
-        "PTPNs": ["PTPN2 (P1)", "PTPN5", "PTPN7"],
-        "Mixed_phosphatases": ["DUSP4", "PTPN2 (P1)", "DUSP10 (P2)"],
-        "Cytoplasmic_TKs": ["ABL1", "TEC", "TYRO3"],
-        "DYRK_Module": ["DYRK2", "DYRK3", "MAP4K2"],
-        "RSK_feedback": ["RPS6KA1", "RPS6KA3", "RPS6KA6"],
-        "Scaffold_1": ["MAST2", "ALPK2", "ARAF"],
-        "Scaffold_2": ["TEC", "MAST2", "ALPK2"],
-        "Stress_linked": ["TBK1", "MAP4K2", "DYRK2"],
-        "Feedback_plus_core": ["MAPK1", "DUSP4", "PTPN2 (P1)"],
-        "Mixed_positive_negative": ["EGFR", "AKT3", "DUSP4"],
-        "Mixed_scaffolds": ["MAST2", "ARAF", "RPS6KA1"],
-        "Mixed_scaffolds_alt": ["TYRO3", "MAPK3", "ALPK2"],
+        # ---- BIG, SIGN-CONSISTENT SETS ----
+        # Predicted pERK ↑
+        "RTKs_pos": ["EGFR", "ERBB2", "FGFR1", "MET", "MST1R"],
+        "RAF_MEK_core": ["ARAF", "MAP2K2"],
+        "ERK_substrate_risk": ["MAPK1", "MAPK3"],  # analyze separately (readout confound)
+        "Cytoplasmic_TKs_pos": ["ABL1", "TEC", "TYRO3"],
+
+        # Predicted pERK ↓
+        "DUSPs_all": ["DUSP4", "DUSP7", "DUSP10 (P2)", "DUSP16"],
+        "PTPNs_all": ["PTPN2 (P1)", "PTPN5", "PTPN7"],
+        "Feedback_brakes": ["RPS6KA1", "RPS6KA3", "RPS6KA6", "PRKACA"],
+        "PI3K_AKT_brake": ["AKT3", "PIK3R1"],
+
+        # Ambiguous / modulators (analyze separately)
+        "Stress_or_altMAPK": ["TBK1", "MAP4K2", "DYRK2", "DYRK3"],
+        "Trafficking_scaffold": ["PIP5K3", "MAST2", "ALPK2"],
+
+        # Controls
         "Control_FLAG_GFP": ["FLAG-GFP1", "FLAG-GFP2", "FLAG-GFP3", "FLAG-GFP4"],
-        "Control_untransfected": [
-            "untransfected1",
-            "untransfected2",
-            "untransfected3",
-            "untransfected4",
-        ],
-        "RTK_PI3K_combo": ["EGFR", "ERBB2", "AKT3", "PRKACA"],
-        "RTK_PI3K_combo_alt": ["MET", "MST1R", "PIK3R1", "PIP5K3"],
-        "RTK_phosphatase_combo": ["EGFR", "ERBB2", "PTPN2 (P1)", "DUSP4"],
-        "RTK_phosphatase_combo_alt": ["MET", "FGFR1", "DUSP10 (P2)", "PTPN5"],
-        "MAPK_PI3K_combo": ["MAP2K2", "MAPK3", "AKT3", "PIP5K3"],
-        "MAPK_PI3K_combo_alt": ["MAPK1", "MAPK3", "PRKACA", "PIK3R1"],
-        "Feedback_stress_combo": ["DUSP4", "DUSP16", "DYRK2", "MAP4K2"],
-        "Coverage_fill_1": ["ABL1", "PRKACA", "RPS6KA3"],
-        "Coverage_fill_2": ["TBK1", "PIP5K3", "DUSP7"],
-        "Coverage_fill_3": ["TYRO3", "MAST2", "PIP5K3"],
+        "Control_untransfected": ["untransfected1", "untransfected2", "untransfected3", "untransfected4"],
+
+        # ---- SMALLER, “INTELLIGENT” SUBSETS (SAME-SIGN) ----
+        # RTK subsets (all ↑)
+        "RTKs_EGFR_ERBB2": ["EGFR", "ERBB2"],
+        "RTKs_MET_MST1R": ["MET", "MST1R"],
+        "RTKs_FGFR1_only": ["FGFR1"],
+
+        # Core pathway splits (↑)
+        "RAF_only": ["ARAF"],
+        "MEK_only": ["MAP2K2"],
+
+        # ERK readout splits (treat separately)
+        "ERK1_only": ["MAPK3"],
+        "ERK2_only": ["MAPK1"],
+
+        # Cytoplasmic TKs (↑)
+        "ABL1_TEC": ["ABL1", "TEC"],
+        "TYRO3_only": ["TYRO3"],
+
+        # RSK/PKA feedback (↓)
+        "RSK_feedback": ["RPS6KA1", "RPS6KA3", "RPS6KA6"],
+        "PKA_only": ["PRKACA"],
+
+        # DUSPs: ERK-biased vs stress-biased (↓)
+        "DUSPs_ERK_biased": ["DUSP4", "DUSP7"],
+        "DUSPs_stress_biased": ["DUSP10 (P2)", "DUSP16"],
+
+        # PTPNs splits (↓)
+        "PTPN2_only": ["PTPN2 (P1)"],
+        "PTPN5_7": ["PTPN5", "PTPN7"],
+
+        # PI3K/AKT axis (↓)
+        "AKT_only": ["AKT3"],
+        "PI3K_reg_only": ["PIK3R1"],
+
+        # Ambiguous/modulators (neutral bucket for separate analysis)
+        "DYRK_module": ["DYRK2", "DYRK3"],
+        "MAP4K2_only": ["MAP4K2"],
+        "TBK1_only": ["TBK1"],
+        "PIP5K3_only": ["PIP5K3"],
+        "Scaffold_core": ["MAST2", "ALPK2"],
+
+        # ---- SAME-SIGN MULTI-PATHWAY “STACKS” (optional) ----
+        "RTK_plus_RAF_MEK": ["EGFR", "ERBB2", "ARAF", "MAP2K2"],        # ↑
+        "Brake_stack_phosphatases": ["DUSP4", "DUSP7", "PTPN2 (P1)"],    # ↓
+        "Brake_stack_kinase": ["RPS6KA1", "PRKACA", "AKT3"],             # ↓
     }
 
     # Filter out markers that are absent from the dataset to avoid silent failures.
@@ -240,6 +334,11 @@ def load_marker_groups(dataset: pd.DataFrame, json_path: Optional[Path]) -> Dict
         present = [m for m in markers if m in available_markers]
         if present:
             filtered_groups[group_name] = present
+    if include_fresh:
+        for group_name, markers in GROUPS_FRESH.items():
+            present = [m for m in markers if m in available_markers]
+            if present:
+                filtered_groups[group_name] = present
     return filtered_groups
 
 
@@ -260,6 +359,11 @@ def balance_by_order_of_magnitude(
     epsilon = 10.0 ** log10_cutoff
     work = df.copy()
     work[target_column] = work[target_column].astype(float)
+    if work[target_column].dropna().empty:
+        LOGGER.warning(
+            "Target column '%s' has no finite values; returning empty frame", target_column
+        )
+        return work.iloc[0:0]
     work[f"oom_bins_{target_column}"] = np.floor(
         np.log10(np.abs(work[target_column]) + epsilon)
     )
@@ -285,6 +389,10 @@ def balance_by_order_of_magnitude(
         else:
             balanced = group
         balanced_frames.append(balanced)
+
+    if not balanced_frames:
+        LOGGER.warning("No magnitude bins produced samples; returning empty frame")
+        return work.iloc[0:0]
 
     combined = pd.concat(balanced_frames, ignore_index=True)
     combined = combined.sample(frac=1.0, random_state=random_state).reset_index(drop=True)
@@ -442,56 +550,15 @@ def format_results_text(results: Sequence[GroupResult]) -> str:
     return "\n".join(lines)
 
 
-def plot_log_r2(results: Sequence[GroupResult], output_dir: Path) -> None:
-    df = pd.DataFrame(
-        [
-            {
-                "group": res.group_name,
-                "mode": res.feature_mode,
-                "log_r2": res.test_log_r2,
-            }
-            for res in results
-            if res.test_log_r2 is not None
-        ]
-    )
-
-    if df.empty:
-        return
-
-    pivot = df.pivot_table(index="group", columns="mode", values="log_r2")
-    modes = sorted(df["mode"].unique())
-    groups = list(pivot.index)
-
-    x = np.arange(len(groups))
-    width = 0.35 if len(modes) == 2 else 0.6
-
-    fig, ax = plt.subplots(figsize=(12, max(6, len(groups) * 0.35)))
-    for idx, mode in enumerate(modes):
-        mode_values = pivot[mode].values
-        offset = (idx - (len(modes) - 1) / 2) * width
-        ax.bar(x + offset, mode_values, width=width, label=mode.upper())
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(groups, rotation=60, ha="right")
-    ax.set_ylabel("Test log R²")
-    ax.set_title("Test log R² per marker group")
-    ax.legend()
-    ax.grid(axis="y", linestyle="--", alpha=0.5)
-    ax.yaxis.set_major_locator(MaxNLocator(nbins="auto", integer=False, prune=None))
-
-    fig.tight_layout()
-    png_path = output_dir / "functional_group_log_r2.png"
-    svg_path = output_dir / "functional_group_log_r2.svg"
-    fig.savefig(png_path, dpi=300)
-    fig.savefig(svg_path)
-    plt.close(fig)
-
-
 def main() -> None:
     args = parse_args()
     output_dir: Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    LOGGER.info("Starting functional group symbolic regression")
+    if args.include_fresh_groups:
+        LOGGER.info("Including %d curated fresh marker groups", len(GROUPS_FRESH))
+    LOGGER.info("Loading dataset from %s", args.dataset)
     data = pd.read_csv(args.dataset)
     data.columns = data.columns.str.replace("_fit$", "", regex=True)
 
@@ -500,7 +567,10 @@ def main() -> None:
     if missing:
         raise ValueError(f"Dataset is missing required columns: {sorted(missing)}")
 
-    data = data.groupby(["marker", "GFP_bin"]).filter(lambda g: not g.isnull().any().any())
+    LOGGER.info("Dropping rows with missing target derivatives")
+    before_rows = len(data)
+    data = data.dropna(subset=["p-ERK1-2_dt"])
+    LOGGER.info("Retained %d/%d rows after target drop", len(data), before_rows)
     data.loc[
         data["p-ERK1-2_dt"].abs() < 10.0 ** args.log10_cutoff,
         "p-ERK1-2_dt",
@@ -520,9 +590,15 @@ def main() -> None:
             "Balanced dataset is too small after preprocessing; adjust thresholds or provide more data."
         )
 
-    marker_groups = load_marker_groups(balanced, args.marker_groups_json)
+    LOGGER.info("Loaded %d samples after balancing", len(balanced))
+    marker_groups = load_marker_groups(
+        balanced,
+        args.marker_groups_json,
+        include_fresh=args.include_fresh_groups,
+    )
     if not marker_groups:
         raise ValueError("No marker groups available after intersecting with dataset markers.")
+    LOGGER.info("Running on %d marker groups", len(marker_groups))
 
     sr_kwargs = {
         "niterations": args.max_iterations,
@@ -538,14 +614,24 @@ def main() -> None:
     }
 
     all_results: List[GroupResult] = []
-    for feature_mode in args.feature_modes:
+    total_modes = len(args.feature_modes)
+    for mode_idx, feature_mode in enumerate(args.feature_modes, start=1):
+        log_progress("Feature modes", mode_idx, total_modes)
+        LOGGER.info("Selecting features for mode '%s'", feature_mode)
         feature_columns = select_features(balanced, feature_mode, args.gfp_columns)
         if not feature_columns:
-            print(f"[WARN] No usable features for mode '{feature_mode}'. Skipping.")
+            LOGGER.warning("No usable features for mode '%s'. Skipping.", feature_mode)
             continue
 
         mode_results: List[GroupResult] = []
-        for group_name, markers in marker_groups.items():
+        total_groups = len(marker_groups)
+        LOGGER.info(
+            "Evaluating %d marker groups for mode '%s'", total_groups, feature_mode
+        )
+        for group_idx, (group_name, markers) in enumerate(
+            marker_groups.items(), start=1
+        ):
+            log_progress(f"{feature_mode} groups", group_idx, total_groups)
             result = train_group_model(
                 balanced,
                 group_name,
@@ -558,28 +644,38 @@ def main() -> None:
                 sr_kwargs,
             )
             if result is None:
-                print(
-                    f"[INFO] Skipping group '{group_name}' for mode '{feature_mode}' (insufficient data)."
+                LOGGER.info(
+                    "Skipping group '%s' for mode '%s' (insufficient data)",
+                    group_name,
+                    feature_mode,
                 )
                 continue
 
-            print(
-                f"[INFO] Mode={feature_mode} | Group={group_name} | Test log MAE={result.test_log_mae} | Test log R2={result.test_log_r2}"
+            LOGGER.info(
+                "Mode=%s | Group=%s | Features=%s | Test log MAE=%s | Test log R2=%s",
+                feature_mode,
+                group_name,
+                feature_columns,
+                result.test_log_mae,
+                result.test_log_r2,
             )
             mode_results.append(result)
 
         if not mode_results:
+            LOGGER.warning(
+                "No successful regressions for feature mode '%s'", feature_mode
+            )
             continue
 
         text_output = format_results_text(mode_results)
         text_path = output_dir / f"functional_group_formulas_{feature_mode}.txt"
         text_path.write_text(text_output, encoding="utf-8")
+        LOGGER.info("Saved formula report to %s", text_path)
         all_results.extend(mode_results)
 
     if not all_results:
+        LOGGER.error("No successful symbolic regressions were produced")
         raise RuntimeError("No successful symbolic regressions were produced. Check preprocessing settings.")
-
-    plot_log_r2(all_results, output_dir)
 
     summary_df = pd.DataFrame(
         [
@@ -598,7 +694,10 @@ def main() -> None:
             for res in all_results
         ]
     )
-    summary_df.to_csv(output_dir / "functional_group_sr_summary.csv", index=False)
+    summary_path = output_dir / "functional_group_sr_summary.csv"
+    summary_df.to_csv(summary_path, index=False)
+    LOGGER.info("Wrote summary CSV to %s", summary_path)
+    LOGGER.info("Symbolic regression pipeline completed")
 
 
 if __name__ == "__main__":

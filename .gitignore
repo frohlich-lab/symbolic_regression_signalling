@@ -18,3 +18,4 @@ wandb/
 .DS_Store
 simulation_venv/
 **/__pycache__/
+outputs/

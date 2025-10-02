@@ -19,13 +19,13 @@ from pysb import (
 
 model = Model('three_step_enzyme')
 
-uP = Monomer('uP', sites=['k'])
-pP = Monomer('pP', sites=['k'])
+S = Monomer('S', sites=['k'])
+P = Monomer('P', sites=['k'])
 K = Monomer('K', sites=['p'])
 
 Initial(K(p=None), Parameter('K0'))
-Initial(uP(k=None), Parameter('uP0'))
-Initial(pP(k=None), Parameter('pP0'))
+Initial(S(k=None), Parameter('uP0'))
+Initial(P(k=None), Parameter('pP0', 3.0))
 
 koff_substrate = Parameter('koff_substrate')
 k_d_substrate = Parameter('kD_substrate')
@@ -36,18 +36,18 @@ kon_product = Expression('kon_product', koff_product * k_d_substrate)
 
 Rule(
     'step1',
-    uP(k=None) + K(p=None) | uP(k=1) % K(p=1),
+    S(k=None) + K(p=None) | S( k=1) % K(p=1),
     kon_substrate,
     koff_substrate,
 )
 
-es = uP(k=1) % K(p=1)
-kcat = Parameter('kcat')
-Rule('step2', es >> uP(k=1) % K(p=1), kcat)
+es = S(k=1) % K(p=1)
+# kcat = Parameter('kcat')
+# Rule('step2', es >> P(phospho='u', k=1) % K(p=1), kcat)
 
 Rule(
     'step3',
-    pP(k=1) % K(p=1) | pP(k=None) + K(p=None),
+    P(k=1) % K(p=1) | P(k=None) + K(p=None),
     koff_product,
     kon_product,
 )

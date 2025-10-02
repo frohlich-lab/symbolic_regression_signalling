@@ -1,7 +1,7 @@
 # config.yaml
 data_type: "dynamic"  # Options: "dynamic" or "static"
 
-enzyme_model: "three_step_enzyme_dimer"
+enzyme_model: "experimental"
 
 # Model selection
 models: ["pysr", "pysindy", "kan", "dso"] #, "aifeynman", 
@@ -47,4 +47,5 @@ experimental:
   extra_times: [1, 3]
   sr_output_dir: "data/experimental/functional_groups/outputs"
   feature_modes: ["gfp", "all"]
-  gfp_columns: ["GFP"]
+  gfp_columns: ["GFP", 'p-ERK1-2', 'p-MEK1-2', 'p-ERK1-2_min', 'p-MEK1-2_min']
+  include_fresh_groups: true

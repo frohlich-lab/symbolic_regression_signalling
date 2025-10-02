@@ -26,10 +26,12 @@ if exp_sr_output_dir_cfg:
 else:
     exp_sr_output_dir = f"{functional_group_base_dir}/outputs"
 
-exp_feature_modes = experimental_cfg.get("feature_modes", ["gfp", "all"])
+exp_feature_modes = experimental_cfg.get("feature_modes", ["all", "gfp"])
 exp_feature_modes_args = " ".join(exp_feature_modes)
-exp_gfp_columns = experimental_cfg.get("gfp_columns", ["GFP"])
+exp_gfp_columns = experimental_cfg.get("gfp_columns", ["GFP", 'p-ERK1-2', 'p-MEK1-2', 'p-ERK1-2_min', 'p-MEK1-2_min'])
 exp_gfp_columns_args = " ".join(exp_gfp_columns)
+exp_include_fresh = experimental_cfg.get("include_fresh_groups", False)
+exp_include_fresh_flag = "--include-fresh-groups" if exp_include_fresh else ""
 
 functional_group_time_output = f"{functional_group_base_dir}/time_trajectories.csv"
 functional_group_filtered_output = f"{functional_group_base_dir}/filtered_features.csv"
@@ -37,6 +39,12 @@ functional_group_extra_output = f"{functional_group_base_dir}/extra_fit_trajecto
 functional_group_summary_output = f"{exp_sr_output_dir}/functional_group_sr_summary.csv"
 functional_group_png_output = f"{exp_sr_output_dir}/functional_group_log_r2.png"
 functional_group_svg_output = f"{exp_sr_output_dir}/functional_group_log_r2.svg"
+functional_group_png_combined_output = (
+    f"{exp_sr_output_dir}/functional_group_log_r2_combined.png"
+)
+functional_group_svg_combined_output = (
+    f"{exp_sr_output_dir}/functional_group_log_r2_combined.svg"
+)
 functional_group_formula_files = [
     f"{exp_sr_output_dir}/functional_group_formulas_{mode}.txt" for mode in exp_feature_modes
 ]
@@ -60,6 +68,8 @@ if enzyme_model == "experimental":
         functional_group_summary_output,
         functional_group_png_output,
         functional_group_svg_output,
+        functional_group_png_combined_output,
+        functional_group_svg_combined_output,
         *functional_group_formula_files,
     ]
 
@@ -98,15 +108,14 @@ if enzyme_model == "experimental":
             dataset=functional_group_extra_output
         output:
             summary=functional_group_summary_output,
-            log_png=functional_group_png_output,
-            log_svg=functional_group_svg_output,
             formulas=functional_group_formula_files
         conda:
             "envs/pysr.yaml"
         params:
             output_dir=exp_sr_output_dir,
             feature_modes=exp_feature_modes_args,
-            gfp_columns=exp_gfp_columns_args
+            gfp_columns=exp_gfp_columns_args,
+            include_fresh=exp_include_fresh_flag
         shell:
             """
             mkdir -p {params.output_dir}
@@ -114,7 +123,52 @@ if enzyme_model == "experimental":
                 --dataset {input.dataset} \
                 --output-dir {params.output_dir} \
                 --feature-modes {params.feature_modes} \
-                --gfp-columns {params.gfp_columns}
+                --gfp-columns {params.gfp_columns} \
+                {params.include_fresh}
+            """
+
+    rule experimental_functional_group_plots:
+        input:
+            summary=functional_group_summary_output
+        output:
+            png=functional_group_png_output,
+            svg=functional_group_svg_output
+        conda:
+            "envs/pysr.yaml"
+        params:
+            output_dir=exp_sr_output_dir,
+            basename="functional_group_log_r2",
+            variant="legacy"
+        shell:
+            """
+            mkdir -p {params.output_dir}
+            python src/experimental/plot_functional_group_results.py \
+                --summary {input.summary} \
+                --output-dir {params.output_dir} \
+                --basename {params.basename} \
+                --variant {params.variant}
+            """
+
+    rule experimental_functional_group_plots_combined:
+        input:
+            summary=functional_group_summary_output
+        output:
+            png=functional_group_png_combined_output,
+            svg=functional_group_svg_combined_output
+        conda:
+            "envs/pysr.yaml"
+        params:
+            output_dir=exp_sr_output_dir,
+            basename="functional_group_log_r2_combined",
+            variant="combined"
+        shell:
+            """
+            mkdir -p {params.output_dir}
+            python src/experimental/plot_functional_group_results.py \
+                --summary {input.summary} \
+                --output-dir {params.output_dir} \
+                --basename {params.basename} \
+                --variant {params.variant}
             """
 
     rule parameter_inference:
