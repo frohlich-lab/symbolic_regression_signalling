@@ -46,14 +46,28 @@ def load_dataset(file_path, dataset_size=None, features=None):
     # data['P_u_over_tK'] = data['P_u'] / data['tK']
     # data['combined_rate'] = (data['k_off'] + data['k_cat'] + data['k_inact']) / (data['k_D'] * data['k_off'])
 
+    target = 'kcat_cg' if 'kcat_cg' in data.columns else data.columns[-1]
+
     if features and features != "all":
-        data = data[features.split(',')]
+        requested = [col.strip() for col in features.split(',') if col.strip()]
+        available = [col for col in requested if col in data.columns]
+        missing = [col for col in requested if col not in data.columns]
+        if missing:
+            raise KeyError(f"Requested NN features missing from dataset: {missing}")
+        selected = available
+        if target not in selected:
+            selected.append(target)
+        if not selected:
+            raise ValueError("No valid features found for NN training.")
+        data = data[selected]
+    elif target not in data.columns:
+        raise ValueError("Target column not present in dataset.")
     
     # Normalize inputs only (not output)
     scaler_X = StandardScaler()
     data.iloc[:, :-1] = scaler_X.fit_transform(data.iloc[:, :-1])
     
-    sampled_data = data.sample(n=min(dataset_size, len(data))) if dataset_size else data
+    sampled_data = data.sample(n=min(dataset_size, len(data)), random_state=42) if dataset_size else data
 
     return sampled_data, data
 
