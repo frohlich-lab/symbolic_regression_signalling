@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import seaborn as sns
 import torch
+from collections import OrderedDict
 
 from pysr import PySRRegressor
 from scipy.optimize import curve_fit
@@ -27,6 +28,7 @@ from nn_model import load_dataset as nn_load_dataset, train_model, evaluate_mode
 import matplotlib.markers as mmarkers
 import matplotlib.colors as mcolors
 from matplotlib.cm import ScalarMappable
+from matplotlib.lines import Line2D
 from pathlib import Path
 
 from constants import PYSR_CONFIG
@@ -35,6 +37,8 @@ from plot_style import apply_cell_systems_style
 # Suppress all warnings
 warnings.filterwarnings("ignore")
 apply_cell_systems_style()
+
+MODEL_LINE_ORDER = ["Neural Network", "Michaelis-Menten", "PySR"]
 
 # PySR configuration
 
@@ -184,6 +188,169 @@ def _get_eval_partition(models):
         eval_pre = models.get('preprocessed')
 
     return eval_df, eval_pre
+
+
+def _collect_error_distributions(model_dict):
+    distributions = OrderedDict()
+    regimes = _ordered_regimes(model_dict)
+    for regime in regimes:
+        models = model_dict.get(regime)
+        if not models:
+            continue
+
+        data, data_pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            continue
+
+        y_true = data.iloc[:, -1].values
+        X = data.iloc[:, :-1]
+
+        regime_errors = {}
+
+        if 'Neural Network' in MODEL_LINE_ORDER and 'nn' in models and data_pre is not None:
+            try:
+                y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
+                regime_errors['Neural Network'] = np.abs(
+                    np.log(np.maximum(y_pred_nn, EPS)) - np.log(np.maximum(y_true, EPS))
+                )
+            except Exception:
+                pass
+
+        if 'Michaelis-Menten' in MODEL_LINE_ORDER:
+            try:
+                y_pred_mm = michaelis_menten(*X.values.T)
+                regime_errors['Michaelis-Menten'] = np.abs(
+                    np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_true, EPS))
+                )
+            except Exception:
+                pass
+
+        if 'PySR' in MODEL_LINE_ORDER and 'pysr' in models:
+            try:
+                y_pred_pysr = models['pysr'].predict(X.values)
+                regime_errors['PySR'] = np.abs(
+                    np.log(np.maximum(y_pred_pysr, EPS)) - np.log(np.maximum(y_true, EPS))
+                )
+            except Exception:
+                pass
+
+        if regime_errors:
+            distributions[regime] = regime_errors
+
+    return distributions
+
+
+def _errors_to_dataframe(error_dict):
+    records = []
+    for model_name, errors in error_dict.items():
+        if errors is None:
+            continue
+        arr = np.asarray(errors, dtype=float).flatten()
+        arr = arr[~np.isnan(arr)]
+        records.extend({'Model': model_name, 'Log-MAE': value} for value in arr)
+    return pd.DataFrame(records)
+
+
+def _compute_line_stats(error_distributions):
+    stats = {model: {'median': [], 'q1': [], 'q3': []} for model in MODEL_LINE_ORDER}
+    for regime in error_distributions:
+        regime_errors = error_distributions[regime]
+        for model in MODEL_LINE_ORDER:
+            arr = np.asarray(regime_errors.get(model, []), dtype=float)
+            arr = arr[~np.isnan(arr)]
+            if arr.size:
+                stats[model]['median'].append(np.median(arr))
+                stats[model]['q1'].append(np.quantile(arr, 0.25))
+                stats[model]['q3'].append(np.quantile(arr, 0.75))
+            else:
+                stats[model]['median'].append(np.nan)
+                stats[model]['q1'].append(np.nan)
+                stats[model]['q3'].append(np.nan)
+    return stats
+
+
+def _model_color_map():
+    palette = sns.color_palette("Set2", n_colors=len(MODEL_LINE_ORDER))
+    return dict(zip(MODEL_LINE_ORDER, palette))
+
+
+def _lineplot_limits(stats):
+    lowers, uppers = [], []
+    for model in MODEL_LINE_ORDER:
+        lowers.extend([v for v in stats[model]['q1'] if not np.isnan(v)])
+        uppers.extend([v for v in stats[model]['q3'] if not np.isnan(v)])
+
+    if not lowers or not uppers:
+        return None, None
+
+    ymin = min(lowers)
+    ymax = max(uppers)
+    if np.isclose(ymin, ymax):
+        margin = 0.1 * (abs(ymax) if ymax != 0 else 1.0)
+        ymin -= margin
+        ymax += margin
+    else:
+        margin = 0.05 * (ymax - ymin)
+        ymin -= margin
+        ymax += margin
+    return ymin, ymax
+
+
+def _render_noise_regime_lineplot(regimes, stats, output_path, template=False):
+    if not regimes:
+        return
+
+    colors = _model_color_map()
+    x = np.arange(len(regimes))
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    ymin, ymax = _lineplot_limits(stats)
+    if ymin is not None and ymax is not None:
+        ax.set_ylim(ymin, ymax)
+
+    if not template:
+        for model in MODEL_LINE_ORDER:
+            medians = np.array(stats[model]['median'], dtype=float)
+            if medians.size == 0 or np.all(np.isnan(medians)):
+                continue
+            q1 = np.array(stats[model]['q1'], dtype=float)
+            q3 = np.array(stats[model]['q3'], dtype=float)
+            ax.plot(x, medians, label=model, color=colors[model], marker='o', linewidth=2)
+            ax.fill_between(x, q1, q3, color=colors[model], alpha=0.25)
+        ax.legend(loc='upper left', frameon=False)
+    else:
+        handles = [Line2D([0], [0], color=colors[m], marker='o', linewidth=2, label=m) for m in MODEL_LINE_ORDER]
+        ax.legend(handles=handles, loc='upper left', frameon=False)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([_label_for_regime(r) for r in regimes], rotation=20, ha='right')
+    ax.set_xlabel("Noise Regime", fontsize=12)
+    ax.set_ylabel("Log-space MAE\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)", fontsize=12)
+    ax.grid(True, axis='y', linestyle='--', alpha=0.4)
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
+
+def plot_noise_regime_lineplot(error_distributions, output_dir):
+    if not error_distributions:
+        print("No regimes available for line plot.")
+        return
+    regimes = list(error_distributions.keys())
+    stats = _compute_line_stats(error_distributions)
+    output_path = os.path.join(output_dir, "shared/plots/log_mae_noise_regime_lineplot.png")
+    _render_noise_regime_lineplot(regimes, stats, output_path, template=False)
+
+
+def plot_noise_regime_lineplot_template(error_distributions, output_dir):
+    if not error_distributions:
+        print("No regimes available for line plot template.")
+        return
+    regimes = list(error_distributions.keys())
+    stats = _compute_line_stats(error_distributions)
+    output_path = os.path.join(output_dir, "shared/plots/log_mae_noise_regime_lineplot_template.png")
+    _render_noise_regime_lineplot(regimes, stats, output_path, template=True)
 
 def evaluate_models(data, features, output_dir, dataset_size, mode):
         """
@@ -338,8 +505,11 @@ def evaluate_models(data, features, output_dir, dataset_size, mode):
         plot_input_error_correlation(model_dict, output_dir)
         plot_model_error_correlation(model_dict, output_dir)
         plot_nn_vs_mm_response_curves_linear(model_dict, output_dir)
-        plot_horizontal_boxplot_noise_regimes(model_dict, output_dir)
-        plot_vertical_boxplot_noise_regimes(model_dict, output_dir)
+        error_distributions = _collect_error_distributions(model_dict)
+        plot_horizontal_boxplot_noise_regimes(model_dict, output_dir, error_distributions)
+        plot_vertical_boxplot_noise_regimes(model_dict, output_dir, error_distributions)
+        plot_noise_regime_lineplot(error_distributions, output_dir)
+        plot_noise_regime_lineplot_template(error_distributions, output_dir)
 
 def plot_error_distributions(model_dict, output_dir):
     """
@@ -679,7 +849,7 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
         plt.savefig(os.path.join(output_dir, f"{regime}/plots/nn_vs_mm_response_curves_scaled.png"), bbox_inches="tight")
         plt.close()
 
-def plot_horizontal_boxplot_noise_regimes(model_dict, output_dir):
+def plot_horizontal_boxplot_noise_regimes(model_dict, output_dir, error_distributions=None):
     """
     Create a vertical stack of horizontal boxplots (1 per noise regime) showing
     Log-MAE for PySR, Michaelis-Menten, and Neural Network models.
@@ -687,7 +857,10 @@ def plot_horizontal_boxplot_noise_regimes(model_dict, output_dir):
     """
     sns.set(style="whitegrid", font_scale=1.2, rc={"axes.edgecolor": "black", "axes.linewidth": 1.0})
 
-    regimes = _ordered_regimes(model_dict)
+    if error_distributions is None:
+        error_distributions = _collect_error_distributions(model_dict)
+
+    regimes = list(error_distributions.keys())
     if not regimes:
         print("No regimes available for plotting.")
         return
@@ -697,35 +870,12 @@ def plot_horizontal_boxplot_noise_regimes(model_dict, output_dir):
         axes = [axes]
 
     for ax, regime in zip(axes, regimes):
-        if regime not in model_dict:
+        errors = error_distributions.get(regime, {})
+        error_df = _errors_to_dataframe(errors)
+        if error_df.empty:
+            ax.set_visible(False)
             continue
 
-        models = model_dict[regime]
-        data, data_pre = _get_eval_partition(models)
-        if data is None or data.empty:
-            continue
-        y_true = data.iloc[:, -1].values
-        X = data.iloc[:, :-1]
-
-        error_records = []
-
-        # PySR
-        y_pred_pysr = models['pysr'].predict(X.values)
-        err_pysr = np.abs(np.log(np.maximum(y_pred_pysr, EPS)) - np.log(np.maximum(y_true, EPS)))
-        error_records.extend([{'Model': 'PySR', 'Log-MAE': e} for e in err_pysr])
-
-        # Michaelis-Menten
-        y_pred_mm = michaelis_menten(*X.values.T)
-        err_mm = np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_true, EPS)))
-        error_records.extend([{'Model': 'Michaelis-Menten', 'Log-MAE': e} for e in err_mm])
-
-        # Neural Network
-        y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
-        err_nn = np.abs(np.log(np.maximum(y_pred_nn, EPS)) - np.log(np.maximum(y_true, EPS)))
-        error_records.extend([{'Model': 'Neural Network', 'Log-MAE': e} for e in err_nn])
-
-        # Convert and plot
-        error_df = pd.DataFrame(error_records)
         sns.boxplot(
             data=error_df,
             x="Log-MAE",
@@ -753,25 +903,11 @@ def plot_horizontal_boxplot_noise_regimes(model_dict, output_dir):
     if len(regimes) == 1:
         axes = [axes]
     for ax, regime in zip(axes, regimes):
-        if regime not in model_dict:
+        errors = error_distributions.get(regime, {})
+        error_df = _errors_to_dataframe(errors)
+        if error_df.empty:
+            ax.set_visible(False)
             continue
-        models = model_dict[regime]
-        data, data_pre = _get_eval_partition(models)
-        if data is None or data.empty:
-            continue
-        y_true = data.iloc[:, -1].values
-        X = data.iloc[:, :-1]
-        error_records = []
-        y_pred_pysr = models['pysr'].predict(X.values)
-        err_pysr = np.abs(np.log(np.maximum(y_pred_pysr, EPS)) - np.log(np.maximum(y_true, EPS)))
-        error_records.extend([{'Model': 'PySR', 'Log-MAE': e} for e in err_pysr])
-        y_pred_mm = michaelis_menten(*X.values.T)
-        err_mm = np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_true, EPS)))
-        error_records.extend([{'Model': 'Michaelis-Menten', 'Log-MAE': e} for e in err_mm])
-        y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
-        err_nn = np.abs(np.log(np.maximum(y_pred_nn, EPS)) - np.log(np.maximum(y_true, EPS)))
-        error_records.extend([{'Model': 'Neural Network', 'Log-MAE': e} for e in err_nn])
-        error_df = pd.DataFrame(error_records)
         sns.boxplot(data=error_df, x="Log-MAE", y="Model", palette="Set2", orient="h", ax=ax, showfliers=False)
         ax.set_title(_label_for_regime(regime), fontsize=14, weight='bold')
         ax.set_ylabel("")
@@ -783,7 +919,7 @@ def plot_horizontal_boxplot_noise_regimes(model_dict, output_dir):
     plt.savefig(os.path.join(output_dir, "shared/plots/log_mae_horizontal_boxplot_no_outliers.png"), dpi=300)
     plt.close()
 
-def plot_vertical_boxplot_noise_regimes(model_dict, output_dir):
+def plot_vertical_boxplot_noise_regimes(model_dict, output_dir, error_distributions=None):
     """
     Create a single-row of vertical boxplots (1 per noise regime) showing
     Log-MAE for PySR, Michaelis-Menten, and Neural Network models.
@@ -791,7 +927,10 @@ def plot_vertical_boxplot_noise_regimes(model_dict, output_dir):
     """
     sns.set(style="whitegrid", font_scale=1.2, rc={"axes.edgecolor": "black", "axes.linewidth": 1.0})
 
-    regimes = _ordered_regimes(model_dict)
+    if error_distributions is None:
+        error_distributions = _collect_error_distributions(model_dict)
+
+    regimes = list(error_distributions.keys())
     if not regimes:
         print("No regimes available for plotting (vertical).")
         return
@@ -801,37 +940,12 @@ def plot_vertical_boxplot_noise_regimes(model_dict, output_dir):
         axes = [axes]
 
     for ax, regime in zip(axes, regimes):
-        if regime not in model_dict:
+        errors = error_distributions.get(regime, {})
+        error_df = _errors_to_dataframe(errors)
+        if error_df.empty:
             ax.set_visible(False)
             continue
 
-        models = model_dict[regime]
-        data, data_pre = _get_eval_partition(models)
-        if data is None or data.empty:
-            ax.set_visible(False)
-            continue
-        y_true = data.iloc[:, -1].values
-        X = data.iloc[:, :-1]
-
-        error_records = []
-
-        # PySR
-        y_pred_pysr = models['pysr'].predict(X.values)
-        err_pysr = np.abs(np.log(np.maximum(y_pred_pysr, EPS)) - np.log(np.maximum(y_true, EPS)))
-        error_records.extend([{'Model': 'PySR', 'Log-MAE': e} for e in err_pysr])
-
-        # Michaelis-Menten
-        y_pred_mm = michaelis_menten(*X.values.T)
-        err_mm = np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_true, EPS)))
-        error_records.extend([{'Model': 'Michaelis-Menten', 'Log-MAE': e} for e in err_mm])
-
-        # Neural Network
-        y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
-        err_nn = np.abs(np.log(np.maximum(y_pred_nn, EPS)) - np.log(np.maximum(y_true, EPS)))
-        error_records.extend([{'Model': 'Neural Network', 'Log-MAE': e} for e in err_nn])
-
-        # Plot vertical
-        error_df = pd.DataFrame(error_records)
         sns.boxplot(
             data=error_df,
             x="Model",
@@ -860,27 +974,11 @@ def plot_vertical_boxplot_noise_regimes(model_dict, output_dir):
     if len(regimes) == 1:
         axes = [axes]
     for ax, regime in zip(axes, regimes):
-        if regime not in model_dict:
+        errors = error_distributions.get(regime, {})
+        error_df = _errors_to_dataframe(errors)
+        if error_df.empty:
             ax.set_visible(False)
             continue
-        models = model_dict[regime]
-        data, data_pre = _get_eval_partition(models)
-        if data is None or data.empty:
-            ax.set_visible(False)
-            continue
-        y_true = data.iloc[:, -1].values
-        X = data.iloc[:, :-1]
-        error_records = []
-        y_pred_pysr = models['pysr'].predict(X.values)
-        err_pysr = np.abs(np.log(np.maximum(y_pred_pysr, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
-        error_records.extend([{'Model': 'PySR', 'Log-MAE': e} for e in err_pysr])
-        y_pred_mm = michaelis_menten(*X.values.T)
-        err_mm = np.abs(np.log(np.maximum(y_pred_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
-        error_records.extend([{'Model': 'Michaelis-Menten', 'Log-MAE': e} for e in err_mm])
-        y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
-        err_nn = np.abs(np.log(np.maximum(y_pred_nn, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
-        error_records.extend([{'Model': 'Neural Network', 'Log-MAE': e} for e in err_nn])
-        error_df = pd.DataFrame(error_records)
         sns.boxplot(data=error_df, x="Model", y="Log-MAE", palette="Set2", orient="v", ax=ax, showfliers=False)
         ax.set_title(_label_for_regime(regime), fontsize=14, weight='bold')
         ax.tick_params(axis='both', labelsize=11)

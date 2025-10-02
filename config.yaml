@@ -32,7 +32,7 @@ dataset_sizes:
   pysindy: 10000       # PySINDy needs around 100-1000 samples
   aifeynman: 5000     # AI Feynman needs around 500-5000 samples
   dso: 10000          # DSO needs around 2000-10000 samples
-  kan: 10000          # KAN needs around 2000-10000 samples
+  kan: 4000           # KAN needs fewer samples to keep runtime manageable
   pysr: 3000         # PySR needs around 1000-10000 samples
   nn: 10000           # Neural network needs around 1000-10000 samples
 
