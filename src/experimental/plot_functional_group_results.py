@@ -219,9 +219,11 @@ def plot_log_r2(summary: pd.DataFrame, output_dir: Path, basename: str, variant:
     for group in groups:
         train = int(samples.loc[group, "train_samples"]) if group in samples.index else 0
         test = int(samples.loc[group, "test_samples"]) if group in samples.index else 0
+        lines = [group]
         proteins = marker_lookup.get(group, [])
-        protein_label = ", ".join(proteins) if proteins else group
-        lines = [protein_label, f"train={train:,} test={test:,}"]
+        if len(proteins) > 2:
+            lines.append(", ".join(proteins))
+        lines.append(f"train={train:,} test={test:,}")
         y_labels.append("\n".join(lines))
 
     ax.set_yticks(y)

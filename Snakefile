@@ -220,6 +220,8 @@ else:
             f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_vertical_boxplot.png",
             f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_horizontal_boxplot_no_outliers.png",
             f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_vertical_boxplot_no_outliers.png",
+            f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_deviation_lineplot.png",
+            f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_deviation_lineplot_template.png",
             f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/plots/regime_loss_comparison.png",
             f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/plots/error_landscape.png",
             f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/results/pysr/all_pysr_formulas.txt",
@@ -227,6 +229,8 @@ else:
             f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/plots/log_mae_vertical_boxplot.png",
             f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/plots/log_mae_horizontal_boxplot_no_outliers.png",
             f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/plots/log_mae_vertical_boxplot_no_outliers.png",
+            f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/plots/log_mae_noise_regime_lineplot.png",
+            f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/plots/log_mae_noise_regime_lineplot_template.png",
             f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/regime_loss_comparison.png",
             f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/error_landscape.png",
             f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/results/pysr/all_pysr_formulas.txt",
@@ -234,6 +238,8 @@ else:
             f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_vertical_boxplot.png",
             f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_horizontal_boxplot_no_outliers.png",
             f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_vertical_boxplot_no_outliers.png",
+            f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_noise_regime_lineplot.png",
+            f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_noise_regime_lineplot_template.png",
             "data/panmodel_plots/symbolic_model_r2_scores_bar.png",
             "data/panmodel_plots/symbolic_model_r2_scores_scatter.png",
             "data/panmodel_plots/all_symbolic_formulas.txt"
@@ -458,7 +464,9 @@ rule noise_regimes:
         f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/plots/log_mae_horizontal_boxplot.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/plots/log_mae_vertical_boxplot.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/plots/log_mae_horizontal_boxplot_no_outliers.png",
-        f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/plots/log_mae_vertical_boxplot_no_outliers.png"
+        f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/plots/log_mae_vertical_boxplot_no_outliers.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/plots/log_mae_noise_regime_lineplot.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes_filtered/shared/plots/log_mae_noise_regime_lineplot_template.png"
     conda:
         "envs/pysr.yaml"
     params:
@@ -481,7 +489,9 @@ rule noise_regimes_full:
         f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_horizontal_boxplot.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_vertical_boxplot.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_horizontal_boxplot_no_outliers.png",
-        f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_vertical_boxplot_no_outliers.png"
+        f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_vertical_boxplot_no_outliers.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_noise_regime_lineplot.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_noise_regime_lineplot_template.png"
     conda:
         "envs/pysr.yaml"
     params:
@@ -504,7 +514,9 @@ rule mm_deviation_regimes:
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_horizontal_boxplot.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_vertical_boxplot.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_horizontal_boxplot_no_outliers.png",
-        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_vertical_boxplot_no_outliers.png"
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_vertical_boxplot_no_outliers.png",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_deviation_lineplot.png",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae_deviation_lineplot_template.png"
     conda:
         "envs/pysr.yaml"
     params:

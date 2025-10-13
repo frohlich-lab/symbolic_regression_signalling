@@ -22,6 +22,8 @@ from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
 from sklearn.utils import resample
 
+from utils.seeding import seed_everything
+
 # Columns that should not be passed to the regression model as inputs.
 EXCLUDE_COLUMNS = {"p-ERK1-2_dt", "p-MEK1-2_dt", "marker", "timepoint", "GFP_bin"}
 
@@ -555,6 +557,7 @@ def main() -> None:
     output_dir: Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    seed_everything(args.random_state)
     LOGGER.info("Starting functional group symbolic regression")
     if args.include_fresh_groups:
         LOGGER.info("Including %d curated fresh marker groups", len(GROUPS_FRESH))

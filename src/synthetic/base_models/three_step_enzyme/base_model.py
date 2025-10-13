@@ -42,8 +42,8 @@ Rule(
 )
 
 es = S(k=1) % K(p=1)
-# kcat = Parameter('kcat')
-# Rule('step2', es >> P(phospho='u', k=1) % K(p=1), kcat)
+kcat = Parameter('kcat')
+Rule('step2', es >> S(k=None) + K(p=None), kcat)
 
 Rule(
     'step3',

@@ -7,18 +7,51 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import StandardScaler
 import os
+import copy
+
+from utils.seeding import resolve_seed, seed_everything
+
+
+def _build_optimizer(model):
+    name = OPTIMIZER_NAME.lower()
+    if name == "adam":
+        return optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    if name == "adamw":
+        return optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    raise ValueError(f"Unsupported optimizer '{OPTIMIZER_NAME}'.")
+
+
+def _build_scheduler(optimizer):
+    name = SCHEDULER_NAME.lower()
+    if name in {"none", ""}:
+        return None
+    if name == "reducelronplateau":
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.5)
+    if name == "cosineannealinglr":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(10, EPOCHS // 2))
+    raise ValueError(f"Unsupported scheduler '{SCHEDULER_NAME}'.")
 
 # Hyperparameters for the neural network
-LEARNING_RATE = 5e-3
-BATCH_SIZE = 1024
+LEARNING_RATE = 3e-3
+BATCH_SIZE = 512
 EPOCHS = 600
-HIDDEN_LAYERS = [512, 256, 128]
+HIDDEN_LAYERS = [256, 128, 64]
 ACTIVATION = nn.ReLU  # smooth saturation curve approximation
+DROPOUT_RATE = 0.1
+WEIGHT_DECAY = 0.0
+OPTIMIZER_NAME = "AdamW"
+SCHEDULER_NAME = "ReduceLROnPlateau"
+VAL_FRACTION = 0.1
+TEST_FRACTION = 0.1
+EARLY_STOP_PATIENCE = 40
+VAL_CHECK_INTERVAL = 10
+MIN_DELTA = 1e-4
+MIN_N_SAMPLES = 10_000
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class NeuralNet(nn.Module):
-    def __init__(self, input_dim, output_dim, dropout_rate=0.1):
+    def __init__(self, input_dim, output_dim, dropout_rate=DROPOUT_RATE):
         super(NeuralNet, self).__init__()
         layers = []
         prev_dim = input_dim
@@ -36,7 +69,7 @@ class NeuralNet(nn.Module):
     def forward(self, x):
         return self.model(x)
 
-def load_dataset(file_path, dataset_size=None, features=None):
+def load_dataset(file_path, dataset_size=None, features=None, seed: int = 42):
     """
     Load dataset, normalize input features, and optionally sample.
     """
@@ -63,53 +96,150 @@ def load_dataset(file_path, dataset_size=None, features=None):
     elif target not in data.columns:
         raise ValueError("Target column not present in dataset.")
     
-    # Normalize inputs only (not output)
+    # Drop non-numeric input columns (e.g., condition_id) before scaling
+    non_numeric_cols = data.iloc[:, :-1].select_dtypes(exclude=[np.number]).columns.tolist()
+    if non_numeric_cols:
+        print(
+            "[WARN nn_model] Dropping non-numeric feature columns before scaling:",
+            ", ".join(non_numeric_cols),
+        )
+        data = data.drop(columns=non_numeric_cols)
+        if target not in data.columns:
+            raise ValueError(
+                "Target column removed when dropping non-numeric features. Please adjust feature selection."
+            )
+        # Ensure target remains last
+        ordered_cols = [c for c in data.columns if c != target] + [target]
+        data = data[ordered_cols]
+
+    # Convert to numeric and clean infinities/NaNs before scaling
+    feature_frame = data.iloc[:, :-1].apply(pd.to_numeric, errors='coerce')
+    target_series = pd.to_numeric(data.iloc[:, -1], errors='coerce')
+
+    feature_cols = list(feature_frame.columns)
+    combined = pd.concat([feature_frame, target_series], axis=1)
+    combined.columns = feature_cols + [target]
+
+    combined.replace([np.inf, -np.inf], np.nan, inplace=True)
+    before_drop = len(combined)
+    combined.dropna(inplace=True)
+    if len(combined) < before_drop:
+        print(
+            f"[WARN nn_model] Dropped {before_drop - len(combined)} rows containing NaN/inf values before scaling."
+        )
+
+    if combined.empty:
+        raise ValueError("No valid rows remaining after removing NaN/inf values.")
+
+    data = combined.reset_index(drop=True)
+
+    if dataset_size:
+        desired = max(dataset_size, MIN_N_SAMPLES)
+    else:
+        desired = max(len(data), MIN_N_SAMPLES)
+
+    sample_size = min(desired, len(data))
+    if sample_size < MIN_N_SAMPLES and sample_size < desired:
+        print(
+            f"[WARN nn_model] Dataset provides only {sample_size} samples (< {MIN_N_SAMPLES}); using all available rows."
+        )
+
+    sampled_data = data.sample(n=sample_size, random_state=resolve_seed(seed)) if sample_size < len(data) else data
+
+    total = len(sampled_data)
+    if total < 3:
+        raise ValueError("Need at least 3 samples to form train/val/test splits")
+
+    rng = np.random.default_rng(resolve_seed(seed))
+    indices = np.arange(total)
+    rng.shuffle(indices)
+
+    n_test = max(1, int(total * TEST_FRACTION))
+    n_val = max(1, int(total * VAL_FRACTION))
+    if total - n_test - n_val < 1:
+        n_train = total - 2
+        n_test = max(1, n_test)
+        n_val = max(1, total - n_train - n_test)
+    else:
+        n_train = total - n_test - n_val
+
+    train_idx = indices[:n_train]
+    val_idx = indices[n_train:n_train + n_val]
+    test_idx = indices[n_train + n_val:]
+
+    def _reset(df):
+        return df.reset_index(drop=True)
+
+    train_data = _reset(sampled_data.iloc[train_idx])
+    val_data = _reset(sampled_data.iloc[val_idx])
+    test_data = _reset(sampled_data.iloc[test_idx])
+
     scaler_X = StandardScaler()
-    data.iloc[:, :-1] = scaler_X.fit_transform(data.iloc[:, :-1])
-    
-    sampled_data = data.sample(n=min(dataset_size, len(data)), random_state=42) if dataset_size else data
+    scaler_X.fit(train_data[feature_cols])
 
-    return sampled_data, data
+    def _apply_scaler(df: pd.DataFrame) -> pd.DataFrame:
+        transformed = scaler_X.transform(df[feature_cols])
+        transformed_df = pd.DataFrame(transformed, columns=feature_cols, index=df.index)
+        transformed_df[target] = df[target].values
+        return transformed_df.reset_index(drop=True)
 
-def train_model(sampled_data, output_path, verbose=False, retrain=True):
+    train_scaled = _apply_scaler(train_data)
+    val_scaled = _apply_scaler(val_data) if len(val_data) else val_data.copy()
+    test_scaled = _apply_scaler(test_data)
+    full_scaled = _apply_scaler(data)
+
+    return train_scaled, val_scaled, test_scaled, full_scaled
+
+def train_model(train_data, val_data, output_path, verbose=False, retrain=True, seed: int = 42):
     """
     Train a neural network on log-transformed targets with early stopping.
     """
 
-    input_dim = sampled_data.shape[1] - 1
+    seed_everything(resolve_seed(seed))
 
-    model = NeuralNet(input_dim=input_dim, output_dim=1).to(device)
+    input_dim = train_data.shape[1] - 1
+    model = NeuralNet(input_dim=input_dim, output_dim=1, dropout_rate=DROPOUT_RATE).to(device)
 
     if not retrain and os.path.exists(output_path):
         if verbose:
             print(f"Loading pretrained model from {output_path}")
         model.load_state_dict(torch.load(output_path, map_location=device))
         return model
-    
-    X_sampled = sampled_data.iloc[:, :-1].values
-    y_sampled = sampled_data.iloc[:, -1].values
+    X_train = torch.from_numpy(train_data.iloc[:, :-1].values.astype(np.float32))
+    y_train = torch.from_numpy(train_data.iloc[:, -1].values.astype(np.float32).reshape(-1, 1))
 
-    X_sampled = torch.tensor(X_sampled, dtype=torch.float32).to(device)
-    y_sampled = torch.tensor(y_sampled, dtype=torch.float32).view(-1, 1).to(device)
+    train_dataset = TensorDataset(X_train, y_train)
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        generator=generator,
+    )
 
-    dataset = TensorDataset(X_sampled, y_sampled)
-    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
+    if len(val_data) > 0:
+        X_val = torch.from_numpy(val_data.iloc[:, :-1].values.astype(np.float32)).to(device)
+        y_val = torch.from_numpy(val_data.iloc[:, -1].values.astype(np.float32).reshape(-1, 1)).to(device)
+    else:
+        X_val = None
+        y_val = None
 
-    model = NeuralNet(input_dim=X_sampled.shape[1], output_dim=1).to(device)
     criterion = nn.L1Loss()
-    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.5)
+    optimizer = _build_optimizer(model)
+    scheduler = _build_scheduler(optimizer)
 
     best_loss = float('inf')
-    best_model_state = None
+    best_model_state = copy.deepcopy(model.state_dict())
     epochs_no_improve = 0
-    early_patience = 30
 
     for epoch in range(EPOCHS):
         model.train()
         epoch_losses = []
 
-        for batch_X, batch_y in dataloader:
+        for batch_X, batch_y in train_loader:
+            batch_X = batch_X.to(device)
+            batch_y = batch_y.to(device)
             optimizer.zero_grad()
             predictions = model(batch_X)
             loss = criterion(predictions, batch_y)
@@ -117,22 +247,39 @@ def train_model(sampled_data, output_path, verbose=False, retrain=True):
             optimizer.step()
             epoch_losses.append(loss.item())
 
-        avg_loss = np.mean(epoch_losses)
-        scheduler.step(avg_loss)
+        train_loss = float(np.mean(epoch_losses)) if epoch_losses else float('inf')
 
-        if avg_loss < best_loss - 1e-5:
-            best_loss = avg_loss
-            best_model_state = model.state_dict()
+        if X_val is not None:
+            model.eval()
+            with torch.no_grad():
+                val_predictions = model(X_val)
+                val_loss = criterion(val_predictions, y_val).item()
+        else:
+            val_loss = train_loss
+
+        monitor = val_loss
+        if scheduler is not None:
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(monitor)
+            else:
+                scheduler.step()
+
+        if monitor < best_loss - MIN_DELTA:
+            best_loss = monitor
+            best_model_state = copy.deepcopy(model.state_dict())
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1
-            if epochs_no_improve >= early_patience:
+            if epochs_no_improve >= EARLY_STOP_PATIENCE:
                 if verbose:
                     print(f"Early stopping at epoch {epoch}")
                 break
 
-        if verbose and epoch % 10 == 0:
-            print(f"Epoch {epoch}: Log-MAE = {avg_loss:.4f}")
+        if verbose and (epoch % VAL_CHECK_INTERVAL == 0 or epoch == EPOCHS - 1):
+            if X_val is not None:
+                print(f"Epoch {epoch}: train Log-MAE = {train_loss:.4f} | val Log-MAE = {val_loss:.4f}")
+            else:
+                print(f"Epoch {epoch}: train Log-MAE = {train_loss:.4f}")
 
     model.load_state_dict(best_model_state)
     torch.save(model.state_dict(), output_path)
@@ -145,8 +292,8 @@ def evaluate_model(model, full_data):
     """
     Evaluate model on full dataset (in original space), return MAE and predictions.
     """
-    X_full = full_data.iloc[:, :-1].values
-    y_full = full_data.iloc[:, -1].values
+    X_full = full_data.iloc[:, :-1].values.astype(np.float32)
+    y_full = full_data.iloc[:, -1].values.astype(np.float32)
 
     X_tensor = torch.tensor(X_full, dtype=torch.float32).to(device)
 
@@ -165,12 +312,19 @@ def main():
     parser.add_argument('--dataset_size', type=int, help='Max sample size')
     parser.add_argument('--features', type=str, help='Comma-separated features or "all"')
     parser.add_argument('--output', required=True, help='Model output path')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for training')
     
     args = parser.parse_args()
-    sampled_data, full_data = load_dataset(args.dataset, args.dataset_size, args.features)
-    model = train_model(sampled_data, args.output, verbose=True)
-    mae, _ = evaluate_model(model, full_data)
-    print("MAE on full data:", mae) 
+    seed_everything(resolve_seed(args.seed))
+    train_data, val_data, test_data, full_data = load_dataset(
+        args.dataset,
+        args.dataset_size,
+        args.features,
+        seed=args.seed,
+    )
+    model = train_model(train_data, val_data, args.output, verbose=True, seed=args.seed)
+    mae, _ = evaluate_model(model, test_data)
+    print("MAE on test split:", mae) 
 
 if __name__ == '__main__':
     main()

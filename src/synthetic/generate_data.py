@@ -11,6 +11,8 @@ import bionetgen as bng
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src' / 'utils'))
+from seeding import seed_everything
 
 from data_conf import N_SAMPLES, N_T, PAR_LB, PAR_UB
 from common import get_model_dir
@@ -43,7 +45,7 @@ var = sys.argv[2]  # Pass 'static' or 'dynamic' as the second argument
 save_dir = 'data/' + model_name + '/' + var + '/raw/'
 os.makedirs(save_dir, exist_ok=True)
 
-np.random.seed(0)
+seed_everything(0)
 
 # import pysb model
 outdir = get_model_dir(model_name)

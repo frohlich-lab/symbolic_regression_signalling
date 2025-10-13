@@ -10,6 +10,7 @@ Usage:
 import os
 import argparse
 import warnings
+import logging
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -31,6 +32,7 @@ from matplotlib.cm import ScalarMappable
 
 from constants import PYSR_CONFIG
 from plot_style import apply_cell_systems_style
+from utils.seeding import resolve_seed, seed_everything
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")
@@ -38,6 +40,17 @@ apply_cell_systems_style()
 
 # Numerical stability constant for logs
 EPS = 1e-20
+
+MODEL_LINE_ORDER = ["PySR", "Michaelis-Menten", "Neural Network"]
+MODEL_COLORS = {
+    "PySR": "#E69F00",
+    "Michaelis-Menten": "#009E73",
+    "Neural Network": "#0072B2",
+}
+
+MM_REQUIRED_COLS = ["P_u", "k_off", "k_D", "k_cat", "tK"]
+
+LOGGER = logging.getLogger(__name__)
 
 # Define biochemical regimes (decoupled)
 # Pair A: P_u vs tK
@@ -55,7 +68,7 @@ def michaelis_menten(P_u, k_off, k_D, k_cat, tK, k_inact=None):
     if k_inact is not None:
         denom = P_u + ((k_cat + k_off + k_inact) / (k_off * k_D))
     else:
-        denom = P_u + ((k_cat + k_off) / k_off * k_D)
+        denom = P_u + ((k_cat + k_off) / (k_off * k_D))
     return (tK * P_u) / denom
 
 def load_dataset(file_path, dataset_size=None, features=None):
@@ -63,6 +76,47 @@ def load_dataset(file_path, dataset_size=None, features=None):
     if features and features != "all":
         data = data[features.split(',')]
     return data.map(np.exp)
+
+
+def _mm_components(df: pd.DataFrame):
+    missing = [col for col in MM_REQUIRED_COLS if col not in df.columns]
+    if missing:
+        raise KeyError(f"Missing columns for Michaelis-Menten evaluation: {missing}")
+    arrays = [pd.to_numeric(df[col], errors='coerce').to_numpy() for col in MM_REQUIRED_COLS]
+    k_inact = None
+    if 'k_inact' in df.columns:
+        raw = pd.to_numeric(df['k_inact'], errors='coerce').to_numpy()
+        if np.isfinite(raw).any():
+            k_inact = np.where(np.isfinite(raw), raw, 0.0)
+    return (*arrays, k_inact)
+
+
+def _mm_predict(df: pd.DataFrame):
+    P_u, k_off, k_D, k_cat, tK, k_inact = _mm_components(df)
+    return michaelis_menten(P_u, k_off, k_D, k_cat, tK, k_inact)
+
+
+def _mm_components_row(row: pd.Series):
+    required = ["k_off", "k_D", "k_cat", "tK"]
+    missing = [col for col in required if col not in row.index or not np.isfinite(row[col])]
+    if missing:
+        raise ValueError(f"Row missing columns for Michaelis-Menten evaluation: {missing}")
+    k_off = float(row['k_off'])
+    k_D = float(row['k_D'])
+    k_cat = float(row['k_cat'])
+    tK = float(row['tK'])
+    k_inact_val = row.get('k_inact')
+    try:
+        k_inact_val = float(k_inact_val)
+    except (TypeError, ValueError):
+        k_inact_val = np.nan
+    k_inact = k_inact_val if np.isfinite(k_inact_val) else None
+    return k_off, k_D, k_cat, tK, k_inact
+
+
+def _mm_predict_row(row: pd.Series, pu_values):
+    k_off, k_D, k_cat, tK, k_inact = _mm_components_row(row)
+    return michaelis_menten(pu_values, k_off, k_D, k_cat, tK, k_inact)
 
 def run_pysr(X, y, model_path, output_file):
     run_dir = os.path.dirname(model_path)
@@ -125,7 +179,8 @@ def _get_eval_partition(models):
 
     return eval_df, eval_pre
 
-def evaluate_models(data, features, output_dir, dataset_size):
+def evaluate_models(data, features, output_dir, dataset_size, seed: int) -> None:
+    seed_everything(seed)
     os.makedirs(output_dir, exist_ok=True)
     losses, model_dict = {}, {}
 
@@ -144,7 +199,7 @@ def evaluate_models(data, features, output_dir, dataset_size):
 
         capped_size = min(dataset_size, len(filtered)) if dataset_size else len(filtered)
         sample = (
-            filtered.sample(n=capped_size, random_state=42)
+            filtered.sample(n=capped_size, random_state=seed)
             if capped_size < len(filtered)
             else filtered.copy()
         )
@@ -164,7 +219,7 @@ def evaluate_models(data, features, output_dir, dataset_size):
             continue
 
         train_df, test_df = train_test_split(
-            sample, test_size=test_size, random_state=42, shuffle=True
+            sample, test_size=test_size, random_state=seed, shuffle=True
         )
         train_df = train_df.reset_index(drop=True)
         test_df = test_df.reset_index(drop=True)
@@ -194,7 +249,7 @@ def evaluate_models(data, features, output_dir, dataset_size):
         losses[regime] = log_mae
         print(f"PySR Loss (test): {log_mae}")
 
-        y_pred_mm = michaelis_menten(*test_df.iloc[:, :-1].values.T)
+        y_pred_mm = _mm_predict(test_df)
         mm_loss = np.mean(
             np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_test, EPS)))
         )
@@ -221,10 +276,21 @@ def evaluate_models(data, features, output_dir, dataset_size):
         nn_path = os.path.join(output_dir, f"{regime}/models/nn/model.pth")
         if os.path.exists(nn_path):
             print(f"Loading existing NN model for {regime}")
-            nn_model = train_model(train_pre, nn_path, verbose=False, retrain=False)
+            nn_model = train_model(
+                train_pre,
+                nn_path,
+                verbose=False,
+                retrain=False,
+                seed=seed,
+            )
         else:
             print(f"Training new NN model for {regime}")
-            nn_model = train_model(train_pre, nn_path, verbose=False)
+            nn_model = train_model(
+                train_pre,
+                nn_path,
+                verbose=False,
+                seed=seed,
+            )
         nn_loss, _ = evaluate_model(nn_model, test_pre)
         losses[f"{regime}_nn"] = nn_loss
         print(f"NN Loss (test): {nn_loss}")
@@ -272,7 +338,7 @@ def plot_error_distributions(model_dict, output_dir):
         error_records.extend([{'Model': 'PySR', 'Regime': regime, 'Log-MAE': e} for e in err_pysr])
 
         # MM
-        y_pred_mm = michaelis_menten(*data.iloc[:, :-1].values.T)
+        y_pred_mm = _mm_predict(data)
         err_mm = np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_true, EPS)))
         error_records.extend([{'Model': 'Michaelis-Menten', 'Regime': regime, 'Log-MAE': e} for e in err_mm])
 
@@ -293,7 +359,15 @@ def plot_error_distributions(model_dict, output_dir):
     for i, regime in enumerate(regimes):
         ax = axes[i]
         subset = error_df[error_df['Regime'] == regime]
-        sns.violinplot(data=subset, x='Model', y='Log-MAE', ax=ax, inner='box', palette='Set2')
+        sns.violinplot(
+            data=subset,
+            x='Model',
+            y='Log-MAE',
+            ax=ax,
+            inner='box',
+            palette=[MODEL_COLORS[m] for m in MODEL_LINE_ORDER],
+            order=MODEL_LINE_ORDER,
+        )
         ax.set_title(regime)
         ax.set_xlabel('')
         if i % ncols == 0:
@@ -356,7 +430,7 @@ def plot_model_subregimes(model_dict, output_dir):
                 if model == 'pysr':
                     y_pred = model_dict[regime]['pysr'].predict(X.values)
                 elif model == 'mm':
-                    y_pred = michaelis_menten(*data.iloc[:, :-1].values.T)
+                    y_pred = _mm_predict(data)
                 elif model == 'nn':
                     if data_pre is None:
                         continue
@@ -395,7 +469,7 @@ def plot_model_subregimes(model_dict, output_dir):
                 if model == 'pysr':
                     y_pred = model_dict[regime]['pysr'].predict(X.values)
                 elif model == 'mm':
-                    y_pred = michaelis_menten(*data.iloc[:, :-1].values.T)
+                    y_pred = _mm_predict(data)
                 elif model == 'nn':
                     if data_pre is None:
                         continue
@@ -405,9 +479,11 @@ def plot_model_subregimes(model_dict, output_dir):
                 x_vals = (data["P_u"] / data["tK"]).values
                 # Map Pair A subregimes to y scaling similar to prior convention
                 if regime == 'pu_over_tk_high':
-                    y_vals = michaelis_menten(*data.iloc[:, :-1].values.T) / data["P_u"]
+                    mm_vals = _mm_predict(data)
+                    y_vals = mm_vals / data["P_u"]
                 elif regime == 'pu_over_tk_low':
-                    y_vals = michaelis_menten(*data.iloc[:, :-1].values.T) / data["tK"]
+                    mm_vals = _mm_predict(data)
+                    y_vals = mm_vals / data["tK"]
                 else:
                     continue
 
@@ -472,7 +548,7 @@ def plot_input_error_correlation(model_dict, output_dir):
 
         error_df = pd.DataFrame()
         error_df['pysr_error'] = np.abs(np.log(np.maximum(models['pysr'].predict(X.values), EPS)) - np.log(np.maximum(y_true, EPS)))
-        y_pred_mm = michaelis_menten(*data.iloc[:, :-1].values.T)
+        y_pred_mm = _mm_predict(data)
         error_df['mm_error'] = np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_true, EPS)))
         y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
         error_df['nn_error'] = np.abs(np.log(np.maximum(y_pred_nn, EPS)) - np.log(np.maximum(y_true, EPS)))
@@ -528,7 +604,8 @@ def plot_model_error_correlation(model_dict, output_dir):
         X = data.iloc[:, :-1]
 
         err_pysr = np.abs(np.log(np.maximum(models['pysr'].predict(X.values), EPS)) - np.log(np.maximum(y_true, EPS)))
-        err_mm = np.abs(np.log(np.maximum(michaelis_menten(*data.iloc[:, :-1].values.T), EPS)) - np.log(np.maximum(y_true, EPS)))
+        mm_pred = _mm_predict(data)
+        err_mm = np.abs(np.log(np.maximum(mm_pred, EPS)) - np.log(np.maximum(y_true, EPS)))
         err_nn = np.abs(
             np.log(
                 np.maximum(
@@ -626,13 +703,20 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
                 y_nn = np.exp(model(X_varied_inputs_pre))
 
             # MM prediction
-            y_mm = michaelis_menten(pu_vals, *data.iloc[idx, 1:-1].values.T)
+            y_mm = _mm_predict_row(data.iloc[idx], pu_vals)
 
             # Plot
             ax = axs[i]
-            ax.plot(pu_vals, y_nn, label="Neural Network", color='tab:blue')
-            ax.plot(pu_vals, y_mm, label="Michaelis-Menten", color='tab:red', linestyle='--')
-            ax.scatter(original_pu, y_true[idx], color='tab:blue', marker='o', s=100, label="Groundtruth kcat_cg")
+            ax.plot(pu_vals, y_nn, label="Neural Network", color=MODEL_COLORS['Neural Network'])
+            ax.plot(pu_vals, y_mm, label="Michaelis-Menten", color=MODEL_COLORS['Michaelis-Menten'], linestyle='--')
+            ax.scatter(
+                original_pu,
+                y_true[idx],
+                color=MODEL_COLORS['Neural Network'],
+                marker='o',
+                s=100,
+                label="Groundtruth kcat_cg",
+            )
             ax.axvline(original_pu, color='gray', linestyle=':', linewidth=1.5, label='Sampled P_u')  
             ax.set_xlim(0.01 * original_pu, 5 * original_pu)
             ax.set_xlabel("P_u")
@@ -692,7 +776,7 @@ def plot_horizontal_boxplot_subregimes(model_dict, output_dir):
         error_records.extend([{'Model': 'PySR', 'Log-MAE': e} for e in err_pysr])
 
         # Michaelis-Menten
-        y_pred_mm = michaelis_menten(*X.values.T)
+        y_pred_mm = _mm_predict(X)
         err_mm = np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_true, EPS)))
         error_records.extend([{'Model': 'Michaelis-Menten', 'Log-MAE': e} for e in err_mm])
 
@@ -709,8 +793,9 @@ def plot_horizontal_boxplot_subregimes(model_dict, output_dir):
             data=error_df,
             x="Log-MAE",
             y="Model",
-            palette="Set2",
+            palette=MODEL_COLORS,
             orient="h",
+            order=MODEL_LINE_ORDER,
             ax=ax
         )
         ax.set_title(subregime_labels[regime], fontsize=14, weight='bold')
@@ -744,7 +829,7 @@ def plot_horizontal_boxplot_subregimes(model_dict, output_dir):
         err_pysr = np.abs(np.log(np.maximum(y_pred_pysr, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
         error_records.extend([{'Model': 'PySR', 'Log-MAE': e} for e in err_pysr])
 
-        y_pred_mm = michaelis_menten(*X.values.T)
+        y_pred_mm = _mm_predict(X)
         err_mm = np.abs(np.log(np.maximum(y_pred_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
         error_records.extend([{'Model': 'Michaelis-Menten', 'Log-MAE': e} for e in err_mm])
 
@@ -757,8 +842,9 @@ def plot_horizontal_boxplot_subregimes(model_dict, output_dir):
             data=error_df,
             x="Log-MAE",
             y="Model",
-            palette="Set2",
+            palette=MODEL_COLORS,
             orient="h",
+            order=MODEL_LINE_ORDER,
             ax=ax,
             showfliers=False,
         )
@@ -804,7 +890,7 @@ def plot_kinetic_sanity_scatters(model_dict, output_dir, full_dataset=None):
     dfA = get_full_df()
     if dfA is not None and not dfA.empty:
         y_true = dfA.iloc[:, -1].values
-        y_mm = michaelis_menten(*dfA.iloc[:, :-1].values.T)
+        y_mm = _mm_predict(dfA)
         err_mm = np.abs(np.log(np.maximum(y_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
         x_ratio = (dfA['P_u'] / dfA['tK']).values
 
@@ -833,7 +919,7 @@ def plot_kinetic_sanity_scatters(model_dict, output_dir, full_dataset=None):
     dfB = get_full_df()
     if dfB is not None and not dfB.empty:
         y_true = dfB.iloc[:, -1].values
-        y_mm = michaelis_menten(*dfB.iloc[:, :-1].values.T)
+        y_mm = _mm_predict(dfB)
         err_mm = np.abs(np.log(np.maximum(y_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
         km = compute_km(dfB).values
         x_ratio = km / dfB['P_u'].values
@@ -942,7 +1028,7 @@ def plot_vertical_boxplot_subregimes(model_dict, output_dir):
         error_records.extend([{'Model': 'PySR', 'Log-MAE': e} for e in err_pysr])
 
         # Michaelis-Menten
-        y_pred_mm = michaelis_menten(*X.values.T)
+        y_pred_mm = _mm_predict(X)
         err_mm = np.abs(np.log(np.maximum(y_pred_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
         error_records.extend([{'Model': 'Michaelis-Menten', 'Log-MAE': e} for e in err_mm])
 
@@ -959,8 +1045,9 @@ def plot_vertical_boxplot_subregimes(model_dict, output_dir):
             data=error_df,
             x="Model",
             y="Log-MAE",
-            palette="Set2",
+            palette=MODEL_COLORS,
             orient="v",
+            order=MODEL_LINE_ORDER,
             ax=ax
         )
         ax.set_title(subregime_labels[regime], fontsize=14, weight='bold')
@@ -997,7 +1084,7 @@ def plot_vertical_boxplot_subregimes(model_dict, output_dir):
         y_pred_pysr = models['pysr'].predict(X.values)
         err_pysr = np.abs(np.log(np.maximum(y_pred_pysr, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
         error_records.extend([{'Model': 'PySR', 'Log-MAE': e} for e in err_pysr])
-        y_pred_mm = michaelis_menten(*X.values.T)
+        y_pred_mm = _mm_predict(X)
         err_mm = np.abs(np.log(np.maximum(y_pred_mm, 1e-25)) - np.log(np.maximum(y_true, 1e-25)))
         error_records.extend([{'Model': 'Michaelis-Menten', 'Log-MAE': e} for e in err_mm])
         y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
@@ -1005,7 +1092,16 @@ def plot_vertical_boxplot_subregimes(model_dict, output_dir):
         error_records.extend([{'Model': 'Neural Network', 'Log-MAE': e} for e in err_nn])
         # No "Theory" line for decoupled regimes
         error_df = pd.DataFrame(error_records)
-        sns.boxplot(data=error_df, x="Model", y="Log-MAE", palette="Set2", orient="v", ax=ax, showfliers=False)
+        sns.boxplot(
+            data=error_df,
+            x="Model",
+            y="Log-MAE",
+            palette=MODEL_COLORS,
+            orient="v",
+            order=MODEL_LINE_ORDER,
+            ax=ax,
+            showfliers=False,
+        )
         ax.set_title(subregime_labels[regime], fontsize=14, weight='bold')
         ax.tick_params(axis='both', labelsize=11)
         for label in ax.get_xticklabels():
@@ -1024,11 +1120,19 @@ def main():
     parser.add_argument('--dataset', required=True, help='CSV dataset path')
     parser.add_argument('--dataset_size', type=int, help='Max samples to use')
     parser.add_argument('--features', type=str, help='Comma-separated list of features or "all"')
+    parser.add_argument('--seed', type=int, default=42, help='Base random seed for reproducibility')
     args = parser.parse_args()
 
+    seed = seed_everything(resolve_seed(args.seed))
     data = load_dataset(args.dataset, args.dataset_size, args.features)
     dir_path = '/'.join(args.dataset.split('/')[:3])
-    evaluate_models(data, args.features, output_dir=dir_path+'/kinetic_regimes/', dataset_size=args.dataset_size)
+    evaluate_models(
+        data,
+        args.features,
+        output_dir=dir_path + '/kinetic_regimes/',
+        dataset_size=args.dataset_size,
+        seed=seed,
+    )
 
 
 if __name__ == '__main__':

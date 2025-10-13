@@ -56,10 +56,10 @@ Rule(
 # ES on the dimer (same definition used in dynamic)
 es = S(k=1) % K(p=1, d=2) % K(d=2)
 
-# kcat = Parameter('kcat')
+kcat = Parameter('kcat')
 
-# # --- REMOVED: real catalytic conversion (irreversible sink) ---
-# Rule('step2', es >> P(phospho='u', k=1) % K(p=1, d=2) % K(d=2), kcat)
+# --- REMOVED: real catalytic conversion (irreversible sink) ---
+Rule('step2', es >> S(k=None) + K(p=None, d=1) % K(d=1), kcat)
 
 # Product binding (adapted: remove 'phospho' site, match Monomer definitions)
 Rule(
