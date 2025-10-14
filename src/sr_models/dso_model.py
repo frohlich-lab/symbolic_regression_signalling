@@ -1,9 +1,25 @@
-import json
 import argparse
-import pandas as pd
-import numpy as np
+import json
 import os
-from dso import DeepSymbolicRegressor
+import random
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+DSO_IMPORT_ERROR = None
+try:
+    from dso import DeepSymbolicRegressor
+except Exception as exc:  # pragma: no cover - defensive
+    repo_root = Path(__file__).resolve().parents[2]
+    dso_path = repo_root / "src" / "dso"
+    sys.path.insert(0, str(dso_path))
+    try:
+        from dso import DeepSymbolicRegressor
+    except Exception as inner_exc:  # pragma: no cover - defensive
+        DSO_IMPORT_ERROR = inner_exc
+        DeepSymbolicRegressor = None
 
 import tensorflow as tf
 tf.keras.backend.clear_session()  # Clears TensorFlow state
@@ -17,6 +33,14 @@ LEARNING_RATE = 0.0005
 OPTIMIZER = "adam"
 POLY_REGRESSOR = "dso_least_squares"
 CONFIG_FILE_PATH = "./data/dso/dso_config.json"
+
+def seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        tf.random.set_seed(seed)
+    except AttributeError:
+        pass
 
 def create_dso_config(dataset_path):
     """Creates a JSON configuration file for DSO based on specified hyperparameters."""
@@ -53,7 +77,7 @@ def create_dso_config(dataset_path):
 TARGET_COLUMN = 'kcat_cg'
 
 
-def load_dataset(file_path, dataset_size=None, features=None):
+def load_dataset(file_path, dataset_size=None, features=None, seed=None):
     """Loads dataset from a CSV file, samples if specified, and selects specified features."""
     data = pd.read_csv(file_path)
     target = TARGET_COLUMN if TARGET_COLUMN in data.columns else data.columns[-1]
@@ -68,7 +92,7 @@ def load_dataset(file_path, dataset_size=None, features=None):
         selected = list(data.columns)
     data = data[selected]
     if dataset_size:
-        data = data.sample(n=min(dataset_size, len(data)))
+        data = data.sample(n=min(dataset_size, len(data)), random_state=seed)
 
     if not data.empty:
         input_cols = data.columns[:-1]
@@ -97,9 +121,19 @@ def main():
     parser.add_argument('--dataset_size', type=int, help='Number of samples to use from the dataset')
     parser.add_argument('--features', type=str, help='Comma-separated list of features to use')
     parser.add_argument('--temp_file', required=True, help='Path to save best equations during training')
+    parser.add_argument('--seed', type=int, help='Random seed for reproducibility')
 
     args = parser.parse_args()
-    data = load_dataset(args.dataset, args.dataset_size, args.features)
+    if DSO_IMPORT_ERROR is not None:
+        raise RuntimeError(
+            "Failed to import the local DSO package. Please ensure the conda "
+            "environment provides a compatible tensorflow/absl stack. "
+            f"Original error: {DSO_IMPORT_ERROR}"
+        )
+
+    if args.seed is not None:
+        seed_everything(args.seed)
+    data = load_dataset(args.dataset, args.dataset_size, args.features, args.seed)
     dir_path = os.path.join(*args.dataset.split('/')[0:3])
     dataset_path = os.path.join("./", dir_path, "sr_comparison/dso/processed_dataset_dso.csv")
     os.makedirs(os.path.dirname(dataset_path), exist_ok=True)

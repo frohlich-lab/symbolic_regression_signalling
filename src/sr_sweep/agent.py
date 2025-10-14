@@ -1,8 +1,7 @@
 """Orchestrate hyperparameter sweeps for symbolic regression methods."""
 
-from __future__ import annotations
-
 import argparse
+import ast
 import concurrent.futures
 import itertools
 import json
@@ -14,22 +13,22 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
+import statistics
 import pandas as pd
-
-try:
-    import yaml
-except ImportError:  # pragma: no cover - optional dependency for YAML configs
-    yaml = None
 
 try:
     import wandb
 except ImportError:  # pragma: no cover - wandb is optional in offline mode
     wandb = None
+try:
+    import yaml  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency for YAML configs
+    yaml = None
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -84,27 +83,47 @@ METHOD_OUTPUT_SUFFIX = {
     "aifeynman": "aifeynman_solution.txt",
 }
 
-CONDA_ENVIRONMENTS = {
-    "pysr": "pysr_env",
-    "pysindy": "pysindy_env",
-    "dso": "dso_env",
-    "kan": "kan_env",
-    "aifeynman": "aifeynman_env",
+CONDA_ENVIRONMENTS: Dict[str, Optional[str]] = {
+    # When executed via Snakemake, each sweep rule already activates the
+    # appropriate conda environment, so we reuse the current interpreter.
+    "pysr": None,
+    "pysindy": None,
+    "dso": None,
+    "kan": None,
+    "aifeynman": None,
+}
+
+METHOD_SEED_FLAGS = {
+    "pysr": "--seed",
+    "pysindy": "--seed",
+    "dso": "--seed",
+    "kan": "--seed",
+    "aifeynman": "--seed",
 }
 
 MethodConfig = Dict[str, Iterable]
 
 
-@dataclass
 class TrialResult:
-    method: str
-    config: Dict[str, object]
-    loss: Optional[float]
-    formula: Optional[str]
-    output_path: Path
-    runtime_seconds: float
-    succeeded: bool
-    error: Optional[str] = None
+    def __init__(
+        self,
+        method: str,
+        config: Dict[str, object],
+        loss: Optional[float],
+        formula: Optional[str],
+        output_path: Path,
+        runtime_seconds: float,
+        succeeded: bool,
+        error: Optional[str] = None,
+    ) -> None:
+        self.method = method
+        self.config = config
+        self.loss = loss
+        self.formula = formula
+        self.output_path = output_path
+        self.runtime_seconds = runtime_seconds
+        self.succeeded = succeeded
+        self.error = error
 
 
 def parse_args() -> argparse.Namespace:
@@ -124,6 +143,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-workers", type=int, default=4, help="Maximum concurrent subprocesses")
     parser.add_argument("--cpus-per-run", type=int, default=2, help="CPUs allocated per subprocess")
     parser.add_argument("--seed", type=int, default=2025, help="Random seed used for sampling the search space")
+    parser.add_argument("--repeat-seeds", type=str, default="0,1,2", help="Comma-separated seeds for top-config repeats")
+
+    # Backward-compatible aliases with underscores
+    parser.add_argument("--dataset_size", dest="dataset_size", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--max_runtime_seconds", dest="max_runtime_seconds", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--max_trials", dest="max_trials", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--max_workers", dest="max_workers", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--cpus_per_run", dest="cpus_per_run", type=int, help=argparse.SUPPRESS)
+
     return parser.parse_args()
 
 
@@ -136,9 +164,10 @@ def load_search_space(path: Optional[str]) -> Dict[str, MethodConfig]:
     suffix = search_path.suffix.lower()
 
     if suffix in {".yaml", ".yml"}:
-        if yaml is None:
-            raise RuntimeError("PyYAML is required to read YAML search spaces. Install it or provide JSON.")
-        data = yaml.safe_load(payload)
+        if yaml is not None:
+            data = yaml.safe_load(payload)
+        else:
+            data = _parse_simple_yaml(payload)
     else:
         try:
             data = json.loads(payload)
@@ -177,6 +206,25 @@ def enumerate_trials(
     return trials
 
 
+def parse_repeat_seed_list(spec: str) -> List[int]:
+    seeds: List[int] = []
+    for part in (spec or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            seeds.append(int(part))
+        except ValueError:
+            continue
+    return seeds or [0, 1, 2]
+
+
+def compute_model_size(formula: Optional[str]) -> Optional[int]:
+    if not formula:
+        return None
+    return len("".join(formula.split()))
+
+
 def build_command(
     method: str,
     script_path: Path,
@@ -193,8 +241,6 @@ def build_command(
         script_args.extend(["--dataset_size", str(dataset_size)])
     if features:
         script_args.extend(["--features", features])
-
-    script_args.extend(["--max_runtime_seconds", str(max_runtime_seconds)])
 
     for key, value in config.items():
         flag = f"--{key}"
@@ -281,6 +327,7 @@ def run_trial(
     config: Dict[str, object],
     args: argparse.Namespace,
     run_dir: Path,
+    extra_cli_args: Optional[List[str]] = None,
 ) -> TrialResult:
     script_path = METHOD_SCRIPTS[method]
     temp_file = run_dir / METHOD_OUTPUT_SUFFIX[method]
@@ -296,6 +343,9 @@ def run_trial(
         config,
         args.max_runtime_seconds,
     )
+
+    if extra_cli_args:
+        cmd.extend(extra_cli_args)
 
     env = os.environ.copy()
     env.setdefault("OMP_NUM_THREADS", str(args.cpus_per_run))
@@ -319,8 +369,9 @@ def run_trial(
             cmd,
             cwd=str(REPO_ROOT),
             env=env,
-            capture_output=True,
-            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
             timeout=args.max_runtime_seconds + 60,
         )
         result.runtime_seconds = time.monotonic() - start
@@ -417,9 +468,13 @@ def main() -> None:
     args.dataset = str(Path(args.dataset).resolve())
 
     methods = [m.strip() for m in args.methods.split(',') if m.strip()]
-    for method in methods:
-        if method not in METHOD_SCRIPTS:
-            raise ValueError(f"Unknown method requested: {method}")
+    if len(methods) != 1:
+        raise ValueError(
+            f"Provide exactly one method per sweep run; received {len(methods)} methods: {methods}"
+        )
+    method = methods[0]
+    if method not in METHOD_SCRIPTS:
+        raise ValueError(f"Unknown method requested: {method}")
 
     search_space = load_search_space(args.search_space)
     trials = enumerate_trials(methods, search_space, args.max_trials, args.seed)
@@ -441,12 +496,20 @@ def main() -> None:
         args.cpus_per_run,
     )
 
+    trials_root = output_root / "trials"
+    trials_root.mkdir(exist_ok=True)
+
+    best_results: Dict[str, Optional[TrialResult]] = {method: None}
+
     with concurrent.futures.ProcessPoolExecutor(max_workers=args.max_workers) as executor:
+        method_counters: Dict[str, int] = defaultdict(int)
         futures: Dict[concurrent.futures.Future, Tuple[str, Dict[str, object], Path]] = {}
-        for idx, (method, config) in enumerate(trials):
-            run_dir = output_root / f"trial_{idx:03d}_{method}"
-            future = executor.submit(run_trial, method, config, args, run_dir)
-            futures[future] = (method, config, run_dir)
+        for _, (trial_method, config) in enumerate(trials):
+            idx = method_counters[trial_method]
+            method_counters[trial_method] += 1
+            run_dir = trials_root / f"{trial_method}_trial_{idx:03d}"
+            future = executor.submit(run_trial, trial_method, config, args, run_dir)
+            futures[future] = (trial_method, config, run_dir)
 
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
@@ -461,6 +524,136 @@ def main() -> None:
 
             status = "OK" if result.succeeded else "FAIL"
             print(f"[{status}] {result.method} loss={result.loss} formula={result.formula}")
+
+            current_best = best_results.get(result.method)
+            result_loss = result.loss if result.loss is not None else math.nan
+            current_loss = (
+                current_best.loss if current_best and current_best.loss is not None else math.nan
+            )
+            if not math.isnan(result_loss) and (
+                current_best is None or math.isnan(current_loss) or result_loss < current_loss
+            ):
+                best_results[result.method] = result
+
+    best_record = best_results.get(method)
+    if best_record is None:
+        raise RuntimeError(f"No successful trials produced a valid result for method '{method}'.")
+
+    best_config_path = output_root / "best_config.json"
+    best_payload = {
+        "method": method,
+        "loss": best_record.loss,
+        "config": best_record.config,
+        "formula": best_record.formula,
+        "output_path": str(best_record.output_path),
+        "model_size": compute_model_size(best_record.formula),
+    }
+    best_config_path.write_text(json.dumps(best_payload, indent=2))
+    print(f"[SWEEP] Best config saved to {best_config_path}")
+
+    if best_record.formula:
+        formula_path = output_root / "best_formula.txt"
+        formula_path.write_text(best_record.formula)
+        print(f"[SWEEP] Best formula saved to {formula_path}")
+
+    repeat_seeds = parse_repeat_seed_list(args.repeat_seeds)
+    repeats_root = output_root / "top_repeats"
+    repeats_root.mkdir(exist_ok=True)
+
+    seed_flag = METHOD_SEED_FLAGS.get(method)
+    repeat_payload: List[Dict[str, object]] = []
+
+    for seed in repeat_seeds:
+        repeat_dir = repeats_root / f"seed_{seed}"
+        extra_args = [seed_flag, str(seed)] if seed_flag else None
+        repeat_result = run_trial(
+            method,
+            best_record.config,
+            args,
+            repeat_dir,
+            extra_cli_args=extra_args,
+        )
+        repeat_payload.append(
+            {
+                "seed": seed,
+                "loss": repeat_result.loss,
+                "formula": repeat_result.formula,
+                "model_size": compute_model_size(repeat_result.formula),
+                "runtime_seconds": repeat_result.runtime_seconds,
+                "succeeded": repeat_result.succeeded,
+                "error": repeat_result.error,
+            }
+        )
+
+    valid_losses = [
+        entry["loss"]
+        for entry in repeat_payload
+        if entry["loss"] is not None and not math.isnan(entry["loss"])
+    ]
+    best_loss = min(valid_losses) if valid_losses else None
+    median_loss = statistics.median(valid_losses) if valid_losses else None
+
+    best_repeat_record: Optional[Dict[str, object]] = None
+    if valid_losses:
+        best_loss_value = min(valid_losses)
+        for entry in repeat_payload:
+            if entry["loss"] == best_loss_value:
+                best_repeat_record = entry
+                break
+
+    best_formula = best_repeat_record["formula"] if best_repeat_record else None
+    repeat_summary = {
+        "seeds": repeat_seeds,
+        "results": repeat_payload,
+        "best_loss": best_loss,
+        "median_loss": median_loss,
+        "best_model_size": compute_model_size(best_formula) if best_formula else None,
+        "best_formula": best_formula,
+    }
+
+    repeats_path = output_root / "best_config_repeats.json"
+    repeats_path.write_text(json.dumps(repeat_summary, indent=2))
+    print(f"[SWEEP] Repeat summary saved to {repeats_path}")
+
+
+def _parse_simple_yaml(text: str) -> Dict[str, MethodConfig]:
+    result: Dict[str, Dict[str, object]] = {}
+    current_key: Optional[str] = None
+    indent_prefix = None
+
+    for raw_line in text.splitlines():
+        if not raw_line.strip() or raw_line.strip().startswith("#"):
+            continue
+
+        if not raw_line.startswith(" "):
+            key = raw_line.strip().rstrip(":")
+            result[key] = {}
+            current_key = key
+            indent_prefix = None
+            continue
+
+        if current_key is None:
+            raise ValueError("Invalid YAML structure: value before key.")
+
+        if indent_prefix is None:
+            indent_prefix = len(raw_line) - len(raw_line.lstrip(" "))
+
+        line = raw_line[indent_prefix:].strip()
+        if ":" not in line:
+            raise ValueError(f"Unsupported YAML line: {raw_line}")
+        name, value = line.split(":", 1)
+        name = name.strip()
+        value = value.strip()
+        if not value:
+            raise ValueError(f"Missing value in YAML line: {raw_line}")
+        try:
+            parsed_value = ast.literal_eval(value)
+        except Exception as exc:  # pragma: no cover - defensive
+            raise ValueError(f"Unable to parse value '{value}' in YAML line '{raw_line}'") from exc
+
+        result[current_key][name] = parsed_value
+
+    return result
 
 
 if __name__ == "__main__":
