@@ -348,7 +348,7 @@ rule pysr:
     conda:
         "envs/pysr.yaml"
     params:
-        dataset_size=config["dataset_sizes"]["pysr"],
+        dataset_size=config["dataset_sizes"].get("nn", config["dataset_sizes"]["pysr"]),
         features=features
     shell:
         symbolic_regression_rule("pysr", "{input.train}", "{params.dataset_size}", "{params.features}", "{output.temp_file}")

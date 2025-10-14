@@ -18,6 +18,8 @@ def _build_optimizer(model):
         return optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     if name == "adamw":
         return optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    if name == "rmsprop":
+        return optim.RMSprop(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY, momentum=0.9)
     raise ValueError(f"Unsupported optimizer '{OPTIMIZER_NAME}'.")
 
 
@@ -29,24 +31,27 @@ def _build_scheduler(optimizer):
         return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.5)
     if name == "cosineannealinglr":
         return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(10, EPOCHS // 2))
+    if name == "exponentiallr":
+        return torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.96)
     raise ValueError(f"Unsupported scheduler '{SCHEDULER_NAME}'.")
 
 # Hyperparameters for the neural network
-LEARNING_RATE = 3e-3
-BATCH_SIZE = 512
+LEARNING_RATE = 0.001460982239915984
+BATCH_SIZE = 2048
 EPOCHS = 600
-HIDDEN_LAYERS = [256, 128, 64]
-ACTIVATION = nn.ReLU  # smooth saturation curve approximation
-DROPOUT_RATE = 0.1
-WEIGHT_DECAY = 0.0
-OPTIMIZER_NAME = "AdamW"
-SCHEDULER_NAME = "ReduceLROnPlateau"
+HIDDEN_LAYERS = [256]
+ACTIVATION = nn.SiLU  # tuned surrogate behaves best with SiLU
+DROPOUT_RATE = 0.05
+WEIGHT_DECAY = 8.878553948934488e-04
+OPTIMIZER_NAME = "RMSprop"
+SCHEDULER_NAME = "CosineAnnealingLR"
 VAL_FRACTION = 0.1
 TEST_FRACTION = 0.1
-EARLY_STOP_PATIENCE = 40
+EARLY_STOP_PATIENCE = 80
 VAL_CHECK_INTERVAL = 10
 MIN_DELTA = 1e-4
 MIN_N_SAMPLES = 10_000
+GRAD_CLIP_NORM = 1.5
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -244,6 +249,8 @@ def train_model(train_data, val_data, output_path, verbose=False, retrain=True, 
             predictions = model(batch_X)
             loss = criterion(predictions, batch_y)
             loss.backward()
+            if GRAD_CLIP_NORM and GRAD_CLIP_NORM > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_NORM)
             optimizer.step()
             epoch_losses.append(loss.item())
 

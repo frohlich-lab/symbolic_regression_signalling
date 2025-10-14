@@ -18,28 +18,29 @@ from nn_model import evaluate_model, load_dataset, train_model
 ACTIVATION_LOOKUP = {
     "ReLU": nn.ReLU,
     "SiLU": nn.SiLU,
+    "Tanh": nn.Tanh,
 }
 
 
 SEARCH_SPACE_SPEC = {
     "learning_rate": {
         "type": "loguniform",
-        "low": 1e-5,
-        "high": 1e-2,
+        "low": 5e-5,
+        "high": 5e-2,
     },
     "batch_size": {
         "type": "categorical",
-        "choices": [256, 512, 1024],
+        "choices": [256, 512, 1024, 2048],
     },
     "hidden_layers": {
         "type": "categorical",
         "choices": [
+            {"layers": [128], "dropout": 0.0},
+            {"layers": [256], "dropout": 0.05},
             {"layers": [256, 128], "dropout": 0.1},
             {"layers": [256, 256, 128], "dropout": 0.1},
-            {"layers": [256, 128, 64], "dropout": 0.1},
-            {"layers": [128, 128, 64], "dropout": 0.1},
-            {"layers": [256, 128, 128, 64], "dropout": 0.1},
-            {"layers": [128, 128, 128, 128], "dropout": 0.1},
+            {"layers": [512, 256, 128], "dropout": 0.15},
+            {"layers": [512, 256, 128, 64], "dropout": 0.2},
         ],
     },
     "dropout_rate": {
@@ -50,7 +51,7 @@ SEARCH_SPACE_SPEC = {
     },
     "weight_decay": {
         "type": "loguniform",
-        "low": 1e-6,
+        "low": 1e-7,
         "high": 1e-2,
     },
     "activation": {
@@ -59,17 +60,23 @@ SEARCH_SPACE_SPEC = {
     },
     "optimizer": {
         "type": "categorical",
-        "choices": ["Adam", "AdamW"],
+        "choices": ["Adam", "AdamW", "RMSprop"],
     },
     "scheduler": {
         "type": "categorical",
-        "choices": ["None", "ReduceLROnPlateau", "CosineAnnealingLR"],
+        "choices": ["None", "ReduceLROnPlateau", "CosineAnnealingLR", "ExponentialLR"],
     },
     "early_stopping_patience": {
         "type": "int",
         "low": 20,
-        "high": 60,
+        "high": 80,
         "step": 10,
+    },
+    "gradient_clip_norm": {
+        "type": "float",
+        "low": 0.0,
+        "high": 5.0,
+        "step": 0.5,
     },
 }
 
@@ -84,6 +91,7 @@ def _apply_params(params: Dict[str, Any]) -> None:
     nn_model.OPTIMIZER_NAME = params["optimizer"]
     nn_model.SCHEDULER_NAME = params["scheduler"]
     nn_model.EARLY_STOP_PATIENCE = params["early_stopping_patience"]
+    nn_model.GRAD_CLIP_NORM = params["gradient_clip_norm"]
 
 
 def _serialise_trials(trials: List[optuna.trial.FrozenTrial]) -> List[Dict[str, Any]]:
@@ -170,11 +178,12 @@ def main() -> None:
             "batch_size": trial.suggest_categorical("batch_size", SEARCH_SPACE_SPEC["batch_size"]["choices"]),
             "hidden_layers": trial.suggest_categorical("hidden_layers", SEARCH_SPACE_SPEC["hidden_layers"]["choices"]),
             "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.3, step=0.05),
-            "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True),
+            "weight_decay": trial.suggest_float("weight_decay", 1e-7, 1e-2, log=True),
             "activation": trial.suggest_categorical("activation", list(ACTIVATION_LOOKUP.keys())),
-            "optimizer": trial.suggest_categorical("optimizer", ["Adam", "AdamW"]),
-            "scheduler": trial.suggest_categorical("scheduler", ["None", "ReduceLROnPlateau", "CosineAnnealingLR"]),
-            "early_stopping_patience": trial.suggest_int("early_stopping_patience", 20, 60, step=10),
+            "optimizer": trial.suggest_categorical("optimizer", ["Adam", "AdamW", "RMSprop"]),
+            "scheduler": trial.suggest_categorical("scheduler", ["None", "ReduceLROnPlateau", "CosineAnnealingLR", "ExponentialLR"]),
+            "early_stopping_patience": trial.suggest_int("early_stopping_patience", 20, 80, step=10),
+            "gradient_clip_norm": trial.suggest_float("gradient_clip_norm", 0.0, 5.0, step=0.5),
         }
 
         _apply_params(params)

@@ -273,11 +273,21 @@ def evaluate_models(data, features, output_dir, dataset_size, seed: int) -> None
             columns=list(sample.columns),
         )
 
+        train_split, val_split = train_test_split(
+            train_pre,
+            test_size=0.1,
+            random_state=seed,
+            shuffle=True,
+        )
+        train_split = train_split.reset_index(drop=True)
+        val_split = val_split.reset_index(drop=True)
+
         nn_path = os.path.join(output_dir, f"{regime}/models/nn/model.pth")
         if os.path.exists(nn_path):
             print(f"Loading existing NN model for {regime}")
             nn_model = train_model(
-                train_pre,
+                train_split,
+                val_split,
                 nn_path,
                 verbose=False,
                 retrain=False,
@@ -286,7 +296,8 @@ def evaluate_models(data, features, output_dir, dataset_size, seed: int) -> None
         else:
             print(f"Training new NN model for {regime}")
             nn_model = train_model(
-                train_pre,
+                train_split,
+                val_split,
                 nn_path,
                 verbose=False,
                 seed=seed,

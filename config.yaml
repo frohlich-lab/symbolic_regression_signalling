@@ -1,7 +1,7 @@
 # config.yaml
 data_type: "static"  # Options: "dynamic" or "static"
 
-enzyme_model: "two_step_enzyme"
+enzyme_model: "three_step_enzyme_dimer"
 
 # Model selection
 models: ["pysr"] #, "pysindy", "kan", "dso"] #, "aifeynman", 
