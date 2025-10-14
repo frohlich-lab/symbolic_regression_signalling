@@ -57,6 +57,17 @@ temp_files = [
 ]
 formula_files = [f"data/{enzyme_model}/{data_type}/sr_comparison/results/formula_{model}.txt" for model in models]
 
+sweep_best_configs = {
+    "pysindy": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/pysindy/best_config.json",
+    "aifeynman": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/aifeynman/best_config.json",
+    "dso": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/dso/best_config.json",
+    "kan": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/kan/best_config.json",
+    "pysr": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/pysr/best_config.json",
+}
+
+SR_SWEEP_SEARCH_SPACE = "sweeps/sr_default_search.yaml"
+
+
 
 # Define output files for the entire workflow (Snakemake will skip existing ones)
 if enzyme_model == "experimental":
@@ -274,6 +285,156 @@ else:
             python src/preprocessing.py --train {input.train} --test {input.test} --valid {input.valid} --output {output.merged} --train-output {output.train_split} --test-output {output.test_split} --target_feature {params.target_feature}
             """
 
+if "pysindy" in sweep_best_configs:
+    rule sweep_pysindy:
+        input:
+            train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv"
+        output:
+            config_file=sweep_best_configs["pysindy"]
+        conda:
+            "envs/pysindy.yaml"
+        params:
+            dataset_size=config["dataset_sizes"]["pysindy"],
+            features=features,
+            search_space=SR_SWEEP_SEARCH_SPACE,
+            timeout=config["timeout_duration"],
+            max_trials=50
+        shell:
+            """
+            mkdir -p $(dirname {output.config_file})
+            python src/sr_sweep/agent.py \
+                --dataset {input.train} \
+                --dataset_size {params.dataset_size} \
+                --features {params.features} \
+                --methods pysindy \
+                --search-space {params.search_space} \
+                --max-runtime-seconds {params.timeout} \
+                --max-workers 2 \
+                --cpus-per-run 1 \
+                --max-trials {params.max_trials} \
+                --output-dir $(dirname {output.config_file})
+            """
+
+if "aifeynman" in sweep_best_configs:
+    rule sweep_aifeynman:
+        input:
+            train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv"
+        output:
+            config_file=sweep_best_configs["aifeynman"]
+        conda:
+            "envs/aifeynman.yaml"
+        params:
+            dataset_size=config["dataset_sizes"]["aifeynman"],
+            features=features,
+            search_space=SR_SWEEP_SEARCH_SPACE,
+            timeout=config["timeout_duration"],
+            max_trials=50
+        shell:
+            """
+            mkdir -p $(dirname {output.config_file})
+            python src/sr_sweep/agent.py \
+                --dataset {input.train} \
+                --dataset_size {params.dataset_size} \
+                --features {params.features} \
+                --methods aifeynman \
+                --search-space {params.search_space} \
+                --max-runtime-seconds {params.timeout} \
+                --max-workers 2 \
+                --cpus-per-run 1 \
+                --max-trials {params.max_trials} \
+                --output-dir $(dirname {output.config_file})
+            """
+
+if "dso" in sweep_best_configs:
+    rule sweep_dso:
+        input:
+            train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv"
+        output:
+            config_file=sweep_best_configs["dso"]
+        conda:
+            "envs/dso.yaml"
+        params:
+            dataset_size=config["dataset_sizes"]["dso"],
+            features=features,
+            search_space=SR_SWEEP_SEARCH_SPACE,
+            timeout=config["timeout_duration"],
+            max_trials=50
+        shell:
+            """
+            mkdir -p $(dirname {output.config_file})
+            python src/sr_sweep/agent.py \
+                --dataset {input.train} \
+                --dataset_size {params.dataset_size} \
+                --features {params.features} \
+                --methods dso \
+                --search-space {params.search_space} \
+                --max-runtime-seconds {params.timeout} \
+                --max-workers 2 \
+                --cpus-per-run 1 \
+                --max-trials {params.max_trials} \
+                --output-dir $(dirname {output.config_file})
+            """
+
+if "kan" in sweep_best_configs:
+    rule sweep_kan:
+        input:
+            train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv"
+        output:
+            config_file=sweep_best_configs["kan"]
+        conda:
+            "envs/kan.yaml"
+        params:
+            dataset_size=config["dataset_sizes"]["kan"],
+            features=features,
+            search_space=SR_SWEEP_SEARCH_SPACE,
+            timeout=config["timeout_duration"],
+            max_trials=50
+        shell:
+            """
+            mkdir -p $(dirname {output.config_file})
+            python src/sr_sweep/agent.py \
+                --dataset {input.train} \
+                --dataset_size {params.dataset_size} \
+                --features {params.features} \
+                --methods kan \
+                --search-space {params.search_space} \
+                --max-runtime-seconds {params.timeout} \
+                --max-workers 2 \
+                --cpus-per-run 1 \
+                --max-trials {params.max_trials} \
+                --output-dir $(dirname {output.config_file})
+            """
+
+if "pysr" in sweep_best_configs:
+    rule sweep_pysr:
+        input:
+            train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv"
+        output:
+            config_file=sweep_best_configs["pysr"]
+        conda:
+            "envs/pysr.yaml"
+        params:
+            dataset_size=config["dataset_sizes"]["pysr"],
+            features=features,
+            search_space=SR_SWEEP_SEARCH_SPACE,
+            timeout=config["timeout_duration"],
+            max_trials=50
+        shell:
+            """
+            mkdir -p $(dirname {output.config_file})
+            python src/sr_sweep/agent.py \
+                --dataset {input.train} \
+                --dataset_size {params.dataset_size} \
+                --features {params.features} \
+                --methods pysr \
+                --search-space {params.search_space} \
+                --max-runtime-seconds {params.timeout} \
+                --max-workers 2 \
+                --cpus-per-run 1 \
+                --max-trials {params.max_trials} \
+                --output-dir $(dirname {output.config_file})
+            """
+
 # Function to generate shell commands for symbolic regression with timeout and optional installs
 def symbolic_regression_rule(model, dataset, dataset_size, features, temp_file):
     install_cmds = {
@@ -290,7 +451,8 @@ def symbolic_regression_rule(model, dataset, dataset_size, features, temp_file):
 # Rules for symbolic regression for each model
 rule pysindy:
     input:
-        train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv"
+        train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv",
+        sweep=sweep_best_configs["pysindy"]
     output:
         temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_pysindy.txt")
     conda:
@@ -303,7 +465,8 @@ rule pysindy:
 
 rule aifeynman:
     input:
-        train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv"
+        train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv",
+        sweep=sweep_best_configs["aifeynman"]
     output:
         temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_aifeynman.txt")
     conda:
@@ -316,7 +479,8 @@ rule aifeynman:
 
 rule dso:
     input:
-        train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv"
+        train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv",
+        sweep=sweep_best_configs["dso"]
     output:
         temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_dso.txt")
     conda:
@@ -329,7 +493,8 @@ rule dso:
 
 rule kan:
     input:
-        train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv"
+        train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv",
+        sweep=sweep_best_configs["kan"]
     output:
         temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_kan.txt")
     conda:
@@ -342,13 +507,14 @@ rule kan:
 
 rule pysr:
     input:
-        train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv"
+        train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv",
+        sweep=sweep_best_configs["pysr"]
     output:
         temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/hall_of_fame.csv")
     conda:
         "envs/pysr.yaml"
     params:
-        dataset_size=config["dataset_sizes"].get("nn", config["dataset_sizes"]["pysr"]),
+        dataset_size=config["dataset_sizes"]["pysr"],
         features=features
     shell:
         symbolic_regression_rule("pysr", "{input.train}", "{params.dataset_size}", "{params.features}", "{output.temp_file}")

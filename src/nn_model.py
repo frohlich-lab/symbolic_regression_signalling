@@ -206,10 +206,18 @@ def train_model(train_data, val_data, output_path, verbose=False, retrain=True, 
     model = NeuralNet(input_dim=input_dim, output_dim=1, dropout_rate=DROPOUT_RATE).to(device)
 
     if not retrain and os.path.exists(output_path):
-        if verbose:
-            print(f"Loading pretrained model from {output_path}")
-        model.load_state_dict(torch.load(output_path, map_location=device))
-        return model
+        try:
+            if verbose:
+                print(f"Loading pretrained model from {output_path}")
+            state_dict = torch.load(output_path, map_location=device)
+            model.load_state_dict(state_dict)
+            return model
+        except (RuntimeError, KeyError) as exc:
+            print(
+                "[WARN nn_model] Checkpoint incompatible with current architecture; retraining from scratch."
+            )
+            if verbose:
+                print(f"[DEBUG nn_model] load_state_dict error: {exc}")
     X_train = torch.from_numpy(train_data.iloc[:, :-1].values.astype(np.float32))
     y_train = torch.from_numpy(train_data.iloc[:, -1].values.astype(np.float32).reshape(-1, 1))
 

@@ -6,13 +6,14 @@ Usage:
     python aifeynman_model.py --dataset <path_to_dataset> --dataset_size <size> --features <feature_list> --temp_file <path_to_temp_file>
 """
 
-import numpy as np
 import argparse
+import random
 import pandas as pd
 import os
 import shutil
 from aifeynman import S_run_aifeynman
 import tempfile
+import numpy as np
 
 TARGET_COLUMN = 'kcat_cg'
 
@@ -25,7 +26,11 @@ DATA_PATHDIR = './data/aifeynman/'  # Directory for dataset
 TEST_PERCENTAGE = 20  # Percentage of data for testing
 FILENAME = 'mystery.txt'  # Dataset file name
 
-def load_dataset(file_path, dataset_size=None, features=None):
+def seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+
+def load_dataset(file_path, dataset_size=None, features=None, seed=None):
     """Loads a dataset from CSV, samples it if specified, and selects columns if features are provided."""
     data = pd.read_csv(file_path)
     target = TARGET_COLUMN if TARGET_COLUMN in data.columns else data.columns[-1]
@@ -40,7 +45,7 @@ def load_dataset(file_path, dataset_size=None, features=None):
         selected = list(data.columns)
     data = data[selected]
     if dataset_size:
-        data = data.sample(n=min(dataset_size, len(data)))
+        data = data.sample(n=min(dataset_size, len(data)), random_state=seed)
 
     # Convert inputs back to linear scale while leaving the target in log space
     if not data.empty:
@@ -92,9 +97,12 @@ def main():
     parser.add_argument('--dataset_size', type=int, help='Sample size from dataset')
     parser.add_argument('--features', type=str, help='Comma-separated list of features to use')
     parser.add_argument('--temp_file', required=True, help='Path to save intermediate results')
+    parser.add_argument('--seed', type=int, help='Random seed for reproducibility')
 
     args = parser.parse_args()
-    data = load_dataset(args.dataset, args.dataset_size, args.features)
+    if args.seed is not None:
+        seed_everything(args.seed)
+    data = load_dataset(args.dataset, args.dataset_size, args.features, args.seed)
     run_feynman(data, args.temp_file, args.features)
 
 if __name__ == '__main__':

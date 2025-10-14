@@ -6,14 +6,16 @@ Usage:
     python kan_model.py --dataset <path_to_dataset> --temp_file <path_to_temp_file> [--dataset_size <size>] [--features <feature_list>]
 """
 
+import argparse
+import os
+import random
+
 import numpy as np
 import pandas as pd
 import sympy as sp
-import argparse
 import torch
 from kan import KAN
 from tqdm import tqdm
-import os
 
 TARGET_COLUMN = 'kcat_cg'
 
@@ -37,7 +39,14 @@ LAMB_ENTROPY = 1.0  # Entropy regularization
 # Function Library for Symbolic Representation
 LIBRARY = ['x', 'x^2', 'x^3', 'exp', 'log', 'abs']  # KAN function library
 
-def load_dataset(file_path, dataset_size=None, features=None):
+def seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+def load_dataset(file_path, dataset_size=None, features=None, seed=None):
     """
     Load dataset from a CSV file, sample it if specified, 
     and select specific columns if features are provided.
@@ -57,14 +66,14 @@ def load_dataset(file_path, dataset_size=None, features=None):
     data = data[selected]
 
     if dataset_size:
-        data = data.sample(n=min(dataset_size, len(data)))
+        data = data.sample(n=min(dataset_size, len(data)), random_state=seed)
 
     if not data.empty:
         input_cols = data.columns[:-1]
         data.loc[:, input_cols] = np.exp(data.loc[:, input_cols])
     return data
 
-def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
+def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS, seed=None):
     """
     Run KAN model to find the best formula, saving results 
     periodically and converting output to symbolic form.
@@ -91,7 +100,9 @@ def find_best_formula(data, temp_file, n_iterations=N_ITERATIONS):
     }
 
     # Initialize KAN model
-    model = KAN(width=WIDTH, grid=GRID, k=K, seed=SEED)
+    model_seed = seed if seed is not None else SEED
+    seed_everything(model_seed)
+    model = KAN(width=WIDTH, grid=GRID, k=K, seed=model_seed)
 
     with tqdm(total=n_iterations, desc="KAN Model Training") as pbar:
         for iteration in range(n_iterations):
@@ -129,10 +140,11 @@ def main():
     parser.add_argument('--dataset_size', type=int, help='Max number of samples from the dataset')
     parser.add_argument('--features', type=str, help='Comma-separated list of features to use')
     parser.add_argument('--temp_file', required=True, help='Path to save intermediate results')
+    parser.add_argument('--seed', type=int, help='Random seed for reproducibility')
 
     args = parser.parse_args()
-    data = load_dataset(args.dataset, args.dataset_size, args.features)
-    find_best_formula(data, args.temp_file)
+    data = load_dataset(args.dataset, args.dataset_size, args.features, args.seed)
+    find_best_formula(data, args.temp_file, seed=args.seed)
 
 if __name__ == '__main__':
     main()

@@ -7,11 +7,12 @@ Usage:
     python pysindy_model.py --dataset <path_to_dataset> --dataset_size <size> --features <feature_list> --temp_file <path_to_temp_file>
 """
 
+import argparse
+import random
+import pysindy as ps
 import numpy as np
 import pandas as pd
 import sympy as sp
-import argparse
-import pysindy as ps
 from tqdm import tqdm
 
 TARGET_COLUMN = 'kcat_cg'
@@ -310,10 +311,17 @@ def main() -> None:
     parser.add_argument("--dataset_size", type=int, help="Number of samples to use from the dataset")
     parser.add_argument("--features", type=str, help="Comma-separated list of features to use")
     parser.add_argument("--temp_file", required=True, help="Path to save intermediate results")
+    parser.add_argument("--seed", type=int, help="Random seed for reproducibility")
     args = parser.parse_args()
+
+    if args.seed is not None:
+        seed_everything(args.seed)
 
     data = load_dataset(args.dataset, args.dataset_size, args.features)
     find_best_formula(data, args.temp_file)
 
 if __name__ == "__main__":
     main()
+def seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
