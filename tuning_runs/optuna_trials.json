@@ -3,8 +3,8 @@
     "activation": "SiLU",
     "batch_size": 256,
     "dropout_rate": 0.3,
-    "early_stopping_patience": 80,
-    "gradient_clip_norm": 3.5,
+    "early_stopping_patience": 70,
+    "gradient_clip_norm": 4.0,
     "hidden_layers": {
       "dropout": 0.1,
       "layers": [
@@ -12,14 +12,14 @@
         128
       ]
     },
-    "learning_rate": 0.0006235256062731725,
+    "learning_rate": 0.0006533982776597072,
     "optimizer": "RMSprop",
     "scheduler": "CosineAnnealingLR",
-    "weight_decay": 7.849990940313943e-05
+    "weight_decay": 0.00013520544729384474
   },
-  "best_trial_number": 189,
-  "best_value": 0.02846326120197773,
-  "n_trials": 190,
+  "best_trial_number": 199,
+  "best_value": 0.027339935302734375,
+  "n_trials": 200,
   "search_space": {
     "activation": {
       "choices": [
@@ -8949,6 +8949,466 @@
         }
       },
       "value": 0.02846326120197773
+    },
+    {
+      "completed_at": "2025-10-14T11:22:37.592493",
+      "duration_seconds": 25.996423,
+      "number": 190,
+      "params": {
+        "activation": "SiLU",
+        "batch_size": 256,
+        "dropout_rate": 0.3,
+        "early_stopping_patience": 70,
+        "gradient_clip_norm": 4.0,
+        "hidden_layers": {
+          "dropout": 0.1,
+          "layers": [
+            256,
+            128
+          ]
+        },
+        "learning_rate": 0.0006043096007212362,
+        "optimizer": "RMSprop",
+        "scheduler": "CosineAnnealingLR",
+        "weight_decay": 0.00012355157895278769
+      },
+      "started_at": "2025-10-14T11:22:11.596070",
+      "state": "COMPLETE",
+      "user_attrs": {
+        "params": {
+          "activation": "SiLU",
+          "batch_size": 256,
+          "dropout_rate": 0.3,
+          "early_stopping_patience": 70,
+          "gradient_clip_norm": 4.0,
+          "hidden_layers": {
+            "dropout": 0.1,
+            "layers": [
+              256,
+              128
+            ]
+          },
+          "learning_rate": 0.0006043096007212362,
+          "optimizer": "RMSprop",
+          "scheduler": "CosineAnnealingLR",
+          "weight_decay": 0.00012355157895278769
+        }
+      },
+      "value": 0.027613218873739243
+    },
+    {
+      "completed_at": "2025-10-14T11:23:01.937470",
+      "duration_seconds": 24.268445,
+      "number": 191,
+      "params": {
+        "activation": "SiLU",
+        "batch_size": 256,
+        "dropout_rate": 0.3,
+        "early_stopping_patience": 70,
+        "gradient_clip_norm": 3.5,
+        "hidden_layers": {
+          "dropout": 0.1,
+          "layers": [
+            256,
+            128
+          ]
+        },
+        "learning_rate": 0.0006363508670185139,
+        "optimizer": "RMSprop",
+        "scheduler": "CosineAnnealingLR",
+        "weight_decay": 0.000128135859340179
+      },
+      "started_at": "2025-10-14T11:22:37.669025",
+      "state": "COMPLETE",
+      "user_attrs": {
+        "params": {
+          "activation": "SiLU",
+          "batch_size": 256,
+          "dropout_rate": 0.3,
+          "early_stopping_patience": 70,
+          "gradient_clip_norm": 3.5,
+          "hidden_layers": {
+            "dropout": 0.1,
+            "layers": [
+              256,
+              128
+            ]
+          },
+          "learning_rate": 0.0006363508670185139,
+          "optimizer": "RMSprop",
+          "scheduler": "CosineAnnealingLR",
+          "weight_decay": 0.000128135859340179
+        }
+      },
+      "value": 0.027349742129445076
+    },
+    {
+      "completed_at": "2025-10-14T11:23:27.572418",
+      "duration_seconds": 25.562869,
+      "number": 192,
+      "params": {
+        "activation": "SiLU",
+        "batch_size": 256,
+        "dropout_rate": 0.3,
+        "early_stopping_patience": 70,
+        "gradient_clip_norm": 4.0,
+        "hidden_layers": {
+          "dropout": 0.1,
+          "layers": [
+            256,
+            128
+          ]
+        },
+        "learning_rate": 0.0006086497446879252,
+        "optimizer": "RMSprop",
+        "scheduler": "CosineAnnealingLR",
+        "weight_decay": 8.026544603498984e-05
+      },
+      "started_at": "2025-10-14T11:23:02.009549",
+      "state": "COMPLETE",
+      "user_attrs": {
+        "params": {
+          "activation": "SiLU",
+          "batch_size": 256,
+          "dropout_rate": 0.3,
+          "early_stopping_patience": 70,
+          "gradient_clip_norm": 4.0,
+          "hidden_layers": {
+            "dropout": 0.1,
+            "layers": [
+              256,
+              128
+            ]
+          },
+          "learning_rate": 0.0006086497446879252,
+          "optimizer": "RMSprop",
+          "scheduler": "CosineAnnealingLR",
+          "weight_decay": 8.026544603498984e-05
+        }
+      },
+      "value": 0.03460966423153877
+    },
+    {
+      "completed_at": "2025-10-14T11:23:52.839874",
+      "duration_seconds": 25.195382,
+      "number": 193,
+      "params": {
+        "activation": "SiLU",
+        "batch_size": 256,
+        "dropout_rate": 0.3,
+        "early_stopping_patience": 70,
+        "gradient_clip_norm": 3.5,
+        "hidden_layers": {
+          "dropout": 0.1,
+          "layers": [
+            256,
+            128
+          ]
+        },
+        "learning_rate": 0.0006419784155117884,
+        "optimizer": "RMSprop",
+        "scheduler": "CosineAnnealingLR",
+        "weight_decay": 7.728322655952995e-05
+      },
+      "started_at": "2025-10-14T11:23:27.644492",
+      "state": "COMPLETE",
+      "user_attrs": {
+        "params": {
+          "activation": "SiLU",
+          "batch_size": 256,
+          "dropout_rate": 0.3,
+          "early_stopping_patience": 70,
+          "gradient_clip_norm": 3.5,
+          "hidden_layers": {
+            "dropout": 0.1,
+            "layers": [
+              256,
+              128
+            ]
+          },
+          "learning_rate": 0.0006419784155117884,
+          "optimizer": "RMSprop",
+          "scheduler": "CosineAnnealingLR",
+          "weight_decay": 7.728322655952995e-05
+        }
+      },
+      "value": 0.030498960986733437
+    },
+    {
+      "completed_at": "2025-10-14T11:24:18.020085",
+      "duration_seconds": 25.103712,
+      "number": 194,
+      "params": {
+        "activation": "SiLU",
+        "batch_size": 256,
+        "dropout_rate": 0.3,
+        "early_stopping_patience": 70,
+        "gradient_clip_norm": 4.0,
+        "hidden_layers": {
+          "dropout": 0.1,
+          "layers": [
+            256,
+            128
+          ]
+        },
+        "learning_rate": 0.0005916234014047971,
+        "optimizer": "RMSprop",
+        "scheduler": "CosineAnnealingLR",
+        "weight_decay": 7.86154948343625e-05
+      },
+      "started_at": "2025-10-14T11:23:52.916373",
+      "state": "COMPLETE",
+      "user_attrs": {
+        "params": {
+          "activation": "SiLU",
+          "batch_size": 256,
+          "dropout_rate": 0.3,
+          "early_stopping_patience": 70,
+          "gradient_clip_norm": 4.0,
+          "hidden_layers": {
+            "dropout": 0.1,
+            "layers": [
+              256,
+              128
+            ]
+          },
+          "learning_rate": 0.0005916234014047971,
+          "optimizer": "RMSprop",
+          "scheduler": "CosineAnnealingLR",
+          "weight_decay": 7.86154948343625e-05
+        }
+      },
+      "value": 0.042713992297649384
+    },
+    {
+      "completed_at": "2025-10-14T11:24:43.564736",
+      "duration_seconds": 25.465576,
+      "number": 195,
+      "params": {
+        "activation": "SiLU",
+        "batch_size": 256,
+        "dropout_rate": 0.3,
+        "early_stopping_patience": 70,
+        "gradient_clip_norm": 3.5,
+        "hidden_layers": {
+          "dropout": 0.1,
+          "layers": [
+            256,
+            128
+          ]
+        },
+        "learning_rate": 0.0005912153469747808,
+        "optimizer": "RMSprop",
+        "scheduler": "CosineAnnealingLR",
+        "weight_decay": 5.709139506553508e-05
+      },
+      "started_at": "2025-10-14T11:24:18.099160",
+      "state": "COMPLETE",
+      "user_attrs": {
+        "params": {
+          "activation": "SiLU",
+          "batch_size": 256,
+          "dropout_rate": 0.3,
+          "early_stopping_patience": 70,
+          "gradient_clip_norm": 3.5,
+          "hidden_layers": {
+            "dropout": 0.1,
+            "layers": [
+              256,
+              128
+            ]
+          },
+          "learning_rate": 0.0005912153469747808,
+          "optimizer": "RMSprop",
+          "scheduler": "CosineAnnealingLR",
+          "weight_decay": 5.709139506553508e-05
+        }
+      },
+      "value": 0.04496128112077713
+    },
+    {
+      "completed_at": "2025-10-14T11:25:09.262508",
+      "duration_seconds": 25.625147,
+      "number": 196,
+      "params": {
+        "activation": "SiLU",
+        "batch_size": 256,
+        "dropout_rate": 0.3,
+        "early_stopping_patience": 70,
+        "gradient_clip_norm": 3.5,
+        "hidden_layers": {
+          "dropout": 0.1,
+          "layers": [
+            256,
+            128
+          ]
+        },
+        "learning_rate": 0.0006317404602140179,
+        "optimizer": "RMSprop",
+        "scheduler": "CosineAnnealingLR",
+        "weight_decay": 0.00010872414485797656
+      },
+      "started_at": "2025-10-14T11:24:43.637361",
+      "state": "COMPLETE",
+      "user_attrs": {
+        "params": {
+          "activation": "SiLU",
+          "batch_size": 256,
+          "dropout_rate": 0.3,
+          "early_stopping_patience": 70,
+          "gradient_clip_norm": 3.5,
+          "hidden_layers": {
+            "dropout": 0.1,
+            "layers": [
+              256,
+              128
+            ]
+          },
+          "learning_rate": 0.0006317404602140179,
+          "optimizer": "RMSprop",
+          "scheduler": "CosineAnnealingLR",
+          "weight_decay": 0.00010872414485797656
+        }
+      },
+      "value": 0.02824055403470993
+    },
+    {
+      "completed_at": "2025-10-14T11:25:28.714498",
+      "duration_seconds": 19.379904,
+      "number": 197,
+      "params": {
+        "activation": "SiLU",
+        "batch_size": 256,
+        "dropout_rate": 0.3,
+        "early_stopping_patience": 70,
+        "gradient_clip_norm": 3.5,
+        "hidden_layers": {
+          "dropout": 0.1,
+          "layers": [
+            256,
+            128
+          ]
+        },
+        "learning_rate": 0.0006467833322062592,
+        "optimizer": "RMSprop",
+        "scheduler": "ExponentialLR",
+        "weight_decay": 0.00012907729550442682
+      },
+      "started_at": "2025-10-14T11:25:09.334594",
+      "state": "COMPLETE",
+      "user_attrs": {
+        "params": {
+          "activation": "SiLU",
+          "batch_size": 256,
+          "dropout_rate": 0.3,
+          "early_stopping_patience": 70,
+          "gradient_clip_norm": 3.5,
+          "hidden_layers": {
+            "dropout": 0.1,
+            "layers": [
+              256,
+              128
+            ]
+          },
+          "learning_rate": 0.0006467833322062592,
+          "optimizer": "RMSprop",
+          "scheduler": "ExponentialLR",
+          "weight_decay": 0.00012907729550442682
+        }
+      },
+      "value": 0.13975407183170319
+    },
+    {
+      "completed_at": "2025-10-14T11:25:52.748502",
+      "duration_seconds": 23.960324,
+      "number": 198,
+      "params": {
+        "activation": "SiLU",
+        "batch_size": 256,
+        "dropout_rate": 0.3,
+        "early_stopping_patience": 70,
+        "gradient_clip_norm": 3.5,
+        "hidden_layers": {
+          "dropout": 0.1,
+          "layers": [
+            256,
+            128
+          ]
+        },
+        "learning_rate": 0.0005342508462592323,
+        "optimizer": "RMSprop",
+        "scheduler": "CosineAnnealingLR",
+        "weight_decay": 9.442592752861944e-05
+      },
+      "started_at": "2025-10-14T11:25:28.788178",
+      "state": "COMPLETE",
+      "user_attrs": {
+        "params": {
+          "activation": "SiLU",
+          "batch_size": 256,
+          "dropout_rate": 0.3,
+          "early_stopping_patience": 70,
+          "gradient_clip_norm": 3.5,
+          "hidden_layers": {
+            "dropout": 0.1,
+            "layers": [
+              256,
+              128
+            ]
+          },
+          "learning_rate": 0.0005342508462592323,
+          "optimizer": "RMSprop",
+          "scheduler": "CosineAnnealingLR",
+          "weight_decay": 9.442592752861944e-05
+        }
+      },
+      "value": 0.04784226790070534
+    },
+    {
+      "completed_at": "2025-10-14T11:26:16.706433",
+      "duration_seconds": 23.867277,
+      "number": 199,
+      "params": {
+        "activation": "SiLU",
+        "batch_size": 256,
+        "dropout_rate": 0.3,
+        "early_stopping_patience": 70,
+        "gradient_clip_norm": 4.0,
+        "hidden_layers": {
+          "dropout": 0.1,
+          "layers": [
+            256,
+            128
+          ]
+        },
+        "learning_rate": 0.0006533982776597072,
+        "optimizer": "RMSprop",
+        "scheduler": "CosineAnnealingLR",
+        "weight_decay": 0.00013520544729384474
+      },
+      "started_at": "2025-10-14T11:25:52.839156",
+      "state": "COMPLETE",
+      "user_attrs": {
+        "params": {
+          "activation": "SiLU",
+          "batch_size": 256,
+          "dropout_rate": 0.3,
+          "early_stopping_patience": 70,
+          "gradient_clip_norm": 4.0,
+          "hidden_layers": {
+            "dropout": 0.1,
+            "layers": [
+              256,
+              128
+            ]
+          },
+          "learning_rate": 0.0006533982776597072,
+          "optimizer": "RMSprop",
+          "scheduler": "CosineAnnealingLR",
+          "weight_decay": 0.00013520544729384474
+        }
+      },
+      "value": 0.027339935302734375
     }
   ]
 }
