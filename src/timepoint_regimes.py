@@ -674,6 +674,42 @@ def evaluate_models(data: pd.DataFrame, output_dir: str, dataset_size: int, seed
             columns=list(nn_features.columns) + [TARGET_COLUMN],
         )
 
+        # Ensure evaluation set is disjoint from NN train/validation pool
+        eval_rows = sample.copy()
+        eval_rows['_tmp_idx'] = np.arange(len(eval_rows))
+        nn_pool['_tmp_idx'] = np.arange(len(nn_pool))
+        overlap = nn_pool.merge(
+            eval_rows,
+            how='inner',
+            on=feature_names,
+            suffixes=('_nn', '_eval'),
+        )
+        if not overlap.empty:
+            nn_pool = nn_pool.drop(index=overlap['_tmp_idx_nn']).reset_index(drop=True)
+        nn_pool = nn_pool.drop(columns=['_tmp_idx'], errors='ignore')
+        eval_rows = eval_rows.drop(columns=['_tmp_idx'], errors='ignore')
+        if not nn_pool_eval_overlap.empty:
+            nn_pool = nn_pool.drop(index=nn_pool_eval_overlap).reset_index(drop=True)
+            nn_features = nn_pool.drop(columns=[TARGET_COLUMN])
+            nn_target = nn_pool[TARGET_COLUMN]
+            nn_X_train, nn_X_test, nn_y_train, nn_y_test = train_test_split(
+                nn_features,
+                nn_target,
+                test_size=0.2,
+                random_state=seed,
+                shuffle=True,
+            )
+            nn_X_train_pre, nn_pipeline = preprocess_data(nn_X_train.values)
+            nn_X_test_pre = nn_pipeline.transform(nn_X_test.values)
+            nn_train_pre = pd.DataFrame(
+                np.column_stack([nn_X_train_pre, np.log(nn_y_train.values)]),
+                columns=list(nn_features.columns) + [TARGET_COLUMN],
+            )
+            nn_test_pre = pd.DataFrame(
+                np.column_stack([nn_X_test_pre, np.log(nn_y_test.values)]),
+                columns=list(nn_features.columns) + [TARGET_COLUMN],
+            )
+
         train_pre = pd.DataFrame(
             np.column_stack([nn_pipeline.transform(train_df[feature_names].values), np.log(y_train)]),
             columns=list(train_df.columns),
@@ -692,7 +728,13 @@ def evaluate_models(data: pd.DataFrame, output_dir: str, dataset_size: int, seed
 
         nn_path = os.path.join(group_dir, "models/nn/model.pkl")
         nn_model = train_model(train_split, val_split, nn_path, verbose=False, seed=seed)
-        print(f"NN training rows: {len(train_split)} (cap {NN_DATASET_CAP})")
+        print(
+            "NN splits | train: %d, val: %d, eval: %d (cap %d)",
+            len(train_split),
+            len(val_split),
+            len(test_df),
+            NN_DATASET_CAP,
+        )
         nn_loss, nn_preds = evaluate_model(nn_model, test_pre)
         LOGGER.info("%s NN log-MAE: %.5f", label, nn_loss)
         print(f"NN Loss (test): {nn_loss}")

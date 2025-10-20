@@ -479,11 +479,10 @@ def _prepare_regime_sample(
     dataset_size: int,
     seed: int,
     min_groups: int = 1,
-    nn_cap: int = NN_DATASET_CAP,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     base = data.copy().reset_index(drop=True)
     if dataset_size is None or dataset_size <= 0:
-        return base, _build_nn_pool(base, nn_cap, seed)
+        return base, base
 
     oversample = dataset_size * max(min_groups, 1)
     symbolic_pool = (
@@ -491,17 +490,33 @@ def _prepare_regime_sample(
         if len(base) > oversample else base
     )
 
-    nn_pool = _build_nn_pool(base, nn_cap, seed)
-
-    return symbolic_pool, nn_pool
+    return symbolic_pool, base
 
 
-def _build_nn_pool(base: pd.DataFrame, nn_cap: int, seed: int) -> pd.DataFrame:
+def _build_nn_pool(
+    base: pd.DataFrame,
+    nn_cap: int,
+    seed: int,
+    exclude: pd.DataFrame = None,
+) -> pd.DataFrame:
     if base.empty:
         return base
-    target = nn_cap if nn_cap and nn_cap > 0 else len(base)
-    replace = len(base) < target
-    return base.sample(n=target, random_state=seed + 1, replace=replace).reset_index(drop=True)
+    pool = base.copy().reset_index(drop=True)
+    if exclude is not None and not exclude.empty:
+        common = [col for col in pool.columns if col in exclude.columns]
+        if common:
+            exclude_unique = exclude[common].drop_duplicates()
+            merged = pool.merge(
+                exclude_unique.assign(_mark=1),
+                on=common,
+                how='left',
+            )
+            pool = merged[merged['_mark'].isna()].drop(columns=['_mark']).reset_index(drop=True)
+            if pool.empty:
+                pool = base.copy().reset_index(drop=True)
+    target = nn_cap if nn_cap and nn_cap > 0 else len(pool)
+    replace = len(pool) < target
+    return pool.sample(n=target, random_state=seed + 1, replace=replace).reset_index(drop=True)
 
 
 def evaluate_models(data, features, output_dir, dataset_size, mode, seed: int) -> None:
@@ -524,7 +539,7 @@ def evaluate_models(data, features, output_dir, dataset_size, mode, seed: int) -
         regimes.update(define_regimes_from_full_dataset(data))
 
     for regime, filtered in regimes.items():
-        symbolic_pool, nn_pool = _prepare_regime_sample(
+        symbolic_pool, nn_base = _prepare_regime_sample(
             filtered, dataset_size, seed, min_groups=len(regimes)
         )
 
@@ -600,6 +615,7 @@ def evaluate_models(data, features, output_dir, dataset_size, mode, seed: int) -
         print(f"Michaelis-Menten Loss (test): {mm_loss}")
 
         # Neural Network Model
+        nn_pool = _build_nn_pool(nn_base, NN_DATASET_CAP, seed, exclude=sample)
         nn_features = nn_pool.iloc[:, :-1]
         nn_target = nn_pool.iloc[:, -1]
         nn_X_train, nn_X_test, nn_y_train, nn_y_test = train_test_split(
@@ -657,8 +673,13 @@ def evaluate_models(data, features, output_dir, dataset_size, mode, seed: int) -
                 verbose=False,
                 seed=seed,
             )
-        cap = dataset_size if dataset_size else len(train_split)
-        print(f"NN training rows: {len(train_split)} (cap {NN_DATASET_CAP})")
+        print(
+            "NN splits | train: %d, val: %d, eval: %d (cap %d)",
+            len(train_split),
+            len(val_split),
+            len(test_df),
+            NN_DATASET_CAP,
+        )
         nn_loss, _ = evaluate_model(nn_model, test_pre)
         losses[f"{regime}_nn"] = nn_loss
         print(f"NN Loss (test): {nn_loss}")
