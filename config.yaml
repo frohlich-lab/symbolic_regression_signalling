@@ -1,10 +1,13 @@
 # config.yaml
-data_type: "static"  # Options: "dynamic" or "static"
+data_type: "dynamic"  # Options: "dynamic" or "static"
 
 enzyme_model: "two_step_enzyme"
 
+# Control whether symbolic regression sweeps run before model training
+enable_sr_sweeps: false
+
 # Model selection
-models: ["pysr", "pysindy", "kan", "dso"] #, "aifeynman", 
+models: ["pysr"] #, "pysindy", "kan", "dso"] #, "aifeynman", 
 
 output_extension: {
     "pysindy": "txt",

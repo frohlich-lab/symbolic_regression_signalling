@@ -25,34 +25,34 @@ ACTIVATION_LOOKUP = {
 SEARCH_SPACE_SPEC = {
     "learning_rate": {
         "type": "loguniform",
-        "low": 5e-5,
-        "high": 5e-2,
+        "low": 1e-5,
+        "high": 1e-1,
     },
     "batch_size": {
         "type": "categorical",
-        "choices": [256, 512, 1024, 2048],
+        "choices": [128, 256, 512, 1024],
     },
     "hidden_layers": {
         "type": "categorical",
         "choices": [
-            {"layers": [128], "dropout": 0.0},
-            {"layers": [256], "dropout": 0.05},
-            {"layers": [256, 128], "dropout": 0.1},
-            {"layers": [256, 256, 128], "dropout": 0.1},
-            {"layers": [512, 256, 128], "dropout": 0.15},
-            {"layers": [512, 256, 128, 64], "dropout": 0.2},
+            {"layers": [32], "dropout": 0.0},              # minimal baseline
+            {"layers": [64, 32], "dropout": 0.0},          # small two-layer model
+            {"layers": [128, 64], "dropout": 0.05},        # medium depth, mild regularization
+            {"layers": [256, 128], "dropout": 0.1},        # larger mid-size model
+            {"layers": [512, 256, 128], "dropout": 0.15},  # deep architecture, moderate dropout
+            {"layers": [1024, 512, 256, 128], "dropout": 0.2}  # very large/deep for upper bound
         ],
     },
     "dropout_rate": {
         "type": "float",
         "low": 0.0,
-        "high": 0.3,
+        "high": 0.5,
         "step": 0.05,
     },
     "weight_decay": {
         "type": "loguniform",
         "low": 1e-7,
-        "high": 1e-2,
+        "high": 1e-1,
     },
     "activation": {
         "type": "categorical",
@@ -137,21 +137,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", required=True, help="Path to the processed dataset CSV")
     parser.add_argument("--dataset_size", type=int, default=10_000, help="Samples to draw for tuning (min enforced to 10k)")
     parser.add_argument("--features", type=str, default="all", help="Comma-separated list of feature names or 'all'")
-    parser.add_argument("--output-dir", type=str, default="tuning_runs", help="Directory for tuner artefacts")
+    parser.add_argument("--output-dir", type=str, default=None, help="Directory for tuner artefacts (defaults to data/<enzyme>/<type>/nn_hparams)")
     parser.add_argument("--log-file", type=str, default=None, help="Path to JSON log file (defaults inside output dir)")
     parser.add_argument("--study-name", type=str, default="nn_optuna", help="Name of the Optuna study")
     parser.add_argument("--storage", type=str, default=None, help="Optuna storage URI for persistence/resume (e.g. sqlite:///study.db)")
-    parser.add_argument("--n-trials", type=int, default=50, help="Number of optimisation trials")
+    parser.add_argument("--n-trials", type=int, default=100, help="Number of optimisation trials")
     parser.add_argument("--timeout", type=int, default=None, help="Stop optimisation after this many seconds")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--verbose", action="store_true", help="Print per-epoch training diagnostics")
     return parser.parse_args()
 
 
+def _infer_default_output(dataset: str) -> Path:
+    dataset_path = Path(dataset)
+    try:
+        idx = dataset_path.parts.index("data")
+        enzyme_model = dataset_path.parts[idx + 1]
+        data_type = dataset_path.parts[idx + 2]
+    except (ValueError, IndexError):
+        return Path("tuning_runs")
+    return Path("data") / enzyme_model / data_type / "nn_hparams"
+
+
 def main() -> None:
     args = parse_args()
 
-    output_dir = Path(args.output_dir)
+    default_output = _infer_default_output(args.dataset) if args.output_dir is None else Path(args.output_dir)
+    output_dir = default_output
     output_dir.mkdir(parents=True, exist_ok=True)
 
     log_path = Path(args.log_file) if args.log_file else output_dir / "optuna_trials.json"
@@ -174,11 +186,11 @@ def main() -> None:
 
     def objective(trial: optuna.trial.Trial) -> float:
         params = {
-            "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
+            "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-1, log=True),
             "batch_size": trial.suggest_categorical("batch_size", SEARCH_SPACE_SPEC["batch_size"]["choices"]),
             "hidden_layers": trial.suggest_categorical("hidden_layers", SEARCH_SPACE_SPEC["hidden_layers"]["choices"]),
-            "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.3, step=0.05),
-            "weight_decay": trial.suggest_float("weight_decay", 1e-7, 1e-2, log=True),
+            "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.5, step=0.05),
+            "weight_decay": trial.suggest_float("weight_decay", 1e-7, 1e-1, log=True),
             "activation": trial.suggest_categorical("activation", list(ACTIVATION_LOOKUP.keys())),
             "optimizer": trial.suggest_categorical("optimizer", ["Adam", "AdamW", "RMSprop"]),
             "scheduler": trial.suggest_categorical("scheduler", ["None", "ReduceLROnPlateau", "CosineAnnealingLR", "ExponentialLR"]),
@@ -222,13 +234,30 @@ def main() -> None:
     )
     _write_log(study, log_path)
 
-    best = study.best_trial
-    print("Best trial:")
-    print(f"  number: {best.number}")
-    print(f"  value: {best.value}")
-    print("  params:")
-    for k, v in best.params.items():
-        print(f"    {k}: {v}")
+    try:
+        best = study.best_trial
+    except ValueError:
+        best = None
+
+    if best is not None:
+        print("Best trial:")
+        print(f"  number: {best.number}")
+        print(f"  value: {best.value}")
+        print("  params:")
+        for k, v in best.params.items():
+            print(f"    {k}: {v}")
+
+        best_path = output_dir / "best_params.json"
+        payload = {
+            "best_params": study.best_params,
+            "best_value": float(study.best_value),
+            "n_trials": len(study.trials),
+            "dataset": args.dataset,
+            "dataset_size": args.dataset_size,
+            "features": args.features,
+            "study_name": args.study_name,
+        }
+        best_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

@@ -57,15 +57,36 @@ temp_files = [
 ]
 formula_files = [f"data/{enzyme_model}/{data_type}/sr_comparison/results/formula_{model}.txt" for model in models]
 
-sweep_best_configs = {
-    "pysindy": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/pysindy/best_config.json",
-    "aifeynman": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/aifeynman/best_config.json",
-    "dso": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/dso/best_config.json",
-    "kan": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/kan/best_config.json",
-    "pysr": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/pysr/best_config.json",
-}
+sweeps_enabled = config.get("enable_sr_sweeps", True)
+
+if sweeps_enabled:
+    sweep_best_configs = {
+        "pysindy": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/pysindy/best_config.json",
+        "aifeynman": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/aifeynman/best_config.json",
+        "dso": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/dso/best_config.json",
+        "kan": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/kan/best_config.json",
+        "pysr": f"data/{enzyme_model}/{data_type}/sr_comparison/sweeps/pysr/best_config.json",
+    }
+else:
+    sweep_best_configs = {}
 
 SR_SWEEP_SEARCH_SPACE = "sweeps/sr_default_search.yaml"
+
+def sweep_input(method):
+    return sweep_best_configs.get(method, [])
+
+timepoint_outputs = []
+if data_type == "dynamic":
+    timepoint_base = f"data/{enzyme_model}/{data_type}/timepoint_regimes"
+    timepoint_outputs = [
+        f"{timepoint_base}/shared/plots/log_mae_timepoint_lineplot.png",
+        f"{timepoint_base}/shared/plots/log_mae_timepoint_lineplot_template.png",
+        f"{timepoint_base}/shared/plots/log_mae_horizontal_boxplot.png",
+        f"{timepoint_base}/shared/plots/log_mae_horizontal_boxplot_no_outliers.png",
+        f"{timepoint_base}/shared/plots/log_mae_vertical_boxplot.png",
+        f"{timepoint_base}/shared/plots/log_mae_vertical_boxplot_no_outliers.png",
+        f"{timepoint_base}/shared/results/pysr/all_pysr_formulas.txt",
+    ]
 
 
 
@@ -251,6 +272,7 @@ else:
             f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_vertical_boxplot_no_outliers.png",
             f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_noise_regime_lineplot.png",
             f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae_noise_regime_lineplot_template.png",
+            *timepoint_outputs,
             "data/panmodel_plots/symbolic_model_r2_scores_bar.png",
             "data/panmodel_plots/symbolic_model_r2_scores_scatter.png",
             "data/panmodel_plots/all_symbolic_formulas.txt"
@@ -452,7 +474,7 @@ def symbolic_regression_rule(model, dataset, dataset_size, features, temp_file):
 rule pysindy:
     input:
         train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv",
-        sweep=sweep_best_configs["pysindy"]
+        sweep=lambda wildcards: sweep_input("pysindy")
     output:
         temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_pysindy.txt")
     conda:
@@ -466,7 +488,7 @@ rule pysindy:
 rule aifeynman:
     input:
         train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv",
-        sweep=sweep_best_configs["aifeynman"]
+        sweep=lambda wildcards: sweep_input("aifeynman")
     output:
         temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_aifeynman.txt")
     conda:
@@ -480,7 +502,7 @@ rule aifeynman:
 rule dso:
     input:
         train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv",
-        sweep=sweep_best_configs["dso"]
+        sweep=lambda wildcards: sweep_input("dso")
     output:
         temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_dso.txt")
     conda:
@@ -494,7 +516,7 @@ rule dso:
 rule kan:
     input:
         train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv",
-        sweep=sweep_best_configs["kan"]
+        sweep=lambda wildcards: sweep_input("kan")
     output:
         temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/temp_formula_kan.txt")
     conda:
@@ -508,7 +530,7 @@ rule kan:
 rule pysr:
     input:
         train=f"data/{enzyme_model}/{data_type}/processed/data_train.csv",
-        sweep=sweep_best_configs["pysr"]
+        sweep=lambda wildcards: sweep_input("pysr")
     output:
         temp_file=temporary(f"data/{enzyme_model}/{data_type}/sr_comparison/temp/hall_of_fame.csv")
     conda:
@@ -694,6 +716,31 @@ rule mm_deviation_regimes:
         python src/mm_deviation_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features}
         echo "PySR MM deviation regime evaluation completed."
         """
+
+if data_type == "dynamic":
+
+    rule timepoint_regimes:
+        input:
+            dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
+        output:
+            f"data/{enzyme_model}/{data_type}/timepoint_regimes/shared/plots/log_mae_timepoint_lineplot.png",
+            f"data/{enzyme_model}/{data_type}/timepoint_regimes/shared/plots/log_mae_timepoint_lineplot_template.png",
+            f"data/{enzyme_model}/{data_type}/timepoint_regimes/shared/plots/log_mae_horizontal_boxplot.png",
+            f"data/{enzyme_model}/{data_type}/timepoint_regimes/shared/plots/log_mae_horizontal_boxplot_no_outliers.png",
+            f"data/{enzyme_model}/{data_type}/timepoint_regimes/shared/plots/log_mae_vertical_boxplot.png",
+            f"data/{enzyme_model}/{data_type}/timepoint_regimes/shared/plots/log_mae_vertical_boxplot_no_outliers.png",
+            f"data/{enzyme_model}/{data_type}/timepoint_regimes/shared/results/pysr/all_pysr_formulas.txt"
+        conda:
+            "envs/pysr.yaml"
+        params:
+            dataset_size=config["dataset_sizes"]["pysr"],
+            features=features
+        shell:
+            """
+            echo "Running PySR across timepoint groups."
+            python src/timepoint_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features}
+            echo "Timepoint benchmarking completed."
+            """
 
 # New rule to perform grid search for the NN model
 rule nn_grid_search:

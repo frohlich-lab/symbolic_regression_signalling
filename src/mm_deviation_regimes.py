@@ -18,6 +18,7 @@ import matplotlib.cm as cm
 import seaborn as sns
 import torch
 from collections import OrderedDict
+from typing import Tuple
 
 from pysr import PySRRegressor
 from scipy.optimize import curve_fit
@@ -45,6 +46,8 @@ MODEL_COLORS = {
     "Michaelis-Menten": "#009E73",
     "Neural Network": "#0072B2",
 }
+NN_DATASET_CAP = 20000
+TARGET_COLUMN = "kcat_cg"
 
 MM_REQUIRED_COLS = ["P_u", "k_off", "k_D", "k_cat", "tK"]
 
@@ -443,6 +446,36 @@ def plot_deviation_regime_lineplot_template(error_distributions, output_dir):
     output_path = os.path.join(output_dir, "shared/plots/log_mae_deviation_lineplot_template.png")
     _render_deviation_lineplot(regimes, stats, output_path, template=True)
 
+def _prepare_regime_sample(
+    data: pd.DataFrame,
+    dataset_size: int,
+    seed: int,
+    min_groups: int = 1,
+    nn_cap: int = NN_DATASET_CAP,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    base = data.copy().reset_index(drop=True)
+    if dataset_size is None or dataset_size <= 0:
+        return base, _build_nn_pool(base, nn_cap, seed)
+
+    oversample = dataset_size * max(min_groups, 1)
+    symbolic_pool = (
+        base.sample(n=oversample, random_state=seed).reset_index(drop=True)
+        if len(base) > oversample else base
+    )
+
+    nn_pool = _build_nn_pool(base, nn_cap, seed)
+
+    return symbolic_pool, nn_pool
+
+
+def _build_nn_pool(base: pd.DataFrame, nn_cap: int, seed: int) -> pd.DataFrame:
+    if base.empty:
+        return base
+    target = nn_cap if nn_cap and nn_cap > 0 else len(base)
+    replace = len(base) < target
+    return base.sample(n=target, random_state=seed + 1, replace=replace).reset_index(drop=True)
+
+
 def evaluate_models(data, features, output_dir, dataset_size, seed: int) -> None:
     """Evaluate symbolic models across deviation regimes."""
 
@@ -452,7 +485,13 @@ def evaluate_models(data, features, output_dir, dataset_size, seed: int) -> None
 
     for regime, filter_func in REGIMES.items():
         # Filter data for the current regime
-        filtered = filter_func(data).reset_index(drop=True)
+        filtered = filter_func(data)
+        symbolic_pool, nn_pool = _prepare_regime_sample(
+            filtered, dataset_size, seed, min_groups=len(REGIMES)
+        )
+        if symbolic_pool.empty:
+            print(f"No data for {regime.replace('_', ' ')} regime.")
+            continue
         if filtered.empty:
             print(f"No data for {regime.replace('_', ' ')} regime.")
             continue
@@ -462,14 +501,14 @@ def evaluate_models(data, features, output_dir, dataset_size, seed: int) -> None
         os.makedirs(os.path.join(output_dir, f"{regime}/models/pysr"), exist_ok=True)
         os.makedirs(os.path.join(output_dir, f"{regime}/models/nn"), exist_ok=True)
 
-        filtered.to_csv(os.path.join(output_dir, f"{regime}/processed/filtered_data.csv"), index=False)
+        symbolic_pool.to_csv(os.path.join(output_dir, f"{regime}/processed/filtered_data.csv"), index=False)
 
         # Sample data for training
-        capped_size = min(dataset_size, len(filtered)) if dataset_size else len(filtered)
+        capped_size = min(dataset_size, len(symbolic_pool)) if dataset_size else len(symbolic_pool)
         sample = (
-            filtered.sample(n=capped_size, random_state=seed)
-            if capped_size < len(filtered)
-            else filtered.copy()
+            symbolic_pool.sample(n=capped_size, random_state=seed)
+            if capped_size < len(symbolic_pool)
+            else symbolic_pool.copy()
         )
         sample = sample.reset_index(drop=True)
         sample.to_csv(
@@ -527,30 +566,43 @@ def evaluate_models(data, features, output_dir, dataset_size, seed: int) -> None
         print(f"Michaelis-Menten Loss (test): {mm_loss}")
 
         # Neural Network Model
-        X_train_pre, pipeline = preprocess_data(X_train)
-        X_test_pre = pipeline.transform(X_test)
-        X_full_pre = pipeline.transform(X_full)
-        train_pre = pd.DataFrame(
-            np.column_stack([X_train_pre, np.log(y_train)]),
-            columns=list(train_df.columns),
-        )
-        test_pre = pd.DataFrame(
-            np.column_stack([X_test_pre, np.log(y_test)]),
-            columns=list(test_df.columns),
-        )
-        full_pre = pd.DataFrame(
-            np.column_stack([X_full_pre, np.log(y_full)]),
-            columns=list(sample.columns),
-        )
-
-        train_split, val_split = train_test_split(
-            train_pre,
-            test_size=0.1,
+        # NN uses larger pool
+        nn_features = nn_pool.iloc[:, :-1]
+        nn_target = nn_pool.iloc[:, -1]
+        nn_X_train, nn_X_test, nn_y_train, nn_y_test = train_test_split(
+            nn_features,
+            nn_target,
+            test_size=0.2,
             random_state=seed,
             shuffle=True,
         )
-        train_split = train_split.reset_index(drop=True)
-        val_split = val_split.reset_index(drop=True)
+
+        nn_X_train_pre, nn_pipeline = preprocess_data(nn_X_train.values)
+        nn_X_test_pre = nn_pipeline.transform(nn_X_test.values)
+        nn_train_pre = pd.DataFrame(
+            np.column_stack([nn_X_train_pre, np.log(nn_y_train.values)]),
+            columns=list(nn_features.columns) + [TARGET_COLUMN],
+        )
+        nn_test_pre = pd.DataFrame(
+            np.column_stack([nn_X_test_pre, np.log(nn_y_test.values)]),
+            columns=list(nn_features.columns) + [TARGET_COLUMN],
+        )
+
+        train_pre = pd.DataFrame(
+            np.column_stack([nn_pipeline.transform(train_df.iloc[:, :-1].values), np.log(y_train)]),
+            columns=list(train_df.columns),
+        )
+        test_pre = pd.DataFrame(
+            np.column_stack([nn_pipeline.transform(test_df.iloc[:, :-1].values), np.log(y_test)]),
+            columns=list(test_df.columns),
+        )
+        full_pre = pd.DataFrame(
+            np.column_stack([nn_pipeline.transform(sample.iloc[:, :-1].values), np.log(y_full)]),
+            columns=list(sample.columns),
+        )
+
+        train_split = nn_train_pre.reset_index(drop=True)
+        val_split = nn_test_pre.reset_index(drop=True)
 
         nn_path = os.path.join(output_dir, f"{regime}/models/nn/model.pkl")
         if os.path.exists(nn_path):
@@ -572,6 +624,7 @@ def evaluate_models(data, features, output_dir, dataset_size, seed: int) -> None
                 verbose=False,
                 seed=seed,
             )
+        print(f"NN training rows: {len(train_split)} (cap {NN_DATASET_CAP})")
         nn_loss, _ = evaluate_model(nn_model, test_pre)
         losses[f"{regime}_nn"] = nn_loss
         print(f"NN Loss (test): {nn_loss}")
@@ -590,18 +643,22 @@ def evaluate_models(data, features, output_dir, dataset_size, seed: int) -> None
         }
         print()
 
-        # Generate plots and save results
-        plot_model_subregimes(model_dict, output_dir)
-        plot_error_distributions(model_dict, output_dir)
-        save_pysr_formulas(model_dict, features, os.path.join(output_dir, "shared/results/pysr/all_pysr_formulas.txt"))
-        plot_input_error_correlation(model_dict, output_dir)
-        plot_model_error_correlation(model_dict, output_dir)
-        plot_nn_vs_mm_response_curves_linear(model_dict, output_dir)
-        error_distributions = _collect_error_distributions(model_dict)
-        plot_horizontal_boxplot_noise_regimes(model_dict, output_dir, error_distributions)
-        plot_vertical_boxplot_noise_regimes(model_dict, output_dir, error_distributions)
-        plot_deviation_regime_lineplot(error_distributions, output_dir)
-        plot_deviation_regime_lineplot_template(error_distributions, output_dir)
+    if not model_dict:
+        print("No regimes produced results; skipping plotting.")
+        return
+
+    # Generate plots and save results
+    plot_model_subregimes(model_dict, output_dir)
+    plot_error_distributions(model_dict, output_dir)
+    save_pysr_formulas(model_dict, features, os.path.join(output_dir, "shared/results/pysr/all_pysr_formulas.txt"))
+    plot_input_error_correlation(model_dict, output_dir)
+    plot_model_error_correlation(model_dict, output_dir)
+    plot_nn_vs_mm_response_curves_linear(model_dict, output_dir)
+    error_distributions = _collect_error_distributions(model_dict)
+    plot_horizontal_boxplot_noise_regimes(model_dict, output_dir, error_distributions)
+    plot_vertical_boxplot_noise_regimes(model_dict, output_dir, error_distributions)
+    plot_deviation_regime_lineplot(error_distributions, output_dir)
+    plot_deviation_regime_lineplot_template(error_distributions, output_dir)
 
 def plot_error_distributions(model_dict, output_dir):
     """

@@ -36,22 +36,22 @@ def _build_scheduler(optimizer):
     raise ValueError(f"Unsupported scheduler '{SCHEDULER_NAME}'.")
 
 # Hyperparameters for the neural network
-LEARNING_RATE = 0.001460982239915984
-BATCH_SIZE = 2048
+LEARNING_RATE = 6.533982776597072e-04
+BATCH_SIZE = 256
 EPOCHS = 600
-HIDDEN_LAYERS = [256]
+HIDDEN_LAYERS = [256, 128]
 ACTIVATION = nn.SiLU  # tuned surrogate behaves best with SiLU
-DROPOUT_RATE = 0.05
-WEIGHT_DECAY = 8.878553948934488e-04
+DROPOUT_RATE = 0.3
+WEIGHT_DECAY = 1.3520544729384474e-04
 OPTIMIZER_NAME = "RMSprop"
 SCHEDULER_NAME = "CosineAnnealingLR"
 VAL_FRACTION = 0.1
 TEST_FRACTION = 0.1
-EARLY_STOP_PATIENCE = 80
+EARLY_STOP_PATIENCE = 70
 VAL_CHECK_INTERVAL = 10
 MIN_DELTA = 1e-4
 MIN_N_SAMPLES = 10_000
-GRAD_CLIP_NORM = 1.5
+GRAD_CLIP_NORM = 4.0
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

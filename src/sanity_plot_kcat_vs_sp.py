@@ -22,9 +22,25 @@ CSV_CANDIDATES = [
 TIME_COLS = ["time", "Time", "t"]
 KCAT_COLS = ["kcat_cg", "kcat", "log_kcat"]
 
+STATIC_RENAME = {
+    'K(p=None)': 'K',
+    "K(p=None, d=None)": 'K',
+    "P(phospho='u', k=None)": 'P_u',
+    "P(phospho='p', k=None)": 'P_p',
+    "S(k=None)": 'P_u',
+    "P(k=None)": 'P_p',
+    "K(p=1) % P(phospho='u', k=1)": 'KPu',
+    "K(p=1) % P(phospho='p', k=1)": 'KPp',
+    "K(p=1) % S(k=1)": 'KPu',
+    "K(p=1) % P(k=1)": 'KPp',
+    'koff_substrate': 'k_off',
+    'kD_substrate': 'k_D',
+    'kcat': 'k_cat',
+    'kinact': 'k_inact',
+}
 
-def find_dataset(model):
-    root = DATA_ROOT / model / "dynamic" / "processed"
+
+def find_dataset_path(root: Path):
     if not root.is_dir():
         return None
     for name in CSV_CANDIDATES:
@@ -43,7 +59,7 @@ def pick(ids, k):
     return list(np.random.default_rng().choice(ids, size=k, replace=False))
 
 
-def plot_variant(model, df, ids, column, time_col, suffix):
+def plot_variant(model, df, ids, column, time_col, suffix, prefix):
     out_dir = DATA_ROOT / model / PLOT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -99,11 +115,11 @@ def plot_variant(model, df, ids, column, time_col, suffix):
 
     fig.suptitle(f"{model} – {column}", fontsize=14)
     fig.tight_layout(rect=(0, 0, 1, 0.95))
-    fig.savefig(out_dir / f"dynamic_{suffix}.png", dpi=300)
+    fig.savefig(out_dir / f"{prefix}_{suffix}.png", dpi=300)
     plt.close(fig)
 
 
-def plot_vs_time(model, df, ids, column, time_col, suffix):
+def plot_vs_time(model, df, ids, column, time_col, suffix, prefix):
     if time_col is None:
         print(f"[skip] {model}: no time column for {column} vs time plot")
         return
@@ -134,40 +150,59 @@ def plot_vs_time(model, df, ids, column, time_col, suffix):
 
     fig.suptitle(f"{model} – {column} vs time", fontsize=14)
     fig.tight_layout(rect=(0, 0, 1, 0.95))
-    fig.savefig(out_dir / f"dynamic_{suffix}_vs_time.png", dpi=300)
+    fig.savefig(out_dir / f"{prefix}_{suffix}_vs_time.png", dpi=300)
     plt.close(fig)
 
 
-def process_model(model, max_traj):
-    dataset_path = find_dataset(model)
+def process_model(model: str, mode: str, dataset_path: Path, max_traj: int):
     if dataset_path is None:
-        print(f"[skip] {model}: no dynamic processed CSV")
+        print(f"[skip] {model} ({mode}): no dataset found")
         return
 
     df = pd.read_csv(dataset_path)
+
+    if mode.startswith("static_traj"):
+        df = df.rename(columns=STATIC_RENAME)
+        df = df.loc[:, ~df.columns.duplicated()]
     missing_cols = {"condition_id", "P_u", "P_p"} - set(df.columns)
     if missing_cols:
-        print(f"[skip] {model}: missing {', '.join(sorted(missing_cols))}")
+        print(f"[skip] {model} ({mode}): missing {', '.join(sorted(missing_cols))}")
         return
 
     kcat_col = next((c for c in KCAT_COLS if c in df.columns), None)
     if kcat_col is None:
-        print(f"[skip] {model}: no kcat column")
+        print(f"[skip] {model} ({mode}): no kcat column")
         return
     if kcat_col != "kcat_cg":
         df = df.rename(columns={kcat_col: "kcat_cg"})
 
     time_col = next((c for c in TIME_COLS if c in df.columns), None)
+    if not mode.startswith("dynamic"):
+        time_col = None
+
+    if mode.startswith("static_traj") and "P_p" in df.columns:
+        product_variation = df.groupby("condition_id")["P_p"].nunique(dropna=True)
+        varying_product_ids = product_variation[product_variation > 1].index.tolist()
+        if varying_product_ids:
+            preview = ", ".join(str(cid) for cid in varying_product_ids[:20])
+            ellipsis = " ..." if len(varying_product_ids) > 20 else ""
+            print(
+                f"[info] {model} ({mode}): P_p varies for {len(varying_product_ids)} trajectories: "
+                f"{preview}{ellipsis}"
+            )
+        else:
+            print(f"[warn] {model} ({mode}): P_p is constant across all trajectories")
+
     ids = df["condition_id"].dropna().unique()
     if len(ids) == 0:
-        print(f"[skip] {model}: empty condition_id")
+        print(f"[skip] {model} ({mode}): empty condition_id")
         return
     ids = pick(ids, max_traj)
 
     base_cols = [c for c in ["condition_id", time_col, "P_u", "P_p", "kcat_cg"] if c in df.columns]
     mm_cols = [c for c in ["k_off", "k_D", "k_cat", "k_inact", "tK"] if c in df.columns]
     for cid in ids:
-        print(f"\n=== {model} | {cid} ===")
+        print(f"\n=== {model} ({mode}) | {cid} ===")
         traj = df[df["condition_id"] == cid]
         varying_cols = []
         constant_cols = []
@@ -186,10 +221,12 @@ def process_model(model, max_traj):
         for col, value in constant_cols:
             print(f"  {col}: {value}")
 
-    plot_variant(model, df, ids, "P_u", time_col, "substrate")
-    plot_variant(model, df, ids, "P_p", time_col, "product")
-    plot_vs_time(model, df, ids, "P_p", time_col, "product")
-    plot_vs_time(model, df, ids, "P_u", time_col, "substrate")
+    prefix = mode
+    plot_variant(model, df, ids, "P_u", time_col, "substrate", prefix)
+    plot_variant(model, df, ids, "P_p", time_col, "product", prefix)
+    if mode.startswith("dynamic"):
+        plot_vs_time(model, df, ids, "P_p", time_col, "product", prefix)
+        plot_vs_time(model, df, ids, "P_u", time_col, "substrate", prefix)
 
 
 def discover_models():
@@ -204,7 +241,25 @@ def main():
 
     models = args.models or discover_models()
     for model in models:
-        process_model(model, args.max_trajectories)
+        model_dir = DATA_ROOT / model
+        if not model_dir.is_dir():
+            continue
+
+        # dynamic
+        dyn_path = find_dataset_path(model_dir / "dynamic" / "processed")
+        dyn_mode = "dynamic"
+        if dyn_path is None:
+            dyn_path = find_dataset_path(model_dir / "dynamic" / "raw")
+            dyn_mode = "dynamic_raw" if dyn_path is not None else dyn_mode
+        if dyn_path is not None:
+            process_model(model, dyn_mode, dyn_path, args.max_trajectories)
+
+        # any static trajectory variants
+        for static_dir in sorted(model_dir.glob("static_traj*/")):
+            mode_name = static_dir.name
+            data_path = find_dataset_path(static_dir / "raw")
+            if data_path is not None:
+                process_model(model, mode_name, data_path, args.max_trajectories)
 
 
 if __name__ == "__main__":

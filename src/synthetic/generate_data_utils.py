@@ -125,6 +125,9 @@ def setup_static_simulation(
     ub: float,
     lb: float,
     n_samples: int,
+    perturb: str | None = None,
+    perturb_count: int = 22,
+    perturb_range: float = 100.0,
 ) -> tuple[amici.Model, amici.Solver, amici.ExpData, list[amici.ExpData]]:
     """
     Set up the static simulation.
@@ -158,14 +161,51 @@ def setup_static_simulation(
 
     edatas_base = []
 
-    init = np.random.random((n_samples, len(model.getParameterNames()))) * (
-        ub * np.log(10) - lb * np.log(10)
-    ) + lb * np.log(10)
+    param_names = model.getParameterNames()
+    param_scales = model.getParameterScale()
 
-    for init_cond in init:
-        ec = amici.ExpData(edata_base)
-        ec.parameters = tuple(init_cond)
-        edatas_base.append(ec)
+    if perturb is None:
+        init = np.random.random((n_samples, len(param_names))) * (
+            ub * np.log(10) - lb * np.log(10)
+        ) + lb * np.log(10)
+        for init_cond in init:
+            ec = amici.ExpData(edata_base)
+            ec.parameters = tuple(init_cond)
+            edatas_base.append(ec)
+    else:
+        # Sample a single base parameter draw (in scaled space)
+        base_scaled = np.random.random(len(param_names)) * (
+            ub * np.log(10) - lb * np.log(10)
+        ) + lb * np.log(10)
+        base_actual = np.array(scale(base_scaled, param_scales), dtype=float)
+
+        def add_variants(param: str, count: int) -> None:
+            if param not in param_names:
+                return
+            idx = param_names.index(param)
+            if count <= 0:
+                return
+            log_range = np.log(perturb_range)
+            exponents = np.linspace(-log_range, log_range, count)
+            exponents[count // 2] = 0.0
+            factors = np.exp(exponents)
+            for factor in factors:
+                actual = base_actual.copy()
+                actual[idx] = max(actual[idx] * factor, 1e-12)
+                scaled = np.array(unscale(actual, param_scales), dtype=float)
+                ec = amici.ExpData(edata_base)
+                ec.parameters = tuple(scaled)
+                edatas_base.append(ec)
+
+        if perturb in {"substrate", "both"}:
+            add_variants("uP0", perturb_count)
+        if perturb in {"product", "both"}:
+            add_variants("pP0", perturb_count)
+        if perturb not in {"substrate", "product", "both"}:
+            # Fallback to the base draw if an unknown option is supplied
+            ec = amici.ExpData(edata_base)
+            ec.parameters = tuple(base_scaled)
+            edatas_base.append(ec)
 
     return model, solver, edata_base, edatas_base
 
