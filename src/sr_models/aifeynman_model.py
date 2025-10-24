@@ -11,9 +11,25 @@ import random
 import pandas as pd
 import os
 import shutil
-from aifeynman import S_run_aifeynman
+import sys
+from pathlib import Path
 import tempfile
 import numpy as np
+
+AI_FEYNMAN_IMPORT_ERROR = None
+try:
+    from aifeynman import S_run_aifeynman
+except ImportError as exc:  # pragma: no cover - optional dependency
+    repo_root = Path(__file__).resolve().parents[2]
+    local_pkg = repo_root / "src" / "aifeynman"
+    if local_pkg.exists():
+        sys.path.insert(0, str(local_pkg))
+        try:
+            from aifeynman import S_run_aifeynman  # type: ignore
+        except ImportError as inner_exc:  # pragma: no cover - defensive
+            AI_FEYNMAN_IMPORT_ERROR = inner_exc
+    else:  # pragma: no cover - defensive
+        AI_FEYNMAN_IMPORT_ERROR = exc
 
 TARGET_COLUMN = 'kcat_cg'
 
@@ -53,23 +69,36 @@ def load_dataset(file_path, dataset_size=None, features=None, seed=None):
         data.loc[:, input_cols] = np.exp(data.loc[:, input_cols])
     return data
 
-def run_feynman(data, temp_file, features):
+def run_feynman(
+    data,
+    temp_file,
+    features,
+    bf_try_time: int,
+    nn_epochs: int,
+    polyfit_degree: int,
+) -> None:
     """Runs AI Feynman to find the best formula, saving results to a specified file."""
     X, y = data.iloc[:, :-1].values, data.iloc[:, -1].values
     data_array = np.concatenate((X, y[:, np.newaxis]), axis=1)
+    os.makedirs(DATA_PATHDIR, exist_ok=True)
     np.savetxt(os.path.join(DATA_PATHDIR, FILENAME), data_array)
     np.savetxt(os.path.join(DATA_PATHDIR, '7ops.txt'), [OPERATORS], fmt='%s')
 
     try:
         # Run AI Feynman with specified parameters
+        variable_names = (
+            [name.strip() for name in features.split(',')]
+            if features
+            else [f"x_{idx}" for idx in range(X.shape[1])]
+        )
         S_run_aifeynman.run_aifeynman(
             pathdir=DATA_PATHDIR,
             filename=FILENAME,
-            BF_try_time=BF_TRY_TIME,
+            BF_try_time=bf_try_time,
             BF_ops_file_type='7ops.txt',
-            polyfit_deg=POLYFIT_DEGREE,
-            NN_epochs=NN_EPOCHS,
-            vars_name=features.split(','),
+            polyfit_deg=polyfit_degree,
+            NN_epochs=nn_epochs,
+            vars_name=variable_names,
             test_percentage=TEST_PERCENTAGE,
         )
         copy_solution_to_temp(os.path.join(DATA_PATHDIR, 'results', f'solution_{FILENAME}'), temp_file)
@@ -98,12 +127,32 @@ def main():
     parser.add_argument('--features', type=str, help='Comma-separated list of features to use')
     parser.add_argument('--temp_file', required=True, help='Path to save intermediate results')
     parser.add_argument('--seed', type=int, help='Random seed for reproducibility')
+    parser.add_argument('--bf_try_time', type=int, help='Override brute-force search time (seconds)')
+    parser.add_argument('--nn_epochs', type=int, help='Override neural network training epochs')
+    parser.add_argument(
+        '--polyfit_degree',
+        type=int,
+        help='Override polynomial fit degree used by AI Feynman',
+    )
 
     args = parser.parse_args()
+    if AI_FEYNMAN_IMPORT_ERROR is not None:
+        raise RuntimeError(
+            "Failed to import the AI Feynman package from either the environment or src/aifeynman.\n"
+            f"Original error: {AI_FEYNMAN_IMPORT_ERROR}"
+        )
+
     if args.seed is not None:
         seed_everything(args.seed)
     data = load_dataset(args.dataset, args.dataset_size, args.features, args.seed)
-    run_feynman(data, args.temp_file, args.features)
+    run_feynman(
+        data,
+        args.temp_file,
+        args.features,
+        bf_try_time=args.bf_try_time or BF_TRY_TIME,
+        nn_epochs=args.nn_epochs or NN_EPOCHS,
+        polyfit_degree=args.polyfit_degree or POLYFIT_DEGREE,
+    )
 
 if __name__ == '__main__':
     main()

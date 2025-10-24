@@ -4,7 +4,6 @@ import os
 import random
 import sys
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
@@ -25,11 +24,13 @@ import tensorflow as tf
 tf.keras.backend.clear_session()  # Clears TensorFlow state
 
 # Hyperparameters for DSO (Deep Symbolic Optimization)
-N_ITERATIONS = 100
-N_SAMPLES = 200
+DEFAULT_N_ITERATIONS = 100
+DEFAULT_BATCH_SIZE = 128
+DEFAULT_LEARNING_RATE = 0.0005
+DEFAULT_ENTROPY_WEIGHT = 0.03
+DEFAULT_ENTROPY_GAMMA = 0.7
 SAVE_ALL_ITERATIONS = True
 FUNCTION_SET = ["add", "sub", "mul", "div", "sin", "cos", "exp", "log", "poly"]
-LEARNING_RATE = 0.0005
 OPTIMIZER = "adam"
 POLY_REGRESSOR = "dso_least_squares"
 CONFIG_FILE_PATH = "./data/dso/dso_config.json"
@@ -42,8 +43,18 @@ def seed_everything(seed: int) -> None:
     except AttributeError:
         pass
 
-def create_dso_config(dataset_path):
+def create_dso_config(
+    dataset_path: str,
+    n_iterations: int,
+    batch_size: int,
+    learning_rate: float,
+    entropy_weight: float,
+    entropy_gamma: float,
+) -> None:
     """Creates a JSON configuration file for DSO based on specified hyperparameters."""
+    effective_batch_size = max(1, batch_size)
+    total_samples = max(1, n_iterations) * effective_batch_size
+
     config = {
         "task": {
             "task_type": "regression",
@@ -52,14 +63,14 @@ def create_dso_config(dataset_path):
             "poly_optimizer_params": {"regressor": POLY_REGRESSOR}
         },
         "policy_optimizer": {
-            "learning_rate": LEARNING_RATE,
+            "learning_rate": learning_rate,
             "optimizer": OPTIMIZER,
-            "entropy_weight": 0.03,
-            "entropy_gamma": 0.7,
+            "entropy_weight": entropy_weight,
+            "entropy_gamma": entropy_gamma,
         },
         "training": {
-            "n_samples": N_SAMPLES,
-            "batch_size": 64,
+            "n_samples": total_samples,
+            "batch_size": effective_batch_size,
             "early_stopping" : False
         },
         "prior": {
@@ -97,21 +108,29 @@ def load_dataset(file_path, dataset_size=None, features=None, seed=None):
     if not data.empty:
         input_cols = data.columns[:-1]
         data.loc[:, input_cols] = np.exp(data.loc[:, input_cols])
+    data = data.replace([np.inf, -np.inf], np.nan).dropna()
+    if data.empty:
+        raise ValueError("DSO received an empty dataset after cleaning.")
     return data
 
-def run_dso_training(temp_file):
+def run_dso_training(temp_file: str) -> None:
     """Runs DSO model training and logs the best equations to a specified file."""
     model = DeepSymbolicRegressor(CONFIG_FILE_PATH)
     model.setup()
 
+    model.train()
+    best_program = getattr(model.trainer, "p_r_best", None)
+    if best_program is None:
+        Path(temp_file).write_text("")
+        print("DSO training completed without discovering a valid expression.")
+        return
+
     with open(temp_file, 'w') as f:
-        model.train()
         f.write("Equation\tScore\n")
-        new_best_program = model.trainer.p_r_best
-        new_best_equation = repr(new_best_program.sympy_expr)
-        print(new_best_equation)
-        score = new_best_program.r
-        f.write(f"{new_best_equation}\t{score:.6f}\n")
+        best_equation = repr(best_program.sympy_expr)
+        print(best_equation)
+        score = best_program.r
+        f.write(f"{best_equation}\t{score:.6f}\n")
 
     print("DSO model training completed. Results saved.")
 
@@ -122,6 +141,11 @@ def main():
     parser.add_argument('--features', type=str, help='Comma-separated list of features to use')
     parser.add_argument('--temp_file', required=True, help='Path to save best equations during training')
     parser.add_argument('--seed', type=int, help='Random seed for reproducibility')
+    parser.add_argument('--n_iterations', type=int, help='Number of DSO training iterations')
+    parser.add_argument('--n_samples', type=int, help='Batch size used per DSO iteration')
+    parser.add_argument('--learning_rate', type=float, help='Learning rate for the policy optimizer')
+    parser.add_argument('--entropy_weight', type=float, help='Entropy regularisation weight for policy optimizer')
+    parser.add_argument('--entropy_gamma', type=float, help='Entropy decay factor for policy optimizer')
 
     args = parser.parse_args()
     if DSO_IMPORT_ERROR is not None:
@@ -139,7 +163,14 @@ def main():
     os.makedirs(os.path.dirname(dataset_path), exist_ok=True)
     data.to_csv(dataset_path, index=False, header=False)
 
-    create_dso_config(dataset_path)
+    create_dso_config(
+        dataset_path=dataset_path,
+        n_iterations=args.n_iterations or DEFAULT_N_ITERATIONS,
+        batch_size=args.n_samples or DEFAULT_BATCH_SIZE,
+        learning_rate=args.learning_rate or DEFAULT_LEARNING_RATE,
+        entropy_weight=args.entropy_weight or DEFAULT_ENTROPY_WEIGHT,
+        entropy_gamma=args.entropy_gamma or DEFAULT_ENTROPY_GAMMA,
+    )
     run_dso_training(args.temp_file)
 
 

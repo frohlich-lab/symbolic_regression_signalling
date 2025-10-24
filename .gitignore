@@ -6,6 +6,7 @@ data_old/
 model/
 src/dso
 src/pysindy
+src/aifeynman
 error_file.err
 output_file.out
 results/

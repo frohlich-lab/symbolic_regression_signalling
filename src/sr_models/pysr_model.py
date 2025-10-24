@@ -7,13 +7,16 @@ Usage:
 """
 
 import argparse
+import os
 import random
+import shutil
+import time
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 from pysr import PySRRegressor
-import os
 
 TARGET_COLUMN = 'kcat_cg'
 
@@ -68,18 +71,23 @@ def load_dataset(file_path, dataset_size=None, features=None):
 
 def find_best_formula(
     data,
-    tempdir,
+    temp_file: str,
     n_iterations: int = N_ITERATIONS,
     population_size: int = POPULATION_SIZE,
     max_size: int = MAX_SIZE,
     parsimony: float = PARSIMONY,
     seed: Optional[int] = None,
-):
+) -> None:
     """
     Run PySR to find the best formula, saving results to a specified file.
     """
     X, y = data.iloc[:, :-1].values, data.iloc[:, -1].values  # Split data into inputs (X) and output (y)
-    
+    temp_path = Path(temp_file)
+    temp_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path.unlink(missing_ok=True)
+    run_id = f"trial_{os.getpid()}_{int(time.time() * 1000)}"
+    output_dir = temp_path.parent
+
     try:
         if seed is not None:
             set_seed(seed)
@@ -96,16 +104,27 @@ def find_best_formula(
             batching=BATCHING,
             elementwise_loss=LOG_SPACE_LOSS,
             annealing=ANNEALING,
-            output_directory=os.path.dirname(tempdir),  # Save best formulas to this file
-            run_id="temp",
+            output_directory=str(output_dir),
+            run_id=run_id,
             random_state=seed,
         )
         model.fit(X, y)
+        result_csv = output_dir / run_id / "hall_of_fame.csv"
+        if result_csv.exists():
+            shutil.copyfile(result_csv, temp_path)
+        else:
+            backup = sorted(output_dir.glob(f"{run_id}*/hall_of_fame.csv"))
+            if backup:
+                shutil.copyfile(backup[0], temp_path)
 
     except TimeoutError:
         print("PySR process timed out. Try reducing the number of iterations or adjusting other hyperparameters.")
     except Exception as e:
         print(f"An error occurred during PySR training: {e}")
+    finally:
+        run_output = output_dir / run_id
+        if run_output.exists():
+            shutil.rmtree(run_output, ignore_errors=True)
 
 def main():
     """
@@ -124,10 +143,9 @@ def main():
 
     args = parser.parse_args()
     data = load_dataset(args.dataset, args.dataset_size, args.features)
-    tempdir = os.path.dirname(args.temp_file)
     find_best_formula(
         data,
-        tempdir,
+        args.temp_file,
         n_iterations=args.n_iterations,
         population_size=args.population_size,
         max_size=args.max_size,

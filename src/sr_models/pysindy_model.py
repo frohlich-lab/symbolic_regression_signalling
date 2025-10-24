@@ -9,9 +9,12 @@ Usage:
 
 import argparse
 import random
-import pysindy as ps
+from pathlib import Path
+from typing import Optional
+
 import numpy as np
 import pandas as pd
+import pysindy as ps
 import sympy as sp
 from tqdm import tqdm
 
@@ -43,6 +46,11 @@ FUNCTION_NAMES = [
     lambda x, y, z: f"{x}*{y}*{z}",
     lambda x, y, z, t: f"{x}*{y}*{z}*{t}",
 ]
+
+
+def seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
 
 def load_dataset(
     file_path: str, dataset_size: int = None, features: str = None
@@ -181,32 +189,80 @@ def convert_to_explicit_ode_system(rhs_expressions, input_features, t=symbols('t
 
     return explicit_odes
 
+CHUNK_LENGTH = N_TIME_STEPS - 1
+
+
+def _build_samples(data: pd.DataFrame) -> list[pd.DataFrame]:
+    """Create per-trajectory data slices with a strictly increasing time grid."""
+    samples: list[pd.DataFrame] = []
+    if data.empty:
+        return samples
+
+    if "time" in data.columns:
+        data = data.sort_values("time").reset_index(drop=True)
+
+    total_rows = len(data)
+    n_chunks = total_rows // CHUNK_LENGTH
+
+    for idx in range(n_chunks):
+        start = idx * CHUNK_LENGTH
+        end = start + CHUNK_LENGTH
+        chunk = data.iloc[start:end].copy()
+        if len(chunk) < 2:
+            continue
+        chunk = chunk.reset_index(drop=True)
+
+        if "time" in chunk.columns:
+            t_values = chunk["time"].to_numpy(dtype=float, copy=True)
+            for j in range(1, len(t_values)):
+                prev = t_values[j - 1]
+                if t_values[j] <= prev:
+                    step = max(1e-9, abs(prev) * 1e-9)
+                    t_values[j] = prev + step
+            chunk["time"] = t_values
+        else:
+            chunk["time"] = np.linspace(0.0, float(len(chunk) - 1), num=len(chunk))
+
+        samples.append(chunk)
+
+    return samples
+
+
 def sample_splitter(data: pd.DataFrame) -> tuple[np.ndarray, list[np.ndarray], list[np.ndarray]]:
     """Split data into time, features (X), and targets (y)."""
-    samples = [
-        data.iloc[i * N_TIME_STEPS:(i + 1) * N_TIME_STEPS - 1].reset_index(drop=True)
-        for i in range(N_SAMPLES)
-    ]
+    samples = _build_samples(data)
+    if not samples:
+        raise ValueError("PySINDy received no valid trajectory segments.")
     X = [sample.iloc[:, 1:-1].values for sample in samples]
     y = [sample.iloc[:, -1].values for sample in samples]
     t = samples[0]['time'].values
     return t, X, y
 
-def get_x_dot(data: pd.DataFrame) -> list[np.ndarray]:
+
+def _sanitize_edge_order(order: Optional[int]) -> int:
+    """
+    Translate the requested finite difference order into a valid numpy.gradient edge_order.
+
+    numpy only supports edge orders 1 and 2; fall back gracefully if the sweep requests a
+    different value.
+    """
+    if order is None or order <= 1:
+        return 1
+    return 2
+
+
+def get_x_dot(data: pd.DataFrame, finite_difference_order: Optional[int] = None) -> list[np.ndarray]:
     """Compute derivatives of features with respect to time."""
-    t, _, y = sample_splitter(data)
-    samples = [
-        data.iloc[i * N_TIME_STEPS:(i + 1) * N_TIME_STEPS - 1].reset_index(drop=True)
-        for i in range(N_SAMPLES)
-    ]
+    samples = _build_samples(data)
+    if not samples:
+        raise ValueError("PySINDy received no valid trajectory segments for derivative estimation.")
+    edge_order = _sanitize_edge_order(finite_difference_order)
     x_dots = []
-    for i, sample in enumerate(samples):
-        P_u_values = sample['P_u'].values  # Replace with actual column name
-        P_u_dot = np.gradient(P_u_values, t)
-        P_p_dot = y[i]
-        cst_dot = np.zeros(N_TIME_STEPS - 1)
-        x_dot_sample = np.vstack([P_p_dot, cst_dot, P_u_dot, cst_dot, cst_dot, cst_dot, cst_dot]).T
-        x_dots.append(x_dot_sample)
+    for sample in samples:
+        time = sample["time"].to_numpy(dtype=float, copy=False)
+        feature_matrix = sample.iloc[:, 1:-1].to_numpy(dtype=float, copy=True)
+        derivatives = np.gradient(feature_matrix, time, axis=0, edge_order=edge_order)
+        x_dots.append(derivatives)
     return x_dots
 
 def custom_log_loss(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -256,10 +312,16 @@ def find_best_formula(
         f.write('Equation ' + str(best_formula))
         f.write('\nLoss ' + str(loss))
 
-def grid_search(data: pd.DataFrame, temp_file: str) -> None:
+def grid_search(
+    data: pd.DataFrame,
+    temp_file: str,
+    alpha_override: Optional[float] = None,
+    threshold_override: Optional[float] = None,
+    finite_difference_order_override: Optional[int] = None,
+) -> None:
     """Perform grid search over alpha and threshold to find the best parameters."""
     t, X, _ = sample_splitter(data)
-    x_dots = get_x_dot(data)
+    x_dots = get_x_dot(data, finite_difference_order_override)
     
     feature_names = ['P_p', 'tK', 'P_u', 'k_cat', 'k_on', 'k_off', 'k_inact']
     best_loss = float('inf')
@@ -267,8 +329,17 @@ def grid_search(data: pd.DataFrame, temp_file: str) -> None:
     best_formula = None
     results = []
 
-    alphas = [1, 1e2, 1e3, 1e4, 1e5]
-    thresholds = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
+    if alpha_override is not None:
+        alphas = [alpha_override]
+    else:
+        alphas = [1, 1e2, 1e3, 1e4, 1e5]
+
+    if threshold_override is not None:
+        thresholds = [threshold_override]
+    else:
+        thresholds = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
+
+    finite_order = _sanitize_edge_order(finite_difference_order_override)
 
     for alpha in alphas:
         for threshold in thresholds:
@@ -277,7 +348,7 @@ def grid_search(data: pd.DataFrame, temp_file: str) -> None:
                 library_functions=LIBRARY_FUNCTIONS,
                 function_names=FUNCTION_NAMES,
                 temporal_grid=t,
-                derivative_order=1,
+                derivative_order=finite_order,
                 implicit_terms=True,
             )
             optimizer = ps.STLSQ(alpha=alpha, threshold=threshold)
@@ -301,8 +372,39 @@ def grid_search(data: pd.DataFrame, temp_file: str) -> None:
     for rank, (alpha, threshold, loss) in enumerate(results, start=1):
         print(f"Rank {rank}: alpha={alpha}, threshold={threshold}, loss={loss}")
 
+    if best_params is None:
+        Path(temp_file).write_text("")
+        print("No valid parameters produced a result.")
+        return
+
     print(f"Best parameters: alpha={best_params[0]}, threshold={best_params[1]}")
     print(f"Best loss: {best_loss}")
+
+    # Refit with best parameters and write out formula/score
+    best_alpha, best_threshold = best_params
+    pde_lib = ps.PDELibrary(
+        library_functions=LIBRARY_FUNCTIONS,
+        function_names=FUNCTION_NAMES,
+        temporal_grid=t,
+        derivative_order=finite_order,
+        implicit_terms=True,
+    )
+    optimizer = ps.STLSQ(alpha=best_alpha, threshold=best_threshold)
+    model = ps.SINDy(
+        feature_library=pde_lib,
+        optimizer=optimizer,
+        feature_names=feature_names,
+    )
+    model.fit(X, t=t, x_dot=x_dots, multiple_trajectories=True)
+    final_loss = model.score(X, t=t, x_dot=x_dots, multiple_trajectories=True, metric=custom_log_loss)
+    expressions = model.equations(precision=3)
+    symbolic_formulas = convert_to_symbolic(expressions, input_features=feature_names)
+    symbolic_formulas = convert_to_explicit_ode_system(symbolic_formulas, input_features=feature_names)
+
+    best_formula = symbolic_formulas[0].rhs
+    with open(temp_file, 'w') as handle:
+        handle.write(f"Equation {best_formula}\n")
+        handle.write(f"Loss {final_loss}\n")
 
                            
 def main() -> None:
@@ -312,16 +414,28 @@ def main() -> None:
     parser.add_argument("--features", type=str, help="Comma-separated list of features to use")
     parser.add_argument("--temp_file", required=True, help="Path to save intermediate results")
     parser.add_argument("--seed", type=int, help="Random seed for reproducibility")
+    parser.add_argument("--alpha", type=float, help="STLSQ alpha value to evaluate")
+    parser.add_argument("--threshold", type=float, help="STLSQ threshold value to evaluate")
+    parser.add_argument(
+        "--finite_difference_order",
+        type=int,
+        help="Edge order used while estimating derivatives (1 or 2).",
+    )
+
     args = parser.parse_args()
 
     if args.seed is not None:
         seed_everything(args.seed)
 
     data = load_dataset(args.dataset, args.dataset_size, args.features)
-    find_best_formula(data, args.temp_file)
+    grid_search(
+        data,
+        args.temp_file,
+        alpha_override=args.alpha,
+        threshold_override=args.threshold,
+        finite_difference_order_override=args.finite_difference_order,
+    )
+
 
 if __name__ == "__main__":
     main()
-def seed_everything(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
