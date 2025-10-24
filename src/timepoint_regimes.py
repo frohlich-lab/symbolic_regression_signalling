@@ -109,12 +109,30 @@ def _assign_time_groups(data: pd.DataFrame, time_column: str, max_groups: int = 
     return working, group_infos
 
 
-def _build_nn_pool(base: pd.DataFrame, cap: int, seed: int) -> pd.DataFrame:
+def _build_nn_pool(
+    base: pd.DataFrame,
+    cap: int,
+    seed: int,
+    exclude: pd.DataFrame = None,
+) -> pd.DataFrame:
     if base.empty:
         return base
-    target = cap if cap and cap > 0 else len(base)
-    replace = len(base) < target
-    return base.sample(n=target, replace=replace, random_state=seed + 1).reset_index(drop=True)
+    pool = base.copy().reset_index(drop=True)
+    if exclude is not None and not exclude.empty:
+        common = [col for col in pool.columns if col in exclude.columns]
+        if common:
+            exclude_unique = exclude[common].drop_duplicates()
+            merged = pool.merge(
+                exclude_unique.assign(_mark=1),
+                on=common,
+                how='left',
+            )
+            pool = merged[merged['_mark'].isna()].drop(columns=['_mark']).reset_index(drop=True)
+            if pool.empty:
+                pool = base.copy().reset_index(drop=True)
+    target = cap if cap and cap > 0 else len(pool)
+    replace = len(pool) < target
+    return pool.sample(n=target, replace=replace, random_state=seed + 1).reset_index(drop=True)
 
 
 def load_dataset_with_time(path: str, features: str, time_column: str = TIME_COLUMN) -> pd.DataFrame:
@@ -602,10 +620,10 @@ def evaluate_models(data: pd.DataFrame, output_dir: str, dataset_size: int, seed
             else base_no_time
         ).reset_index(drop=True)
 
-        nn_pool = _build_nn_pool(base_no_time, NN_DATASET_CAP, seed)
-
         sample = symbolic_sample.copy()
         sample.to_csv(os.path.join(group_dir, "processed/model_sample.csv"), index=False)
+
+        nn_pool = _build_nn_pool(base_no_time, NN_DATASET_CAP, seed, exclude=sample)
 
         LOGGER.info(
             "Processing %s | total rows=%d | sample size=%d",
@@ -673,43 +691,6 @@ def evaluate_models(data: pd.DataFrame, output_dir: str, dataset_size: int, seed
             np.column_stack([nn_X_test_pre, np.log(nn_y_test.values)]),
             columns=list(nn_features.columns) + [TARGET_COLUMN],
         )
-
-        # Ensure evaluation set is disjoint from NN train/validation pool
-        eval_rows = sample.copy()
-        eval_rows['_tmp_idx'] = np.arange(len(eval_rows))
-        nn_pool['_tmp_idx'] = np.arange(len(nn_pool))
-        overlap = nn_pool.merge(
-            eval_rows,
-            how='inner',
-            on=feature_names,
-            suffixes=('_nn', '_eval'),
-        )
-        if not overlap.empty:
-            nn_pool = nn_pool.drop(index=overlap['_tmp_idx_nn']).reset_index(drop=True)
-        nn_pool = nn_pool.drop(columns=['_tmp_idx'], errors='ignore')
-        eval_rows = eval_rows.drop(columns=['_tmp_idx'], errors='ignore')
-        if not nn_pool_eval_overlap.empty:
-            nn_pool = nn_pool.drop(index=nn_pool_eval_overlap).reset_index(drop=True)
-            nn_features = nn_pool.drop(columns=[TARGET_COLUMN])
-            nn_target = nn_pool[TARGET_COLUMN]
-            nn_X_train, nn_X_test, nn_y_train, nn_y_test = train_test_split(
-                nn_features,
-                nn_target,
-                test_size=0.2,
-                random_state=seed,
-                shuffle=True,
-            )
-            nn_X_train_pre, nn_pipeline = preprocess_data(nn_X_train.values)
-            nn_X_test_pre = nn_pipeline.transform(nn_X_test.values)
-            nn_train_pre = pd.DataFrame(
-                np.column_stack([nn_X_train_pre, np.log(nn_y_train.values)]),
-                columns=list(nn_features.columns) + [TARGET_COLUMN],
-            )
-            nn_test_pre = pd.DataFrame(
-                np.column_stack([nn_X_test_pre, np.log(nn_y_test.values)]),
-                columns=list(nn_features.columns) + [TARGET_COLUMN],
-            )
-
         train_pre = pd.DataFrame(
             np.column_stack([nn_pipeline.transform(train_df[feature_names].values), np.log(y_train)]),
             columns=list(train_df.columns),
