@@ -10,37 +10,29 @@ import argparse
 import os
 import random
 import shutil
+import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
 from pysr import PySRRegressor
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
+from constants import PYSR_CONFIG
+from regime_variants import VARIANTS, augment_for_variant
+
 TARGET_COLUMN = 'kcat_cg'
-
-# Hyperparameters for PySR (Python Symbolic Regression)
-N_ITERATIONS = 200  # Total iterations for model training
-POPULATION_SIZE = 30  # Symbolic expressions in the population
-POPULATIONS = 15  # Number of populations to evolve
-MUTATION_RATE = 0.1  # Mutation probability per individual
-MAX_SIZE = 20  # Maximum size of symbolic expressions
-PARSIMONY = 1  # Regularization to reduce expression complexity
-VERBOSITY = 0  # Verbosity level during training
-BATCHING = True  # Enable mini-batch training
-ANNEALING = True  # Enable annealing to escape local minima
-LOG_SPACE_LOSS = "my_loss(x,y)=(log(max(x,0)+1e-25)-log(max(y,0)+1e-25))^2"  # Custom log-space loss function
-
-# Operators for Symbolic Regression
-BINARY_OPERATORS = ["+", "*", "/", "-"]  # Binary operators for expressions
-UNARY_OPERATORS = ["exp", "log"]  # Unary operators for expressions
 
 def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
 
-def load_dataset(file_path, dataset_size=None, features=None):
+def load_dataset(file_path, dataset_size=None, features=None, variant: str = "sQSSA"):
     """
     Load dataset from a CSV file, sample it if dataset size is specified, 
     and select specific features if provided.
@@ -67,16 +59,17 @@ def load_dataset(file_path, dataset_size=None, features=None):
 
     data = data.map(np.exp)
 
+    if variant and variant != "sQSSA":
+        data = augment_for_variant(data, variant)
+
     return data
 
 def find_best_formula(
     data,
     temp_file: str,
-    n_iterations: int = N_ITERATIONS,
-    population_size: int = POPULATION_SIZE,
-    max_size: int = MAX_SIZE,
-    parsimony: float = PARSIMONY,
+    override_config: Optional[Dict[str, object]] = None,
     seed: Optional[int] = None,
+    variant: str = "sQSSA",
 ) -> None:
     """
     Run PySR to find the best formula, saving results to a specified file.
@@ -85,28 +78,22 @@ def find_best_formula(
     temp_path = Path(temp_file)
     temp_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path.unlink(missing_ok=True)
-    run_id = f"trial_{os.getpid()}_{int(time.time() * 1000)}"
+    run_id = f"trial_{variant}_{os.getpid()}_{int(time.time() * 1000)}"
     output_dir = temp_path.parent
 
     try:
         if seed is not None:
             set_seed(seed)
         # Set up and train the PySR model
+        model_config = dict(PYSR_CONFIG)
+        if override_config:
+            model_config.update(override_config)
+        for forbidden_key in ("output_directory", "run_id", "random_state"):
+            model_config.pop(forbidden_key, None)
         model = PySRRegressor(
-            niterations=n_iterations,
-            population_size=population_size,
-            populations=POPULATIONS,
-            binary_operators=BINARY_OPERATORS,
-            unary_operators=UNARY_OPERATORS,
-            maxsize=max_size,
-            parsimony=parsimony,
-            verbosity=VERBOSITY,
-            batching=BATCHING,
-            elementwise_loss=LOG_SPACE_LOSS,
-            annealing=ANNEALING,
+            **model_config,
             output_directory=str(output_dir),
             run_id=run_id,
-            random_state=seed,
         )
         model.fit(X, y)
         result_csv = output_dir / run_id / "hall_of_fame.csv"
@@ -135,22 +122,33 @@ def main():
     parser.add_argument('--dataset_size', type=int, help='Maximum number of samples to load from the dataset')
     parser.add_argument('--features', type=str, help='Comma-separated list of features to use from the dataset')
     parser.add_argument('--temp_file', required=True, help='Path to save the intermediate results from PySR')
-    parser.add_argument('--n_iterations', type=int, default=N_ITERATIONS, help='Number of PySR iterations')
-    parser.add_argument('--population_size', type=int, default=POPULATION_SIZE, help='Population size for PySR')
-    parser.add_argument('--max_size', type=int, default=MAX_SIZE, help='Maximum symbolic expression size')
-    parser.add_argument('--parsimony', type=float, default=PARSIMONY, help='Parsimony coefficient')
+    parser.add_argument('--n_iterations', type=int, help='Number of PySR iterations (overrides config)')
+    parser.add_argument('--population_size', type=int, help='Population size for PySR (overrides config)')
+    parser.add_argument('--max_size', type=int, help='Maximum symbolic expression size (overrides config)')
+    parser.add_argument('--parsimony', type=float, help='Parsimony coefficient (overrides config)')
     parser.add_argument('--seed', type=int, help='Random seed for reproducibility')
+    parser.add_argument('--variant', type=str, choices=list(VARIANTS.keys()), default="sQSSA", help='Model variant determining feature preprocessing (default: sQSSA)')
 
     args = parser.parse_args()
-    data = load_dataset(args.dataset, args.dataset_size, args.features)
+    print(f"Running PySR for variant: {args.variant}")
+    data = load_dataset(args.dataset, args.dataset_size, args.features, variant=args.variant)
+    override_config: Dict[str, object] = {}
+    if args.n_iterations is not None:
+        override_config['niterations'] = args.n_iterations
+    if args.population_size is not None:
+        override_config['population_size'] = args.population_size
+    if args.max_size is not None:
+        override_config['maxsize'] = args.max_size
+    if args.parsimony is not None:
+        override_config['parsimony'] = args.parsimony
+    if args.variant == "tQSSA" and "maxsize" not in override_config:
+        override_config["maxsize"] = 35
     find_best_formula(
         data,
         args.temp_file,
-        n_iterations=args.n_iterations,
-        population_size=args.population_size,
-        max_size=args.max_size,
-        parsimony=args.parsimony,
+        override_config=override_config or None,
         seed=args.seed,
+        variant=args.variant,
     )
 
 if __name__ == '__main__':

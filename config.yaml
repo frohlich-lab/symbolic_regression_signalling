@@ -1,54 +1,52 @@
-# config.yaml
-data_type: "static"  # Options: "dynamic" or "static"
-
-enzyme_model: "two_step_enzyme"
-
-# Control whether symbolic regression sweeps run before model training
-enable_sr_sweeps: true
-
-# Model selection
-models: ["pysr", "pysindy", "kan", "dso", "aifeynman"] #, "aifeynman", 
-
-output_extension: {
-    "pysindy": "txt",
-    "aifeynman": "txt",
-    "dso": "txt",
-    "kan": "txt",
-    "pysr": "csv",  # pysr specifically uses csv
-}
-
-# Feature lists for static and dynamic datasets
+data_type: dynamic
+enzyme_model: experimental
+enable_sr_sweeps: false
+models:
+- pysr
+output_extension:
+  pysindy: txt
+  aifeynman: txt
+  dso: txt
+  kan: txt
+  pysr: csv
 features:
-  static: "P_u,k_off,k_D,k_cat,tK,kcat_cg"  # Comma-separated list of features for static data
-  dynamic: "P_u,k_off,k_D,k_cat,tK,k_inact,kcat_cg"  # Comma-separated list of features for dynamic data
-
-# Target feature for the dataset
-target_feature: "kcat_cg"  # Target feature to be placed as the last column of the dataset
-
-# Timeout duration in seconds (e.g., 2 min * 60 = 120 seconds)
+  static: P_u,k_off,k_D,k_cat,tK,kcat_cg
+  dynamic: P_u,k_off,k_D,k_cat,tK,k_inact,kcat_cg
+target_feature: kcat_cg
 timeout_duration: 1800
-
-discovery_scales: '{"pysindy": "linear", "aifeynman": "log", "dso": "log", "kan": "log", "pysr": "linear"}'
-
-# Dataset sizes for each method
+discovery_scales: '{"pysindy": "linear", "aifeynman": "log", "dso": "log", "kan":
+  "log", "pysr": "linear"}'
 dataset_sizes:
-  pysindy: 10000       # PySINDy needs around 100-1000 samples
-  aifeynman: 5000     # AI Feynman needs around 500-5000 samples
-  dso: 10000          # DSO needs around 2000-10000 samples
-  kan: 4000           # KAN needs fewer samples to keep runtime manageable
-  pysr: 3000         # PySR needs around 1000-10000 samples
-  nn: 10000           # Neural network needs around 1000-10000 samples
-
-data_proportion: 0.0001  # Proportion of data to be used for integrator and plot method
-
+  pysindy: 10000
+  aifeynman: 5000
+  dso: 10000
+  kan: 4000
+  pysr: 3000
+  nn: 10000
+data_proportion: 0.0001
 experimental:
-  raw_time_course: "data/experimental/raw/lun_2019.csv"
-  processed_dir: "data/experimental/functional_groups/inputs"
-  output_prefix: "functional_groups"
+  raw_time_course: data/experimental/raw/lun_2019.csv
+  processed_dir: data/experimental/processed
+  output_prefix: functional_groups
   gfp_bins: 50
   min_points: 5
-  extra_times: [1, 3]
-  sr_output_dir: "data/experimental/functional_groups/outputs"
-  feature_modes: ["gfp", "all"]
-  gfp_columns: ["GFP", 'p-ERK1-2', 'p-MEK1-2', 'p-ERK1-2_min', 'p-MEK1-2_min']
+  extra_times:
+  - 1
+  - 3
+  force_rebin: false
+  sr_output_dir: data/experimental/functional_groups/outputs
+  feature_modes:
+  - gfp
+  - all
+  gfp_columns:
+  - GFP
+  - p-ERK1-2
+  - p-MEK1-2
+  - p-ERK1-2_min
+  - p-MEK1-2_min
   include_fresh_groups: true
+  models:
+  - pysr
+  - linreg
+  run_per_minute_sr: true
+  per_minute_max_time: 30

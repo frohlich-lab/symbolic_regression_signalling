@@ -8,8 +8,16 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import StandardScaler
 import os
 import copy
+import sys
+from pathlib import Path
 
 from utils.seeding import resolve_seed, seed_everything
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
+from regime_variants import VARIANTS, augment_for_variant
 
 
 def _build_optimizer(model):
@@ -74,7 +82,14 @@ class NeuralNet(nn.Module):
     def forward(self, x):
         return self.model(x)
 
-def load_dataset(file_path, dataset_size=None, features=None, seed: int = 42):
+def load_dataset(
+    file_path,
+    dataset_size=None,
+    features=None,
+    seed: int = 42,
+    variant: str = "sQSSA",
+    return_metadata: bool = False,
+):
     """
     Load dataset, normalize input features, and optionally sample.
     """
@@ -101,6 +116,13 @@ def load_dataset(file_path, dataset_size=None, features=None, seed: int = 42):
     elif target not in data.columns:
         raise ValueError("Target column not present in dataset.")
     
+    if variant:
+        if variant not in VARIANTS:
+            raise ValueError(f"Unknown variant '{variant}'. Expected one of: {list(VARIANTS.keys())}")
+        augmented = augment_for_variant(data, variant)
+        augmented.index = data.index
+        data = augmented
+
     # Drop non-numeric input columns (e.g., condition_id) before scaling
     non_numeric_cols = data.iloc[:, :-1].select_dtypes(exclude=[np.number]).columns.tolist()
     if non_numeric_cols:
@@ -192,6 +214,14 @@ def load_dataset(file_path, dataset_size=None, features=None, seed: int = 42):
     val_scaled = _apply_scaler(val_data) if len(val_data) else val_data.copy()
     test_scaled = _apply_scaler(test_data)
     full_scaled = _apply_scaler(data)
+
+    if return_metadata:
+        metadata = {
+            "scaler": scaler_X,
+            "feature_cols": feature_cols,
+            "target_col": target,
+        }
+        return train_scaled, val_scaled, test_scaled, full_scaled, metadata
 
     return train_scaled, val_scaled, test_scaled, full_scaled
 
@@ -328,6 +358,7 @@ def main():
     parser.add_argument('--features', type=str, help='Comma-separated features or "all"')
     parser.add_argument('--output', required=True, help='Model output path')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for training')
+    parser.add_argument('--variant', type=str, choices=list(VARIANTS.keys()), default='sQSSA', help='Model variant controlling feature augmentation')
     
     args = parser.parse_args()
     seed_everything(resolve_seed(args.seed))
@@ -336,7 +367,9 @@ def main():
         args.dataset_size,
         args.features,
         seed=args.seed,
+        variant=args.variant,
     )
+    print(f"Training NN variant: {args.variant}")
     model = train_model(train_data, val_data, args.output, verbose=True, seed=args.seed)
     mae, _ = evaluate_model(model, test_data)
     print("MAE on test split:", mae) 

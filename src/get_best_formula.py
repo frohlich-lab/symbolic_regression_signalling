@@ -4,6 +4,16 @@ import argparse
 import os
 import pandas as pd
 
+from regime_variants import VARIANTS
+
+
+def split_method_variant(method: str):
+    for variant_key in VARIANTS.keys():
+        suffix = f"_{variant_key}"
+        if method.endswith(suffix):
+            return method[: -len(suffix)], variant_key
+    return method, None
+
 def convert_x_i_variables(formula, feature_names, start_index=0, underscore=True):
     """Convert x_i variables in a formula to actual feature names."""
     feature_list = feature_names.split(',')
@@ -18,12 +28,38 @@ def read_csv_hall_of_fame(hall_of_fame_file, delimiter='\t'):
         return pd.read_csv(hall_of_fame_file, sep=delimiter)
     return None
 
-def extract_best_formula_from_csv(hall_of_fame_file, feature_names, formula_column, score_column, delimiter='\t', start_index=0, underscore=True):
-    """Extract the best formula from a CSV-based hall of fame file based on score."""
+def extract_best_formula_from_csv(
+    hall_of_fame_file,
+    feature_names,
+    formula_column,
+    score_column,
+    delimiter='\t',
+    start_index=0,
+    underscore=True,
+):
+    """Extract the best formula from a CSV-based hall of fame file based on a score metric."""
     hall_of_fame = read_csv_hall_of_fame(hall_of_fame_file, delimiter=delimiter)
-    if hall_of_fame is not None and {formula_column, score_column}.issubset(hall_of_fame.columns):
-        best_formula = hall_of_fame.sort_values(by=score_column).iloc[0][formula_column]
-        return convert_x_i_variables(best_formula, feature_names, start_index=start_index, underscore=underscore)
+    if hall_of_fame is None or formula_column not in hall_of_fame.columns:
+        return None
+
+    candidate_columns = [
+        score_column,
+        "Score",
+        "score",
+        "Loss",
+        "loss",
+    ]
+    score_col = next((col for col in candidate_columns if col and col in hall_of_fame.columns), None)
+    if score_col is None:
+        return None
+
+    ascending = True
+    if score_col.lower() == "score":
+        ascending = False
+
+    best_row = hall_of_fame.sort_values(by=score_col, ascending=ascending).iloc[0]
+    best_formula = best_row[formula_column]
+    return convert_x_i_variables(best_formula, feature_names, start_index=start_index, underscore=underscore)
     return None
 
 def extract_best_formula_from_txt(hall_of_fame_file, feature_names, formula_indicator, score_indicator, start_index=0, underscore=True):
@@ -65,21 +101,23 @@ def main():
         'aifeynman': lambda file, features: extract_best_formula_from_txt(file, features, "Formula:", "Error:", start_index=1),
         'dso': lambda file, features: extract_best_formula_from_csv(file, features, 'Equation', 'Score', start_index=1, underscore=False),
         'kan': lambda file, features: extract_best_formula_from_txt(file, features, "Formula:", "Loss:", start_index=1),
-        'pysr': lambda file, features: extract_best_formula_from_csv(file, features, 'Equation', 'Loss', delimiter=',', underscore=False)
+        'pysr': lambda file, features: extract_best_formula_from_csv(file, features, 'Equation', 'Score', delimiter=',', underscore=False)
     }
 
     for method, hall_of_fame_path, save_path in zip(args.methods, args.hall_of_fame, args.save):
-        method = method.lower()
-        extractor_func = method_to_extractor.get(method)
+        base_method, variant_key = split_method_variant(method)
+        method_key = base_method.lower()
+        extractor_func = method_to_extractor.get(method_key)
 
         if extractor_func:
             best_formula = extractor_func(hall_of_fame_path, args.features)
             if best_formula:
                 with open(save_path, 'w') as file:
                     file.write(best_formula)
-                print(f"Best formula for {method} saved to {save_path}: {best_formula}")
+                variant_msg = f" ({variant_key})" if variant_key else ""
+                print(f"Best formula for {base_method}{variant_msg} saved to {save_path}: {best_formula}")
             else:
-                print(f"No valid formula found for {method} in {hall_of_fame_path}.")
+                print(f"No valid formula found for {base_method} in {hall_of_fame_path}.")
         else:
             print(f"Unknown method: {method}")
 

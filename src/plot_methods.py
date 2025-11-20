@@ -14,8 +14,11 @@ import argparse
 import os
 from collections import defaultdict
 from pathlib import Path
+from typing import Optional
 
 from plot_style import apply_cell_systems_style
+from mm_models import TARGET_COLUMN as MM_TARGET_COLUMN
+from regime_variants import MODEL_COLORS, VARIANTS, augment_for_variant
 
 def load_formulas_from_file(file_path):
     """
@@ -34,7 +37,7 @@ def load_formulas_from_file(file_path):
 EPS = 1e-20
 apply_cell_systems_style()
 
-METHOD_LABELS = {
+BASE_METHOD_LABELS = {
     'pysr': 'PySR',
     'aifeynman': 'AI Feynman',
     'dso': 'DSO',
@@ -43,7 +46,7 @@ METHOD_LABELS = {
     'unknown': 'Unknown'
 }
 
-METHOD_COLORS = {
+BASE_METHOD_COLORS = {
     'pysr': '#1f77b4',
     'aifeynman': '#ff7f0e',
     'dso': '#2ca02c',
@@ -51,6 +54,40 @@ METHOD_COLORS = {
     'pysindy': '#9467bd',
     'unknown': '#7f7f7f'
 }
+
+
+def split_method_variant(method: str):
+    for variant_key in VARIANTS.keys():
+        suffix = f"_{variant_key}"
+        if method.endswith(suffix):
+            return method[: -len(suffix)], variant_key
+    return method, None
+
+
+def method_display_name(method: str) -> str:
+    base_method, variant_key = split_method_variant(method)
+    base_label = BASE_METHOD_LABELS.get(
+        base_method,
+        base_method.replace('_', ' ').title(),
+    )
+    if variant_key:
+        variant_label = VARIANTS.get(variant_key, variant_key)
+        return f"{base_label} ({variant_label})"
+    return base_label
+
+
+def method_color(base_method: str, variant_key: Optional[str]) -> str:
+    if variant_key and (base_method, variant_key) in MODEL_COLORS:
+        return MODEL_COLORS[(base_method, variant_key)]
+    return BASE_METHOD_COLORS.get(base_method, '#7f7f7f')
+
+
+def dataset_for_variant(dataset: pd.DataFrame, variant_key: Optional[str], cache: dict) -> pd.DataFrame:
+    if variant_key and variant_key != "sQSSA":
+        if variant_key not in cache:
+            cache[variant_key] = augment_for_variant(dataset, variant_key)
+        return cache[variant_key]
+    return dataset
 
 def _map_xi_to_columns(formula_str, dataset_columns):
     cols = list(dataset_columns[:-1])
@@ -118,17 +155,30 @@ def calculate_complexity(formula):
 
 def scatter_plot_formulas(methods, formulas, dataset, output_file, plot_context=None, dataset_context=None):
     """Generate a scatter plot of log-space MAE loss versus formula complexity and save it to a file."""
-    grouped_points = defaultdict(lambda: {'complexity': [], 'loss': []})
+    grouped_points = {}
+    variant_cache: dict[str, pd.DataFrame] = {}
 
     for method, formula in zip(methods, formulas):
+        base_method, variant_key = split_method_variant(method)
+        eval_dataset = dataset_for_variant(dataset, variant_key, variant_cache)
         complexity = calculate_complexity(formula)
-        loss = compute_log_MAE_loss(formula, dataset)
+        loss = compute_log_MAE_loss(formula, eval_dataset)
 
         if not np.isfinite(loss):
             continue
 
-        grouped_points[method]['complexity'].append(complexity)
-        grouped_points[method]['loss'].append(loss)
+        display_name = method_display_name(method)
+        bucket = grouped_points.setdefault(
+            display_name,
+            {
+                'complexity': [],
+                'loss': [],
+                'base': base_method,
+                'variant': variant_key,
+            },
+        )
+        bucket['complexity'].append(complexity)
+        bucket['loss'].append(loss)
 
     if not grouped_points:
         plt.figure(figsize=(8, 6))
@@ -139,17 +189,15 @@ def scatter_plot_formulas(methods, formulas, dataset, output_file, plot_context=
         plt.close()
         return
 
-    unique_methods = list(grouped_points.keys())
     cmap = get_cmap('tab10')
 
     plt.figure(figsize=(8, 6))
     ax = plt.gca()
 
-    for idx, method in enumerate(unique_methods):
-        color = METHOD_COLORS.get(method, cmap(idx % cmap.N))
-        label = METHOD_LABELS.get(method, method.replace('_', ' ').title())
-        complexities = grouped_points[method]['complexity']
-        losses = grouped_points[method]['loss']
+    for idx, (label, payload) in enumerate(grouped_points.items()):
+        color = method_color(payload['base'], payload['variant']) or cmap(idx % cmap.N)
+        complexities = payload['complexity']
+        losses = payload['loss']
 
         ax.scatter(
             complexities,
@@ -159,7 +207,7 @@ def scatter_plot_formulas(methods, formulas, dataset, output_file, plot_context=
             edgecolor='k',
             linewidth=0.4,
             s=70,
-            alpha=0.85
+            alpha=0.85,
         )
 
         for x, y in zip(complexities, losses):
@@ -170,7 +218,7 @@ def scatter_plot_formulas(methods, formulas, dataset, output_file, plot_context=
                 xytext=(0, 6),
                 ha='center',
                 fontsize=9,
-                color=color
+                color=color,
             )
 
     ax.set_xlabel('Symbolic Formula Complexity')
@@ -192,16 +240,23 @@ def scatter_plot_formulas(methods, formulas, dataset, output_file, plot_context=
 
 
 def _infer_method_from_formula_path(path):
-    fname = os.path.basename(path).lower()
-    if 'pysindy' in fname or 'sindy' in fname:
-        return 'pysindy'
-    for key in METHOD_LABELS:
-        if key in fname:
-            return key
-    parts = fname.split('_')
-    if len(parts) > 1:
-        return parts[1].split('.')[0]
-    return 'unknown'
+    fname = os.path.basename(path)
+    fname_lower = fname.lower()
+    variant_key = None
+    for key in VARIANTS.keys():
+        if f"_{key.lower()}" in fname_lower:
+            variant_key = key
+            break
+
+    base_method = 'unknown'
+    for key in BASE_METHOD_LABELS:
+        if key in fname_lower:
+            base_method = key
+            break
+
+    if variant_key:
+        return f"{base_method}_{variant_key}"
+    return base_method
 
 
 def _build_dataset_context(dataset_path):

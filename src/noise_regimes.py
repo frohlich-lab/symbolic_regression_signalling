@@ -1,168 +1,108 @@
+# noise_regimes.py
 """
-This module provides functionality for symbolic regression using the PySR algorithm.
-It evaluates different **biochemical regimes** by filtering the dataset based on feature ratios,
-running PySR separately for each regime, and comparing the results against a Michaelis-Menten fit.
+Evaluate noise regimes with PySR vs. MM vs. NN, supporting both sQSSA and tQSSA variants,
+fully aligned with dataset_size_regimes.py for logging, metrics, and plots.
 
 Usage:
-    python pysr_regimes.py --dataset <path_to_dataset> --dataset_size <size> --features <feature_list> --temp_dir <path_to_temp_dir>
+    python noise_regimes.py \
+        --dataset <path_to_dataset> \
+        --dataset_size <size> \
+        --features <feature_list|all> \
+        --seed 42
 """
 
 import os
 import argparse
 import warnings
-import logging
+from pathlib import Path
+from collections import OrderedDict
+from typing import Tuple, Dict, Optional, Any, List
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
 import seaborn as sns
 import torch
-from collections import OrderedDict
-from typing import Tuple
 
 from pysr import PySRRegressor
-from scipy.optimize import curve_fit
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, FunctionTransformer
 from sklearn.pipeline import Pipeline
 
-from nn_model import load_dataset as nn_load_dataset, train_model, evaluate_model
-import matplotlib.markers as mmarkers
-import matplotlib.colors as mcolors
-from matplotlib.cm import ScalarMappable
-from matplotlib.lines import Line2D
-from pathlib import Path
+from nn_model import train_model, evaluate_model
 
 from constants import PYSR_CONFIG
 from plot_style import apply_cell_systems_style
 from utils.seeding import resolve_seed, seed_everything
 
-# Suppress all warnings
+# ── Shared MM + Variant machinery (same module used elsewhere) ─────────────────
+from mm_models import (
+    EPS as MM_EPS,
+    TARGET_COLUMN as MM_TARGET_COLUMN,
+    mm_predictions,
+    sqssa_only,
+)
+
+from regime_variants import (
+    MODEL_COLOR_MAP,
+    MODEL_COMBINATIONS,
+    MODEL_FAMILIES,
+    MODEL_LINE_ORDER,
+    VARIANTS,
+    augment_for_variant,
+    collect_variant_predictions,
+    collect_pysr_formula_lines,
+    gather_model_errors,
+    metric_keys,
+    metric_spec,
+    metric_errors,
+    metric_summary,
+    format_regime_message,
+    format_variant_split,
+    format_model_metrics,
+    model_display_name,
+    variant_suffix,
+    regime_logger,
+    aggregate_seed_error_statistics,
+    clip_metric_values,
+    metric_limits_with_margin,
+)
+
+# ── Global style & logging ─────────────────────────────────────────────────────
 warnings.filterwarnings("ignore")
 apply_cell_systems_style()
 
-MODEL_LINE_ORDER = ["PySR", "Michaelis-Menten", "Neural Network"]
-MODEL_COLORS = {
-    "PySR": "#E69F00",              # orange
-    "Michaelis-Menten": "#009E73",   # green
-    "Neural Network": "#0072B2",     # blue
-}
+LOGGER = regime_logger("noise_regimes")
+CURRENT_SEED_TAG: str = ""
+
+def _emit(message: str) -> None:
+    prefix = CURRENT_SEED_TAG
+    if prefix:
+        first_line = message.lstrip()
+        if not first_line.startswith(prefix):
+            message = f"{prefix} {message}"
+    LOGGER.info(message)
+    print(message)
+
+# ── Core constants (kept consistent with other scripts) ────────────────────────
 NN_DATASET_CAP = 20000
-TARGET_COLUMN = "kcat_cg"
-MM_REQUIRED_COLS = ["P_u", "k_off", "k_D", "k_cat", "tK"]
-
-LOGGER = logging.getLogger(__name__)
-
-# PySR configuration
-
-# Numerical stability epsilon for log operations
-EPS = 1e-20
+TARGET_COLUMN = MM_TARGET_COLUMN
+EPS = MM_EPS
 LOG_SCALE_FLOOR = 1e-3
 
+# ── Utils ──────────────────────────────────────────────────────────────────────
 def file_exists(path):
     return os.path.isfile(path) and os.path.getsize(path) > 0
 
-def michaelis_menten(P_u, k_off, k_D, k_cat, tK, k_inact=None):
-    if k_inact is not None:
-        denom = P_u + ((k_cat + k_off + k_inact) / (k_off * k_D))
-    else:
-        denom = P_u + ((k_cat + k_off) / (k_off * k_D))
-    return (tK * P_u) / denom
-
-def load_dataset(file_path, dataset_size=None, features=None):
+def load_dataset(file_path: str, dataset_size: Optional[int] = None, features: Optional[str] = None):
     data = pd.read_csv(file_path)
     if features and features != "all":
-        data = data[features.split(',')]
+        cols = [c.strip() for c in features.split(",") if c.strip()]
+        data = data[cols]
+    # Values are logs; map back to linear (parity with other pipelines)
     return data.map(np.exp)
 
-
-def _mm_components(df: pd.DataFrame):
-    missing = [col for col in MM_REQUIRED_COLS if col not in df.columns]
-    if missing:
-        raise KeyError(f"Missing columns for Michaelis-Menten evaluation: {missing}")
-    arrays = [pd.to_numeric(df[col], errors='coerce').to_numpy() for col in MM_REQUIRED_COLS]
-    k_inact = None
-    if 'k_inact' in df.columns:
-        raw = pd.to_numeric(df['k_inact'], errors='coerce').to_numpy()
-        if np.isfinite(raw).any():
-            k_inact = np.where(np.isfinite(raw), raw, 0.0)
-    return (*arrays, k_inact)
-
-
-def _mm_predict(df: pd.DataFrame):
-    P_u, k_off, k_D, k_cat, tK, k_inact = _mm_components(df)
-    return michaelis_menten(P_u, k_off, k_D, k_cat, tK, k_inact)
-
-
-def _mm_components_row(row: pd.Series):
-    required = ["k_off", "k_D", "k_cat", "tK"]
-    missing = [col for col in required if col not in row.index or not np.isfinite(row[col])]
-    if missing:
-        raise ValueError(f"Row missing columns for Michaelis-Menten evaluation: {missing}")
-    k_off = float(row['k_off'])
-    k_D = float(row['k_D'])
-    k_cat = float(row['k_cat'])
-    tK = float(row['tK'])
-    k_inact_val = row.get('k_inact')
-    try:
-        k_inact_val = float(k_inact_val)
-    except (TypeError, ValueError):
-        k_inact_val = np.nan
-    k_inact = k_inact_val if np.isfinite(k_inact_val) else None
-    return k_off, k_D, k_cat, tK, k_inact
-
-
-def _mm_predict_row(row: pd.Series, pu_values):
-    k_off, k_D, k_cat, tK, k_inact = _mm_components_row(row)
-    return michaelis_menten(pu_values, k_off, k_D, k_cat, tK, k_inact)
-
-
-def _mm_log_error(df: pd.DataFrame):
-    target = pd.to_numeric(df['kcat_cg'], errors='coerce').to_numpy()
-    mm_pred = _mm_predict(df)
-    return np.abs(np.log(np.maximum(mm_pred, EPS)) - np.log(np.maximum(target, EPS)))
-
-def run_pysr(X, y, model_path, output_file):
-    run_dir = os.path.dirname(model_path)
-    cached = (
-        os.path.exists(model_path)
-        or os.path.exists(os.path.join(run_dir, "hall_of_fame.csv"))
-        or os.path.exists(os.path.join(run_dir, "equations.csv"))
-    )
-    if cached:
-        print(f"Loading existing PySR model from run directory: {run_dir}")
-        return PySRRegressor.from_file(run_directory=run_dir)
-    print(f"Training new PySR model; run directory: {run_dir}")
-    model = PySRRegressor(
-        **PYSR_CONFIG,
-        output_directory=os.path.dirname(run_dir),
-        run_id="pysr",
-    )
-    model.fit(X, y)
-    try:
-        model.save()
-    except Exception:
-        pass
-    return model
-    
-def save_pysr_formulas(model_dict, features, output_path):
-    with open(output_path, "w") as f:
-        for regime, models in model_dict.items():
-            model = models['pysr']
-            if model is None or model.equations_ is None or model.equations_.empty:
-                continue
-
-            # Get best formula (highest score)
-            best_row = model.equations_.sort_values(by="score", ascending=False).iloc[0]
-            formula = best_row["equation"]
-
-            # Replace x0, x1, ... with actual variable names
-            feature_names = features.split(',')
-            for i, name in enumerate(feature_names):
-                formula = formula.replace(f"x{i}", name)
-
-            f.write(f"{regime}: {formula}    [score={best_row['score']:.4f}, loss={best_row['loss']:.4f}]\n")
-
+# ── Noise regime definitions ───────────────────────────────────────────────────
 def apply_log_space_gaussian_noise(df, std_multiplier):
     noisy_df = df.copy()
     target_col = noisy_df.columns[-1]
@@ -171,31 +111,27 @@ def apply_log_space_gaussian_noise(df, std_multiplier):
     if not positive_mask.any():
         raise ValueError("No strictly positive targets available for log noise")
 
-    # Work only on strictly positive entries to keep log well-defined.
-    positive_vals = noisy_df.loc[positive_mask, target_col]
-    log_vals = np.log(positive_vals)
-
+    log_vals = np.log(noisy_df.loc[positive_mask, target_col])
     std = log_vals.std()
     noise = np.random.normal(loc=0, scale=std_multiplier * std, size=len(log_vals))
     noisy_df.loc[positive_mask, target_col] = np.exp(log_vals + noise)
-
     return noisy_df
 
 def define_regimes_from_low_noise(base_df):
-    return {
+    return OrderedDict({
         "very_low_noise": base_df.copy(),
         "low_noise": apply_log_space_gaussian_noise(base_df, 1e-2),
         "medium_noise": apply_log_space_gaussian_noise(base_df, 1e-1),
         "high_noise": apply_log_space_gaussian_noise(base_df, 1.0),
-    }
+    })
 
 def define_regimes_from_full_dataset(base_df):
-    return {
+    return OrderedDict({
         "full_dataset": base_df.copy(),
         "full_low_noise": apply_log_space_gaussian_noise(base_df, 1e-2),
         "full_medium_noise": apply_log_space_gaussian_noise(base_df, 1e-1),
         "full_high_noise": apply_log_space_gaussian_noise(base_df, 1.0),
-    }
+    })
 
 REGIME_LABELS = {
     'very_low_noise': 'Very Low Noise',
@@ -207,7 +143,6 @@ REGIME_LABELS = {
     'full_medium_noise': 'Full + Medium Noise',
     'full_high_noise': 'Full + High Noise',
 }
-
 REGIME_ORDER = {
     'very_low_noise': 0,
     'low_noise': 1,
@@ -219,17 +154,13 @@ REGIME_ORDER = {
     'full_high_noise': 3,
 }
 
+def _ordered_regimes(model_dict: Dict[str, Dict[str, Any]]):
+    return sorted(model_dict.keys(), key=lambda r: (REGIME_ORDER.get(r, float("inf")), r))
 
-def _ordered_regimes(model_dict):
-    return sorted(
-        model_dict.keys(),
-        key=lambda r: (0 if r in REGIME_ORDER else 1, REGIME_ORDER.get(r, float('inf')), r)
-    )
+def _label_for_regime(regime: str) -> str:
+    return REGIME_LABELS.get(regime, regime.replace("_", " ").title())
 
-
-def _label_for_regime(regime):
-    return REGIME_LABELS.get(regime, regime.replace('_', ' ').title())
-
+# ── Preprocess & partitions ────────────────────────────────────────────────────
 def preprocess_data(X):
     pipeline = Pipeline([
         ("log_transform", FunctionTransformer(np.log, validate=True)),
@@ -238,120 +169,215 @@ def preprocess_data(X):
     return pipeline.fit_transform(X), pipeline
 
 def _get_eval_partition(models):
-    eval_df = models.get('test_data')
-    if eval_df is None:
-        eval_df = models.get('data')
+    eval_df = models.get("test_data")
+    if eval_df is None or getattr(eval_df, "empty", False):
+        eval_df = models.get("data")
 
-    eval_pre = models.get('test_preprocessed')
-    if eval_pre is None:
-        eval_pre = models.get('preprocessed')
+    eval_pre = models.get("test_preprocessed")
+    if eval_pre is None or getattr(eval_pre, "empty", False):
+        eval_pre = models.get("preprocessed")
 
     return eval_df, eval_pre
 
+# ── MM helpers ─────────────────────────────────────────────────────────────────
+def _mm_log_error(df: pd.DataFrame):
+    target = pd.to_numeric(df[TARGET_COLUMN], errors='coerce').to_numpy()
+    mm_pred = sqssa_only(df)  # sQSSA baseline for filtering
+    return np.abs(np.log(np.maximum(mm_pred, EPS)) - np.log(np.maximum(target, EPS)))
 
-def _collect_error_distributions(model_dict):
-    distributions = OrderedDict()
-    regimes = _ordered_regimes(model_dict)
-    for regime in regimes:
+# ── PySR runner (same behavior as other scripts) ───────────────────────────────
+def run_pysr(
+    X,
+    y,
+    model_path,
+    log_prefix: Optional[str] = None,
+    config_override: Optional[Dict[str, object]] = None,
+):
+    model_path = Path(model_path)
+    run_dir = model_path.parent
+    base_dir = run_dir.parent
+    base_dir.mkdir(parents=True, exist_ok=True)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    prefix = f"{log_prefix} PySR" if log_prefix else "[PySR]"
+    run_id = run_dir.name
+
+    candidates = [
+        model_path,
+        run_dir / "hall_of_fame.pkl",
+        run_dir / "hall_of_fame.csv",
+        run_dir / "equations.csv",
+        run_dir / "model.pkl",
+    ]
+    load_target = next((path for path in candidates if path.exists()), None)
+    if load_target is None and any(run_dir.iterdir()):
+        load_target = run_dir
+
+    if load_target is not None:
+        _emit(f"{prefix} Loading existing model from {load_target}")
+        return PySRRegressor.from_file(run_directory=str(run_dir))
+
+    _emit(f"{prefix} Training new model in {run_dir}")
+    config = dict(PYSR_CONFIG)
+    if config_override:
+        config.update(config_override)
+    model = PySRRegressor(
+        **config,
+        output_directory=str(base_dir),
+        run_id=run_id,
+    )
+    model.fit(X, y)
+    try:
+        model.save(str(model_path))
+    except Exception:
+        try:
+            model.save()
+        except Exception:
+            pass
+    return model
+
+def save_pysr_formulas(model_dict, features, output_dir):
+    out_dir = Path(output_dir) / "shared/results/pysr"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    variant_lines = collect_pysr_formula_lines(model_dict, features)
+    combined: list[str] = []
+    for variant_key, lines in variant_lines.items():
+        if not lines:
+            continue
+        combined.extend(lines)
+        variant_path = out_dir / f"all_pysr_formulas_{variant_key}.txt"
+        with variant_path.open("w") as handle:
+            for line in lines:
+                handle.write(line + "\n")
+
+    if combined:
+        with (out_dir / "all_pysr_formulas.txt").open("w") as handle:
+            for line in combined:
+                handle.write(line + "\n")
+
+# ── Error distributions (metric-aware; parity with dataset_size_regimes) ───────
+def _collect_error_distributions(
+    model_dict: Dict[str, Dict[str, Any]]
+) -> tuple[
+    Dict[str, Dict[str, Dict[str, np.ndarray]]],
+    Dict[str, Dict[str, Dict[str, List[float]]]],
+]:
+    distributions: Dict[str, Dict[str, Dict[str, np.ndarray]]] = OrderedDict()
+    seed_medians: Dict[str, Dict[str, Dict[str, List[float]]]] = OrderedDict()
+
+    for regime in _ordered_regimes(model_dict):
         models = model_dict.get(regime)
         if not models:
             continue
 
-        data, data_pre = _get_eval_partition(models)
-        if data is None or data.empty:
-            continue
+        aggregated_errors = models.get("aggregated_errors", {})
+        aggregated_seed_medians = models.get("aggregated_seed_medians", {})
+        metric_maps = {metric_key: {} for metric_key in metric_keys()}
+        median_maps = {metric_key: {} for metric_key in metric_keys()}
 
-        y_true = data.iloc[:, -1].values
-        X = data.iloc[:, :-1]
+        for family, variant_key in MODEL_COMBINATIONS:
+            display_name = model_display_name(family, variant_key)
+            variant_errors = aggregated_errors.get(variant_key)
+            if variant_errors:
+                for mkey in metric_keys():
+                    model_errors = variant_errors.get(mkey, {})
+                    errs = model_errors.get(display_name)
+                    if errs is None:
+                        continue
+                    metric_maps[mkey][display_name] = np.asarray(errs, dtype=float)
+                    medians = (
+                        aggregated_seed_medians
+                        .get(variant_key, {})
+                        .get(mkey, {})
+                        .get(display_name)
+                    )
+                    if medians is not None:
+                        median_maps[mkey][display_name] = list(medians)
+                continue
 
-        regime_errors = {}
+            snapshot = collect_variant_predictions(models, variant_key, evaluate_model)
+            if snapshot is None:
+                continue
+            preds = snapshot['predictions'].get(display_name)
+            if preds is None:
+                continue
+            y_true = snapshot['y_true']
+            for mkey in metric_keys():
+                errs = metric_errors(mkey, preds, y_true)
+                metric_maps[mkey][display_name] = errs
+                finite = errs[np.isfinite(errs)]
+                median_value = float(np.median(finite)) if finite.size else float('nan')
+                median_maps[mkey][display_name] = [median_value]
 
-        if 'Neural Network' in MODEL_LINE_ORDER and 'nn' in models and data_pre is not None:
-            try:
-                y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
-                regime_errors['Neural Network'] = np.abs(
-                    np.log(np.maximum(y_pred_nn, EPS)) - np.log(np.maximum(y_true, EPS))
-                )
-            except Exception:
-                pass
+        if any(metric_maps[m] for m in metric_keys()):
+            distributions[regime] = metric_maps
+            seed_medians[regime] = median_maps
 
-        if 'Michaelis-Menten' in MODEL_LINE_ORDER:
-            try:
-                y_pred_mm = _mm_predict(X)
-                regime_errors['Michaelis-Menten'] = np.abs(
-                    np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_true, EPS))
-                )
-            except Exception:
-                pass
+    return distributions, seed_medians
 
-        if 'PySR' in MODEL_LINE_ORDER and 'pysr' in models:
-            try:
-                y_pred_pysr = models['pysr'].predict(X.values)
-                regime_errors['PySR'] = np.abs(
-                    np.log(np.maximum(y_pred_pysr, EPS)) - np.log(np.maximum(y_true, EPS))
-                )
-            except Exception:
-                pass
+def _metric_slice(
+    distributions: Dict[str, Dict[str, Dict[str, np.ndarray]]],
+    metric_key: str,
+) -> Dict[str, Dict[str, np.ndarray]]:
+    metric_dist: Dict[str, Dict[str, np.ndarray]] = OrderedDict()
+    for regime, metric_map in distributions.items():
+        model_map = metric_map.get(metric_key, {})
+        if model_map:
+            metric_dist[regime] = model_map
+    return metric_dist
 
-        if regime_errors:
-            distributions[regime] = regime_errors
-
-    return distributions
-
-
-def _errors_to_dataframe(error_dict):
+def _errors_to_dataframe(error_dict, metric_key):
     records = []
     for model_name, errors in error_dict.items():
-        if errors is None:
-            continue
-        arr = np.asarray(errors, dtype=float).flatten()
-        arr = arr[~np.isnan(arr)]
-        records.extend({'Model': model_name, 'Log-MAE': value} for value in arr)
+        arr = np.asarray(errors, dtype=float)
+        arr = arr[np.isfinite(arr)]
+        records.extend({"Model": model_name, metric_key: value} for value in arr)
     return pd.DataFrame(records)
 
+def _combined_error_frame(metric_distributions: Dict[str, Dict[str, np.ndarray]], metric_key: str) -> pd.DataFrame:
+    frames = []
+    for label, dist in metric_distributions.items():
+        frame = _errors_to_dataframe(dist, metric_key)
+        if not frame.empty:
+            frame["Regime"] = _label_for_regime(label)
+            frames.append(frame)
+    if frames:
+        return pd.concat(frames, ignore_index=True)
+    return pd.DataFrame(columns=["Model", metric_key, "Regime"])
 
 def _compute_line_stats(error_distributions):
-    stats = {model: {'median': [], 'q1': [], 'q3': []} for model in MODEL_LINE_ORDER}
-    for regime in error_distributions:
-        regime_errors = error_distributions[regime]
+    stats = {model: {"median": [], "q1": [], "q3": []} for model in MODEL_LINE_ORDER}
+    for _, regime_errors in error_distributions.items():
         for model in MODEL_LINE_ORDER:
             arr = np.asarray(regime_errors.get(model, []), dtype=float)
-            arr = arr[~np.isnan(arr)]
+            arr = arr[np.isfinite(arr)]
             if arr.size:
-                stats[model]['median'].append(np.median(arr))
-                stats[model]['q1'].append(np.quantile(arr, 0.25))
-                stats[model]['q3'].append(np.quantile(arr, 0.75))
+                stats[model]["median"].append(np.median(arr))
+                stats[model]["q1"].append(np.quantile(arr, 0.25))
+                stats[model]["q3"].append(np.quantile(arr, 0.75))
             else:
-                stats[model]['median'].append(np.nan)
-                stats[model]['q1'].append(np.nan)
-                stats[model]['q3'].append(np.nan)
+                stats[model]["median"].append(np.nan)
+                stats[model]["q1"].append(np.nan)
+                stats[model]["q3"].append(np.nan)
     return stats
 
-
-def _model_color_map():
-    return {model: MODEL_COLORS.get(model, "#333333") for model in MODEL_LINE_ORDER}
-
-
-def _lineplot_limits(stats):
-    lowers, uppers = [], []
-    positive_candidates = []
+def _lineplot_limits(stats, spec):
+    if spec.floor is not None and spec.ceiling is not None:
+        lower, upper = metric_limits_with_margin(spec.key)
+        return lower, upper
+    lowers, uppers, positives = [], [], []
     for model in MODEL_LINE_ORDER:
-        lowers.extend([v for v in stats[model]['q1'] if not np.isnan(v)])
-        uppers.extend([v for v in stats[model]['q3'] if not np.isnan(v)])
-        positive_candidates.extend([v for v in stats[model]['median'] if v > 0 and not np.isnan(v)])
-        positive_candidates.extend([v for v in stats[model]['q1'] if v > 0 and not np.isnan(v)])
-        positive_candidates.extend([v for v in stats[model]['q3'] if v > 0 and not np.isnan(v)])
-
+        lowers.extend([v for v in stats[model]["q1"] if np.isfinite(v)])
+        uppers.extend([v for v in stats[model]["q3"] if np.isfinite(v)])
+        if spec.y_scale == "log":
+            positives.extend([v for v in stats[model]["median"] if np.isfinite(v) and v > 0])
+            positives.extend([v for v in stats[model]["q1"] if np.isfinite(v) and v > 0])
+            positives.extend([v for v in stats[model]["q3"] if np.isfinite(v) and v > 0])
     if not lowers or not uppers:
         return None, None
-
     ymin = min(lowers)
     ymax = max(uppers)
-    if positive_candidates:
-        min_positive = min(positive_candidates)
-    else:
-        min_positive = None
-
     if np.isclose(ymin, ymax):
         margin = 0.1 * (abs(ymax) if ymax != 0 else 1.0)
         ymin -= margin
@@ -360,138 +386,581 @@ def _lineplot_limits(stats):
         margin = 0.05 * (ymax - ymin)
         ymin -= margin
         ymax += margin
-
-    if min_positive is not None and ymin <= 0:
-        ymin = min_positive * 0.8
-
-    ymin = max(ymin, LOG_SCALE_FLOOR)
-    if ymax <= ymin:
-        ymax = ymin * 1.5
-
+    if spec.y_scale == "log":
+        if positives and ymin <= 0:
+            ymin = min(positives) * 0.8
+        floor = spec.floor or LOG_SCALE_FLOOR
+        ymin = max(ymin, floor)
+        if ymax <= ymin:
+            ymax = ymin * 1.5
+    else:
+        ymin = max(ymin, 0.0)
+        if ymax <= ymin:
+            ymax = ymin + 0.1 * max(ymin, 1.0)
     return ymin, ymax
 
-
-def _apply_log_floor(stats_map):
-    for model in MODEL_LINE_ORDER:
-        for key in ('median', 'q1', 'q3'):
-            stats_map[model][key] = [
-                val if (not np.isfinite(val) or val >= LOG_SCALE_FLOOR) else LOG_SCALE_FLOOR
-                for val in stats_map[model][key]
-            ]
-
-
-def _render_noise_regime_lineplot(regimes, stats, output_path, template=False):
-    if not regimes:
+# ── Metric-agnostic plots (parity with dataset_size_regimes) ───────────────────
+def _plot_noise_lineplot_for_metric(
+    metric_key: str,
+    metric_distributions: Dict[str, Dict[str, np.ndarray]],
+    seed_medians: Dict[str, Dict[str, List[float]]],
+    output_dir: str,
+    template: bool = False,
+):
+    if not metric_distributions:
         return
 
-    colors = _model_color_map()
-    _apply_log_floor(stats)
-    x = np.arange(len(regimes))
-    fig, ax = plt.subplots(figsize=(10, 5))
+    spec = metric_spec(metric_key)
+    plot_dir = Path(output_dir) / "shared/plots" / spec.folder
+    plot_dir.mkdir(parents=True, exist_ok=True)
 
-    ymin, ymax = _lineplot_limits(stats)
-    if ymin is not None and ymax is not None:
-        ax.set_ylim(ymin, ymax)
-
-    debug_finite_min = []
+    regimes = list(metric_distributions.keys())
+    stats = _compute_line_stats(metric_distributions)
     for model in MODEL_LINE_ORDER:
-        combined = []
-        for key in ('median', 'q1', 'q3'):
-            combined.extend(stats[model][key])
-        combined = np.asarray(combined, dtype=float)
-        combined = combined[np.isfinite(combined)]
-        if combined.size:
-            min_val = combined.min()
-            debug_finite_min.append(min_val)
-            print(f"[DEBUG noise lineplot] {model} min value: {min_val}")
-    if any(val <= 0 for val in debug_finite_min):
-        print("[DEBUG noise lineplot] Non-positive value detected, log scale will fail.")
+        for key in ("median", "q1", "q3"):
+            stats_array = clip_metric_values(
+                np.asarray(stats[model][key], dtype=float),
+                metric_key,
+            )
+            if spec.y_scale == "log":
+                floor = spec.floor or LOG_SCALE_FLOOR
+                stats_array = np.where(
+                    np.isfinite(stats_array) & (stats_array < floor),
+                    floor,
+                    stats_array,
+                )
+            stats[model][key] = stats_array
+    ymin, ymax = _lineplot_limits(stats, spec)
 
-    if not template:
-        for model in MODEL_LINE_ORDER:
-            medians = np.array(stats[model]['median'], dtype=float)
-            if medians.size == 0 or np.all(np.isnan(medians)):
-                continue
-            q1 = np.array(stats[model]['q1'], dtype=float)
-            q3 = np.array(stats[model]['q3'], dtype=float)
-            ax.plot(x, medians, label=model, color=colors[model], marker='o', linewidth=2)
-            ax.fill_between(x, q1, q3, color=colors[model], alpha=0.25)
-        ax.legend(loc='upper left', frameon=False)
-    else:
-        handles = [Line2D([0], [0], color=colors[m], marker='o', linewidth=2, label=m) for m in MODEL_LINE_ORDER]
-        ax.legend(handles=handles, loc='upper left', frameon=False)
+    x = np.arange(len(regimes), dtype=float)
+    x_labels = [_label_for_regime(r) for r in regimes]
+
+    fig, ax = plt.subplots(figsize=(6.8, 4.2))
+    for model in MODEL_LINE_ORDER:
+        median = np.asarray(stats[model]["median"], dtype=float)
+        q1 = np.asarray(stats[model]["q1"], dtype=float)
+        q3 = np.asarray(stats[model]["q3"], dtype=float)
+        color = MODEL_COLOR_MAP[model]
+        if not template:
+            ax.plot(x, median, marker="o", label=model, color=color)
+            ax.fill_between(x, q1, q3, color=color, alpha=0.15)
+            for idx, regime in enumerate(regimes):
+                seed_values = np.asarray(
+                    seed_medians.get(regime, {}).get(model, []),
+                    dtype=float,
+                )
+                if seed_values.size == 0:
+                    continue
+                seed_values = seed_values[np.isfinite(seed_values)]
+                if seed_values.size == 0:
+                    continue
+                seed_values = clip_metric_values(seed_values, metric_key)
+                jitter = np.full(seed_values.shape, x[idx], dtype=float)
+                ax.scatter(
+                    jitter,
+                    seed_values,
+                    color=color,
+                    alpha=0.4,
+                    s=28,
+                    linewidths=0,
+                    zorder=4,
+                )
+        else:
+            ax.plot(x, median, color=color, linestyle="--", alpha=0.3)
 
     ax.set_xticks(x)
-    all_values = []
-    for model in MODEL_LINE_ORDER:
-        all_values.extend(np.atleast_1d(stats[model]['median']).tolist())
-        all_values.extend(np.atleast_1d(stats[model]['q1']).tolist())
-        all_values.extend(np.atleast_1d(stats[model]['q3']).tolist())
-    all_values = np.array(all_values, dtype=float)
-    finite = all_values[np.isfinite(all_values)]
-    positive = finite[finite > 0]
-    if positive.size:
-        if (finite <= 0).any():
-            eps = max(LOG_SCALE_FLOOR, positive.min() * 1e-3)
-            print(f"[DEBUG noise lineplot] Adding epsilon {eps} to non-positive values for log scale")
-            for model in MODEL_LINE_ORDER:
-                for key in ('median', 'q1', 'q3'):
-                    stats[model][key] = [
-                        val if (not np.isfinite(val) or val > eps) else eps
-                        for val in stats[model][key]
-                    ]
-        ax.set_yscale('log')
-        ax.set_ylim(bottom=LOG_SCALE_FLOOR)
-    else:
-        print("[DEBUG noise lineplot] No positive finite values detected; using linear scale")
-        ax.set_yscale('linear')
-    ax.set_xticklabels([_label_for_regime(r) for r in regimes], rotation=20, ha='right')
-    ax.set_xlabel("Noise Regime", fontsize=12)
-    ax.set_ylabel("Log-space MAE (on scale)", fontsize=12)
-    ax.grid(True, axis='y', linestyle='--', alpha=0.4)
+    ax.set_xticklabels(x_labels, rotation=20, ha="right")
+    ax.set_xlabel("Noise Regime")
+    ax.set_ylabel(spec.axis_label)
+    ax.set_yscale(spec.y_scale)
+    lower_limit, upper_limit = metric_limits_with_margin(metric_key)
+    if lower_limit is not None and upper_limit is not None:
+        ax.set_ylim(lower_limit, upper_limit)
+    elif ymin is not None and ymax is not None:
+        ax.set_ylim(ymin, ymax)
+    if not template:
+        ax.legend(frameon=False)
+    ax.grid(True, axis="y", linestyle="--", alpha=0.4)
     plt.tight_layout()
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=300)
+    suffix = "_template" if template else ""
+    plt.savefig(plot_dir / f"{spec.filename_prefix}_noise_regime_lineplot{suffix}.png", dpi=300)
     plt.close()
 
+def plot_noise_lineplots(
+    distributions: Dict[str, Dict[str, Dict[str, np.ndarray]]],
+    seed_medians: Dict[str, Dict[str, Dict[str, List[float]]]],
+    output_dir: str,
+    template: bool = False,
+):
+    for mkey in metric_keys():
+        metric_dist = _metric_slice(distributions, mkey)
+        if not metric_dist:
+            continue
+        metric_seed_medians = {
+            regime: seed_medians.get(regime, {}).get(mkey, {})
+            for regime in metric_dist.keys()
+        }
+        _plot_noise_lineplot_for_metric(
+            mkey,
+            metric_dist,
+            metric_seed_medians,
+            output_dir,
+            template=template,
+        )
 
-def plot_noise_regime_lineplot(error_distributions, output_dir):
-    if not error_distributions:
-        print("No regimes available for line plot.")
+def _plot_error_distributions(metric_key, metric_distributions, output_dir):
+    df = _combined_error_frame(metric_distributions, metric_key)
+    if df.empty:
+        LOGGER.info("No %s errors for violin plots", metric_key)
         return
-    regimes = list(error_distributions.keys())
-    stats = _compute_line_stats(error_distributions)
-    output_path = os.path.join(output_dir, "shared/plots/log_mae_noise_regime_lineplot.png")
-    _render_noise_regime_lineplot(regimes, stats, output_path, template=False)
 
+    regimes = list(metric_distributions.keys())
+    ncols = min(4, len(regimes))
+    nrows = int(np.ceil(len(regimes) / max(ncols, 1)))
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 5 * nrows), sharey=True)
+    axes = np.atleast_1d(axes).flatten()
 
-def plot_noise_regime_lineplot_template(error_distributions, output_dir):
-    if not error_distributions:
-        print("No regimes available for line plot template.")
+    palette = [MODEL_COLOR_MAP[m] for m in MODEL_LINE_ORDER]
+    spec = metric_spec(metric_key)
+    metric_dir = Path(output_dir) / "shared/plots" / spec.folder
+    metric_dir.mkdir(parents=True, exist_ok=True)
+    df = df.copy()
+    df[metric_key] = clip_metric_values(df[metric_key].to_numpy(), metric_key)
+    lower_limit, upper_limit = metric_limits_with_margin(metric_key)
+
+    for idx, regime in enumerate(regimes):
+        ax = axes[idx]
+        subset = df[df["Regime"] == _label_for_regime(regime)]
+        if subset.empty:
+            ax.set_axis_off()
+            continue
+        sns.violinplot(
+            data=subset,
+            x="Model",
+            y=metric_key,
+            ax=ax,
+            inner="box",
+            palette=palette,
+            order=MODEL_LINE_ORDER,
+        )
+        ax.set_title(_label_for_regime(regime))
+        ax.set_xlabel("")
+        if idx % ncols == 0:
+            ax.set_ylabel(spec.axis_label)
+        else:
+            ax.set_ylabel("")
+        if spec.y_scale == "log":
+            ax.set_yscale("log")
+            if lower_limit is not None and upper_limit is not None:
+                ax.set_ylim(lower_limit, upper_limit)
+        elif lower_limit is not None and upper_limit is not None:
+            ax.set_ylim(lower_limit, upper_limit)
+    for idx in range(len(regimes), len(axes)):
+        fig.delaxes(axes[idx])
+    plt.suptitle(f"{spec.label} Error Distributions by Noise Regime", fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.savefig(metric_dir / f"{spec.filename_prefix}_error_distributions.png")
+    plt.close()
+
+def plot_error_distributions(model_dict, output_dir):
+    distributions, _ = _collect_error_distributions(model_dict)
+    if not distributions:
+        _emit("No error distributions available; skipping violin plots")
         return
-    regimes = list(error_distributions.keys())
-    stats = _compute_line_stats(error_distributions)
-    output_path = os.path.join(output_dir, "shared/plots/log_mae_noise_regime_lineplot_template.png")
-    _render_noise_regime_lineplot(regimes, stats, output_path, template=True)
+    for mkey in metric_keys():
+        metric_map = _metric_slice(distributions, mkey)
+        if not metric_map:
+            continue
+        _plot_error_distributions(mkey, metric_map, output_dir)
 
+def plot_horizontal_boxplots(model_dict, output_dir):
+    distributions, _ = _collect_error_distributions(model_dict)
+    if not distributions:
+        return
+    regimes = list(distributions.keys())
+    palette = [MODEL_COLOR_MAP[m] for m in MODEL_LINE_ORDER]
+
+    for mkey in metric_keys():
+        metric_dist = _metric_slice(distributions, mkey)
+        if not metric_dist:
+            continue
+        df = _combined_error_frame(metric_dist, mkey)
+        if df.empty:
+            continue
+        spec = metric_spec(mkey)
+        plot_dir = Path(output_dir) / "shared/plots" / spec.folder
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        df = df.copy()
+        df[mkey] = clip_metric_values(df[mkey].to_numpy(), mkey)
+        lower_limit, upper_limit = metric_limits_with_margin(mkey)
+        floor = spec.floor or LOG_SCALE_FLOOR if spec.y_scale == "log" else None
+
+        def _render(showfliers: bool, suffix: str):
+            fig, axes = plt.subplots(len(regimes), 1, figsize=(10, 2.8 * len(regimes)), sharex=True)
+            axes = np.atleast_1d(axes)
+            for ax, regime in zip(axes, regimes):
+                subset = df[df["Regime"] == _label_for_regime(regime)]
+                if subset.empty:
+                    ax.set_visible(False)
+                    continue
+                sns.boxplot(
+                    data=subset,
+                    x=mkey,
+                    y="Model",
+                    palette=palette,
+                    orient="h",
+                    order=MODEL_LINE_ORDER,
+                    ax=ax,
+                    showfliers=showfliers,
+                )
+                ax.set_title(_label_for_regime(regime), fontsize=14, weight="bold")
+                ax.set_ylabel("")
+                if spec.y_scale == "log":
+                    ax.set_xscale("log")
+                    if lower_limit is not None and upper_limit is not None:
+                        ax.set_xlim(lower_limit, upper_limit)
+                elif lower_limit is not None and upper_limit is not None:
+                    ax.set_xlim(lower_limit, upper_limit)
+            axes[-1].set_xlabel(spec.axis_label, fontsize=12)
+            for ax in axes[:-1]:
+                ax.set_xlabel("")
+            plt.tight_layout()
+            plt.savefig(plot_dir / f"{spec.filename_prefix}_horizontal_boxplot{suffix}.png", dpi=300)
+            plt.close()
+
+        _render(True, "")
+        _render(False, "_no_outliers")
+
+def plot_vertical_boxplots(model_dict, output_dir):
+    distributions, _ = _collect_error_distributions(model_dict)
+    if not distributions:
+        return
+    regimes = list(distributions.keys())
+    palette = [MODEL_COLOR_MAP[m] for m in MODEL_LINE_ORDER]
+
+    for mkey in metric_keys():
+        metric_dist = _metric_slice(distributions, mkey)
+        if not metric_dist:
+            continue
+        df = _combined_error_frame(metric_dist, mkey)
+        if df.empty:
+            continue
+        spec = metric_spec(mkey)
+        plot_dir = Path(output_dir) / "shared/plots" / spec.folder
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        value_col = mkey
+        df = df.copy()
+        df[value_col] = clip_metric_values(df[value_col].to_numpy(), mkey)
+        lower_limit, upper_limit = metric_limits_with_margin(mkey)
+        finite_vals = df[value_col].to_numpy()
+        finite_vals = finite_vals[np.isfinite(finite_vals)]
+        if finite_vals.size and (lower_limit is None or upper_limit is None):
+            global_min = finite_vals.min()
+            global_max = finite_vals.max()
+            if np.isclose(global_min, global_max):
+                pad = max(global_min * 0.1, 1e-6)
+                global_min -= pad
+                global_max += pad
+        else:
+            global_min = global_max = None
+
+        def _render(showfliers: bool, suffix: str):
+            fig, axes = plt.subplots(1, len(regimes), figsize=(3.2 * len(regimes), 4.5), sharey=False)
+            axes = np.atleast_1d(axes)
+            for ax, regime in zip(axes, regimes):
+                subset = df[df["Regime"] == _label_for_regime(regime)]
+                if subset.empty:
+                    ax.set_visible(False)
+                    continue
+                sns.boxplot(
+                    data=subset,
+                    x="Model",
+                    y=value_col,
+                    palette=palette,
+                    orient="v",
+                    order=MODEL_LINE_ORDER,
+                    ax=ax,
+                    showfliers=showfliers,
+                )
+                ax.set_title(_label_for_regime(regime), fontsize=14, weight="bold")
+                if spec.y_scale == "log":
+                    ax.set_yscale("log")
+                    if lower_limit is not None and upper_limit is not None:
+                        ax.set_ylim(lower_limit, upper_limit)
+                for label in ax.get_xticklabels():
+                    label.set_rotation(25)
+                    label.set_horizontalalignment("right")
+                if ax != axes[0]:
+                    ax.set_ylabel("")
+                else:
+                    ax.set_ylabel(spec.axis_label, fontsize=12)
+                if lower_limit is not None and upper_limit is not None and spec.y_scale != "log":
+                    ax.set_ylim(lower_limit, upper_limit)
+                elif global_min is not None and global_max is not None:
+                    ax.set_ylim(global_min, global_max)
+            plt.tight_layout()
+            plt.savefig(plot_dir / f"{spec.filename_prefix}_vertical_boxplot{suffix}.png", dpi=300)
+            plt.close()
+
+        _render(True, "")
+        _render(False, "_no_outliers")
+
+# ── Extra plots reused from other regimes (error/feature/model correlations) ───
+def plot_model_subregimes(model_dict, output_dir):
+    regimes = _ordered_regimes(model_dict)
+    n_rows, n_cols = len(regimes), len(MODEL_COMBINATIONS)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.5 * n_cols, 4.5 * n_rows), sharey=True)
+
+    rng = np.random.default_rng(42)
+    sampled = {}
+    for regime_name in regimes:
+        regime_models = model_dict.get(regime_name, {})
+        snapshot_any = None
+        for _, variant_key in MODEL_COMBINATIONS:
+            snapshot = collect_variant_predictions(regime_models, variant_key, evaluate_model)
+            if snapshot is not None:
+                snapshot_any = snapshot
+                break
+        if snapshot_any is None:
+            continue
+        idx = snapshot_any['features'].index
+        sample_size = min(len(idx), 600)
+        chosen = idx if len(idx) <= sample_size else rng.choice(idx, size=sample_size, replace=False)
+        for _, variant_key in MODEL_COMBINATIONS:
+            sampled[(regime_name, variant_key)] = chosen
+
+    for row_idx, regime_name in enumerate(regimes):
+        regime_models = model_dict.get(regime_name, {})
+        for col_idx, (family, variant_key) in enumerate(MODEL_COMBINATIONS):
+            ax = axes[row_idx, col_idx] if n_rows > 1 else axes[col_idx]
+            display_name = model_display_name(family, variant_key)
+            snapshot = collect_variant_predictions(regime_models, variant_key, evaluate_model)
+            chosen = sampled.get((regime_name, variant_key))
+            if snapshot is None or chosen is None or len(chosen) == 0:
+                ax.set_axis_off()
+                continue
+
+            predictions = snapshot['predictions']
+            data_subset = snapshot['data'].loc[chosen]
+            positions = data_subset.index.map(snapshot['data'].index.get_loc).to_numpy()
+            y_true = snapshot['y_true'][positions]
+            pred = predictions.get(display_name)
+            if pred is None:
+                ax.set_axis_off()
+                continue
+            pred = pred[positions]
+
+            errors = np.abs(
+                np.log(np.maximum(pred, EPS)) - np.log(np.maximum(y_true, EPS))
+            )
+
+            ax.scatter(
+                y_true,
+                errors,
+                alpha=0.4,
+                s=18,
+                color=MODEL_COLOR_MAP[display_name],
+                label=display_name,
+                edgecolors='k',
+                linewidths=0.2,
+            )
+
+            if row_idx == len(regimes) - 1:
+                ax.set_xlabel("Groundtruth kcat_cg", fontsize=10)
+            if col_idx == 0:
+                ax.set_ylabel('Log-space MAE |ln(ŷ+ε) − ln(y+ε)| (ε=1e−20)', fontsize=10)
+            if row_idx == 0:
+                ax.set_title(display_name, fontsize=11)
+            if row_idx == 0 and col_idx == 0:
+                ax.legend(frameon=False, loc='upper left')
+
+            ax.set_xscale('log')
+
+    fig.suptitle("Model Error Landscape by Noise Regime and Model", fontsize=16, y=1.02)
+    plt.tight_layout()
+    Path(output_dir, "shared/plots").mkdir(parents=True, exist_ok=True)
+    plt.savefig(os.path.join(output_dir, "shared/plots/error_landscape.png"), dpi=300)
+    plt.close()
+
+def plot_input_error_correlation(model_dict, output_dir):
+    n = len(model_dict)
+    ncols = 3
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 4 * nrows))
+    axes = np.atleast_1d(axes).flatten()
+
+    all_error_df = []
+    filled = -1
+    for idx, (regime, models) in enumerate(model_dict.items()):
+        base_df, error_map = gather_model_errors(models, evaluate_model)
+        if base_df is None or not error_map:
+            continue
+
+        error_df = pd.DataFrame(error_map)
+        feature_cols = [col for col in base_df.columns if col != TARGET_COLUMN]
+        for col in feature_cols:
+            error_df[col] = base_df[col].values
+
+        corr = error_df.corr()[list(error_map.keys())].drop(error_map.keys(), axis=0)
+        all_error_df.append(error_df)
+
+        ax = axes[idx]
+        sns.heatmap(corr, annot=True, cmap='coolwarm', center=0, ax=ax)
+        ax.set_title(_label_for_regime(regime))
+        filled = idx
+
+    for j in range(filled + 1, len(axes)):
+        fig.delaxes(axes[j])
+
+    plt.suptitle("Feature–Error Correlations by Noise Regime", fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    Path(output_dir, "shared/plots").mkdir(parents=True, exist_ok=True)
+    plt.savefig(os.path.join(output_dir, "shared/plots/feature_error_correlation_grid.png"), dpi=300)
+    plt.close()
+
+    if all_error_df:
+        full_df = pd.concat(all_error_df, ignore_index=True)
+        error_columns = [col for col in full_df.columns if col in MODEL_COLOR_MAP]
+        overall_corr = full_df.corr()[error_columns].drop(error_columns, axis=0)
+        plt.figure(figsize=(10, 6))
+        sns.heatmap(overall_corr, annot=True, cmap='coolwarm', center=0)
+        plt.title("Overall Feature–Error Correlation (All Noise Regimes)")
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, "shared/plots/feature_error_correlation_overall.png"), dpi=300)
+        plt.close()
+
+def plot_model_error_correlation(model_dict, output_dir):
+    n = len(model_dict)
+    ncols = 3
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 4 * nrows))
+    axes = np.atleast_1d(axes).flatten()
+
+    all_model_error_df = []
+    filled = -1
+    for idx, (regime, models) in enumerate(model_dict.items()):
+        _, error_map = gather_model_errors(models, evaluate_model)
+        if not error_map:
+            continue
+
+        df = pd.DataFrame(error_map)
+        all_model_error_df.append(df)
+        corr = df.corr()
+        ax = axes[idx]
+        sns.heatmap(corr, annot=True, cmap='coolwarm', center=0, ax=ax)
+        ax.set_title(_label_for_regime(regime))
+        filled = idx
+
+    for j in range(filled + 1, len(axes)):
+        fig.delaxes(axes[j])
+
+    plt.suptitle("Model–Model Error Correlations by Noise Regime", fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.savefig(os.path.join(output_dir, "shared/plots/model_error_correlation_grid.png"), dpi=300)
+    plt.close()
+
+    if all_model_error_df:
+        df_all = pd.concat(all_model_error_df, ignore_index=True)
+        overall_corr = df_all.corr()
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(overall_corr, annot=True, cmap='coolwarm', center=0)
+        plt.title("Overall Model–Model Error Correlation (All Noise Regimes)")
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, "shared/plots/model_error_correlation_overall.png"), dpi=300)
+        plt.close()
+
+def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n_pu_points=200):
+    for regime, models in model_dict.items():
+        _emit(f"Generating scaled response curves for {regime}...")
+        data, pre = _get_eval_partition(models)
+        if data is None or data.empty:
+            _emit(f"Skipping {regime}: missing evaluation artifacts")
+            continue
+        nn_model = models.get("nn")
+        if nn_model is None or "P_u" not in data.columns:
+            _emit(f"Skipping {regime}: NN model or P_u missing")
+            continue
+
+        y_true = data.iloc[:, -1].values
+        X = data.iloc[:, :-1]
+        pu_index = X.columns.get_loc("P_u")
+        _, pipeline = preprocess_data(X.values)
+
+        nn_preds = evaluate_model(nn_model, pre)[1].detach().cpu().numpy().flatten()
+        mm_preds = mm_predictions(data)["sQSSA"]
+
+        log_mae_vals = np.abs(np.log(np.maximum(nn_preds, EPS)) - np.log(np.maximum(y_true, EPS)))
+        if len(log_mae_vals) == 0:
+            continue
+        percentiles = np.linspace(0, 100, n_samples + 2)[1:-1]
+        thresholds = np.percentile(log_mae_vals, percentiles)
+        chosen = []
+        for t in thresholds:
+            idx = int(np.argmin(np.abs(log_mae_vals - t)))
+            if idx not in chosen:
+                chosen.append(idx)
+        if not chosen:
+            chosen = list(range(min(n_samples, len(log_mae_vals))))
+
+        grid_cols = max(1, int(np.ceil(len(chosen) / 2)))
+        grid_rows = max(1, int(np.ceil(len(chosen) / grid_cols)))
+        fig, axs = plt.subplots(grid_rows, grid_cols, figsize=(10 * grid_cols, 5 * grid_rows))
+        axs = np.atleast_1d(axs).flatten()
+
+        nn_label = model_display_name("nn", "sQSSA")
+        mm_label = model_display_name("mm", "sQSSA")
+        for plot_idx, sample_idx in enumerate(chosen[: len(axs)]):
+            fixed_sample = X.iloc[sample_idx].copy()
+            original_pu = fixed_sample["P_u"]
+            pu_vals = np.linspace(0.01 * original_pu, 5 * original_pu, n_pu_points)
+
+            varied_inputs = np.tile(fixed_sample.values, (n_pu_points, 1))
+            varied_inputs[:, pu_index] = pu_vals
+            X_varied_inputs_pre = pipeline.transform(varied_inputs)
+            X_varied_inputs_pre = torch.tensor(X_varied_inputs_pre, dtype=torch.float32)
+
+            nn_model.eval()
+            with torch.no_grad():
+                y_nn = np.exp(nn_model(X_varied_inputs_pre))
+
+            base_row = data.iloc[[sample_idx]].copy()
+            mm_input = pd.DataFrame(np.tile(base_row.values, (n_pu_points, 1)), columns=base_row.columns)
+            mm_input["P_u"] = pu_vals
+            y_mm = mm_predictions(mm_input)["sQSSA"]
+
+            ax = axs[plot_idx]
+            ax.plot(pu_vals, y_nn, label=nn_label, color=MODEL_COLOR_MAP[nn_label])
+            ax.plot(pu_vals, y_mm, label=mm_label, color=MODEL_COLOR_MAP[mm_label], linestyle="--")
+            ax.scatter(original_pu, y_true[sample_idx], color=MODEL_COLOR_MAP[nn_label], marker="o", s=80, label="Groundtruth kcat_cg")
+            ax.axvline(original_pu, color="gray", linestyle=":", linewidth=1.2)
+            ax.set_xlim(0.01 * original_pu, 5 * original_pu)
+            ax.set_xlabel("P_u")
+            if plot_idx % grid_cols == 0:
+                ax.set_ylabel("Output")
+            ax.set_title(f"Sample {plot_idx + 1} | Log-MAE = {log_mae_vals[sample_idx]:.3f}")
+
+        fig.suptitle(f"NN vs MM — Response Curves — {_label_for_regime(regime)}", fontsize=16, y=1.05)
+        handles, labels = axs[0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 1.02))
+        plt.tight_layout(rect=[0, 0, 1, 0.94])
+        regime_plot_dir = Path(output_dir) / regime / "plots"
+        regime_plot_dir.mkdir(parents=True, exist_ok=True)
+        plt.savefig(regime_plot_dir / "nn_vs_mm_response_curves_scaled.png", bbox_inches="tight")
+        plt.close(fig)
+
+# ── Sampling helpers ───────────────────────────────────────────────────────────
 def _prepare_regime_sample(
     data: pd.DataFrame,
-    dataset_size: int,
+    dataset_size: Optional[int],
     seed: int,
     min_groups: int = 1,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     base = data.copy().reset_index(drop=True)
-    if dataset_size is None or dataset_size <= 0:
+    if not dataset_size or dataset_size <= 0:
         return base, base
-
     oversample = dataset_size * max(min_groups, 1)
-    symbolic_pool = (
-        base.sample(n=oversample, random_state=seed).reset_index(drop=True)
-        if len(base) > oversample else base
-    )
-
+    symbolic_pool = base.sample(n=min(oversample, len(base)), random_state=seed, replace=False).reset_index(drop=True)
     return symbolic_pool, base
-
 
 def _build_nn_pool(
     base: pd.DataFrame,
@@ -506,751 +975,316 @@ def _build_nn_pool(
         common = [col for col in pool.columns if col in exclude.columns]
         if common:
             exclude_unique = exclude[common].drop_duplicates()
-            merged = pool.merge(
-                exclude_unique.assign(_mark=1),
-                on=common,
-                how='left',
-            )
+            merged = pool.merge(exclude_unique.assign(_mark=1), on=common, how='left')
             pool = merged[merged['_mark'].isna()].drop(columns=['_mark']).reset_index(drop=True)
             if pool.empty:
                 pool = base.copy().reset_index(drop=True)
     target = nn_cap if nn_cap and nn_cap > 0 else len(pool)
-    replace = len(pool) < target
-    return pool.sample(n=target, random_state=seed + 1, replace=replace).reset_index(drop=True)
+    target = min(target, len(pool))
+    return pool.sample(n=target, random_state=seed + 1, replace=False).reset_index(drop=True)
 
+# ── Main evaluation (variant-aware, matching dataset_size_regimes logging) ─────
+def _evaluate_models_single_seed(
+    data,
+    features,
+    output_dir,
+    dataset_size,
+    seed: int,
+    *,
+    persist_outputs: bool = True,
+) -> Dict[str, Dict[str, Any]]:
+    resolved_seed = seed_everything(resolve_seed(seed))
+    seed = resolved_seed
+    global CURRENT_SEED_TAG
+    previous_tag = CURRENT_SEED_TAG
+    CURRENT_SEED_TAG = f"[seed={resolved_seed}]"
+    Path(output_dir, "shared/plots").mkdir(parents=True, exist_ok=True)
+    Path(output_dir, "shared/results/pysr").mkdir(parents=True, exist_ok=True)
 
-def evaluate_models(data, features, output_dir, dataset_size, mode, seed: int) -> None:
-    """Run symbolic-regression evaluations for each noise regime."""
+    # Always use full dataset regimes (filtered mode removed)
+    regimes = define_regimes_from_full_dataset(data)
 
-    seed_everything(seed)
-    os.makedirs(output_dir, exist_ok=True)
-    losses, model_dict = {}, {}
-    shared_results_dir = Path(output_dir) / "shared/results/pysr"
-    shared_plots_dir = Path(output_dir) / "shared/plots"
-    shared_results_dir.mkdir(parents=True, exist_ok=True)
-    shared_plots_dir.mkdir(parents=True, exist_ok=True)
-
-    regimes = {}
-    if mode == 'filtered':
-        errors = _mm_log_error(data)
-        base_df = data[errors < 0.01].reset_index(drop=True)
-        regimes.update(define_regimes_from_low_noise(base_df))
-    elif mode == 'full':
-        regimes.update(define_regimes_from_full_dataset(data))
+    model_dict: Dict[str, Dict[str, Any]] = OrderedDict()
 
     for regime, filtered in regimes.items():
-        symbolic_pool, nn_base = _prepare_regime_sample(
-            filtered, dataset_size, seed, min_groups=len(regimes)
-        )
-
+        symbolic_pool, nn_base = _prepare_regime_sample(filtered, dataset_size, seed, min_groups=len(regimes))
         if symbolic_pool.empty:
-            print(f"No data for {regime} regime.")
+            _emit(f"[{regime}] No data in pool; skipping.")
             continue
 
-        os.makedirs(os.path.join(output_dir, f"{regime}/processed"), exist_ok=True)
-        os.makedirs(os.path.join(output_dir, f"{regime}/plots"), exist_ok=True)
-        os.makedirs(os.path.join(output_dir, f"{regime}/models/pysr"), exist_ok=True)
-        os.makedirs(os.path.join(output_dir, f"{regime}/models/nn"), exist_ok=True)
+        regime_dir = Path(output_dir) / regime
+        (regime_dir / "processed").mkdir(parents=True, exist_ok=True)
+        (regime_dir / "plots").mkdir(parents=True, exist_ok=True)
+        (regime_dir / "models/pysr").mkdir(parents=True, exist_ok=True)
+        (regime_dir / "models/nn").mkdir(parents=True, exist_ok=True)
 
-        symbolic_pool.to_csv(os.path.join(output_dir, f"{regime}/processed/filtered_data.csv"), index=False)
+        if persist_outputs:
+            symbolic_pool.to_csv(regime_dir / "processed/filtered_data.csv", index=False)
 
         capped_size = min(dataset_size, len(symbolic_pool)) if dataset_size else len(symbolic_pool)
         sample = (
             symbolic_pool.sample(n=capped_size, random_state=seed)
-            if capped_size < len(symbolic_pool)
-            else symbolic_pool.copy()
-        )
-        sample = sample.reset_index(drop=True)
-        sample.to_csv(
-            os.path.join(output_dir, f"{regime}/processed/filtered_data_model_sample.csv"),
-            index=False,
-        )
+            if capped_size < len(symbolic_pool) else symbolic_pool.copy()
+        ).reset_index(drop=True)
+        if persist_outputs:
+            sample.to_csv(regime_dir / "processed/filtered_data_model_sample.csv", index=False)
 
         if len(sample) < 2:
-            print(f"Skipping {regime}: need at least 2 samples for train/test split.")
+            _emit(f"[{regime}] Insufficient samples (<2) for train/test split; skipping.")
             continue
 
         test_size = max(1, int(np.ceil(len(sample) * 0.2)))
         if len(sample) - test_size < 1:
-            print(f"Skipping {regime}: insufficient samples after applying test split.")
+            _emit(f"[{regime}] Insufficient train samples after split; skipping.")
             continue
 
-        train_df, test_df = train_test_split(
-            sample, test_size=test_size, random_state=seed, shuffle=True
-        )
-        train_df = train_df.reset_index(drop=True)
-        test_df = test_df.reset_index(drop=True)
+        indices = np.arange(len(sample))
+        train_idx, test_idx = train_test_split(indices, test_size=test_size, random_state=seed, shuffle=True)
 
-        train_df.to_csv(
-            os.path.join(output_dir, f"{regime}/processed/filtered_data_train.csv"),
-            index=False,
-        )
-        test_df.to_csv(
-            os.path.join(output_dir, f"{regime}/processed/filtered_data_test.csv"),
-            index=False,
-        )
-
-        X_train, y_train = train_df.iloc[:, :-1].values, train_df.iloc[:, -1].values
-        X_test, y_test = test_df.iloc[:, :-1].values, test_df.iloc[:, -1].values
-        X_full, y_full = sample.iloc[:, :-1].values, sample.iloc[:, -1].values
-
-        print(f"Evaluating {regime} with {len(train_df)} train / {len(test_df)} test samples")
-
-        temp_file = os.path.join(output_dir, f"{regime}/models/pysr/hall_of_fame.csv")
-        model_path = os.path.join(output_dir, f"{regime}/models/pysr/hall_of_fame.pkl")
-        pysr_model = run_pysr(X_train, y_train, model_path, temp_file)
-        y_pred_pysr = pysr_model.predict(X_test)
-        log_mae = np.mean(
-            np.abs(np.log(np.maximum(y_pred_pysr, EPS)) - np.log(np.maximum(y_test, EPS)))
-        )
-        losses[regime] = log_mae
-        print(f"PySR Loss (test): {log_mae}")
-
-        # Michaelis-Menten Model
-        y_pred_mm = _mm_predict(test_df)
-        mm_loss = np.mean(
-            np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_test, EPS)))
-        )
-        losses[f"{regime}_mm"] = mm_loss
-        print(f"Michaelis-Menten Loss (test): {mm_loss}")
-
-        # Neural Network Model
-        nn_pool = _build_nn_pool(nn_base, NN_DATASET_CAP, seed, exclude=sample)
-        nn_features = nn_pool.iloc[:, :-1]
-        nn_target = nn_pool.iloc[:, -1]
-        nn_X_train, nn_X_test, nn_y_train, nn_y_test = train_test_split(
-            nn_features,
-            nn_target,
-            test_size=0.2,
-            random_state=seed,
-            shuffle=True,
-        )
-
-        nn_X_train_pre, nn_pipeline = preprocess_data(nn_X_train.values)
-        nn_X_test_pre = nn_pipeline.transform(nn_X_test.values)
-        nn_train_pre = pd.DataFrame(
-            np.column_stack([nn_X_train_pre, np.log(nn_y_train.values)]),
-            columns=list(nn_features.columns) + [TARGET_COLUMN],
-        )
-        nn_test_pre = pd.DataFrame(
-            np.column_stack([nn_X_test_pre, np.log(nn_y_test.values)]),
-            columns=list(nn_features.columns) + [TARGET_COLUMN],
-        )
-
-        train_pre = pd.DataFrame(
-            np.column_stack([nn_pipeline.transform(train_df.iloc[:, :-1].values), np.log(y_train)]),
-            columns=list(train_df.columns),
-        )
-        test_pre = pd.DataFrame(
-            np.column_stack([nn_pipeline.transform(test_df.iloc[:, :-1].values), np.log(y_test)]),
-            columns=list(test_df.columns),
-        )
-        full_pre = pd.DataFrame(
-            np.column_stack([nn_pipeline.transform(sample.iloc[:, :-1].values), np.log(y_full)]),
-            columns=list(sample.columns),
-        )
-
-        train_split = nn_train_pre.reset_index(drop=True)
-        val_split = nn_test_pre.reset_index(drop=True)
-
-        nn_path = os.path.join(output_dir, f"{regime}/models/nn/model.pkl")
-        if os.path.exists(nn_path):
-            print(f"Loading existing NN model for {regime}")
-            nn_model = train_model(
-                train_split,
-                val_split,
-                nn_path,
-                verbose=False,
-                retrain=False,
-                seed=seed,
+        _emit(
+            format_regime_message(
+                regime,
+                _label_for_regime(regime),
+                total_samples=len(sample),
+                target_samples=capped_size,
+                replace=False,
             )
-        else:
-            print(f"Training new NN model for {regime}")
-            nn_model = train_model(
-                train_split,
-                val_split,
-                nn_path,
-                verbose=False,
-                seed=seed,
-            )
-        print(
-            "NN splits | train: %d, val: %d, eval: %d (cap %d)",
-            len(train_split),
-            len(val_split),
-            len(test_df),
-            NN_DATASET_CAP,
-        )
-        nn_loss, _ = evaluate_model(nn_model, test_pre)
-        losses[f"{regime}_nn"] = nn_loss
-        print(f"NN Loss (test): {nn_loss}")
-
-        # Store models and data for the current regime
-        model_dict[regime] = {
-            'data': sample,
-            'train_data': train_df,
-            'test_data': test_df,
-            'pysr': pysr_model,
-            'mm': y_pred_mm,
-            'nn': nn_model,
-            'preprocessed': full_pre,
-            'train_preprocessed': train_pre,
-            'test_preprocessed': test_pre,
-        }
-        print()
-
-    # Generate plots and save results
-    plot_model_subregimes(model_dict, output_dir)
-    plot_error_distributions(model_dict, output_dir)
-    save_pysr_formulas(model_dict, features, str(shared_results_dir / "all_pysr_formulas.txt"))
-    plot_input_error_correlation(model_dict, output_dir)
-    plot_model_error_correlation(model_dict, output_dir)
-    plot_nn_vs_mm_response_curves_linear(model_dict, output_dir)
-    error_distributions = _collect_error_distributions(model_dict)
-    plot_horizontal_boxplot_noise_regimes(model_dict, output_dir, error_distributions)
-    plot_vertical_boxplot_noise_regimes(model_dict, output_dir, error_distributions)
-    plot_noise_regime_lineplot(error_distributions, output_dir)
-    plot_noise_regime_lineplot_template(error_distributions, output_dir)
-
-def plot_error_distributions(model_dict, output_dir):
-    """
-    For each regime, plot a violin plot comparing Log-MAE errors for PySR, MM, and NN.
-    Output is a grid of subplots, one per regime.
-    """
-    error_records = []
-
-    for regime, models in model_dict.items():
-        data, data_pre = _get_eval_partition(models)
-        if data is None or data.empty:
-            continue
-        y_true = data.iloc[:, -1].values
-        X = data.iloc[:, :-1].values
-
-        # PySR
-        y_pred_pysr = models['pysr'].predict(X)
-        err_pysr = np.abs(np.log(np.maximum(y_pred_pysr, EPS)) - np.log(np.maximum(y_true, EPS)))
-        error_records.extend([{'Model': 'PySR', 'Regime': regime, 'Log-MAE': e} for e in err_pysr])
-
-        # MM
-        y_pred_mm = _mm_predict(data)
-        err_mm = np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_true, EPS)))
-        error_records.extend([{'Model': 'Michaelis-Menten', 'Regime': regime, 'Log-MAE': e} for e in err_mm])
-
-        # NN
-        y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
-        err_nn = np.abs(np.log(np.maximum(y_pred_nn, EPS)) - np.log(np.maximum(y_true, EPS)))
-        error_records.extend([{'Model': 'Neural Network', 'Regime': regime, 'Log-MAE': e} for e in err_nn])
-
-    error_df = pd.DataFrame(error_records)
-
-    regimes = [reg for reg in model_dict.keys() if reg in error_df['Regime'].unique()]
-    if not regimes:
-        print("No regimes with evaluable data for plotting.")
-        return
-
-    ncols = min(4, len(regimes))
-    nrows = (len(regimes) + ncols - 1) // ncols
-
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 5 * nrows), sharey=True)
-    axes = np.atleast_1d(axes).flatten()
-
-    for i, regime in enumerate(regimes):
-        ax = axes[i]
-        subset = error_df[error_df['Regime'] == regime]
-        sns.violinplot(
-            data=subset,
-            x='Model',
-            y='Log-MAE',
-            ax=ax,
-            inner='box',
-            palette=[MODEL_COLORS[m] for m in MODEL_LINE_ORDER],
-            order=MODEL_LINE_ORDER,
-        )
-        ax.set_title(regime)
-        ax.set_xlabel('')
-        if i % ncols == 0:
-            ax.set_ylabel('Log-space MAE\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)')
-        else:
-            ax.set_ylabel('')
-
-    # Remove empty axes if any
-    for j in range(len(regimes), len(axes)):
-        fig.delaxes(axes[j])
-
-    plt.suptitle("Log-space MAE Error Distributions by Regime", fontsize=16)
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-    plt.savefig(os.path.join(output_dir, "shared/plots/regime_loss_comparison.png"))
-
-def plot_model_subregimes(model_dict, output_dir):
-    regimes = list(model_dict.keys())
-    models = ['pysr', 'mm', 'nn']
-    model_labels = {'pysr': 'PySR', 'mm': 'Michaelis-Menten', 'nn': 'Neural Network'}
-    model_colors = {'pysr': MODEL_COLORS['PySR'], 'mm': MODEL_COLORS['Michaelis-Menten'], 'nn': MODEL_COLORS['Neural Network']}
-
-    n_rows, n_cols = len(regimes), len(models)
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 4.5 * n_rows), sharey=True)
-
-    sampled_indices = {}
-    for regime_name in regimes:
-        eval_data, _ = _get_eval_partition(model_dict[regime_name])
-        if eval_data is None or eval_data.empty:
-            continue
-        sample_size = min(len(eval_data), 600)
-        sampled_indices[regime_name] = np.random.choice(
-            eval_data.index.values,
-            size=sample_size,
-            replace=False,
         )
 
-    for row_idx, regime_name in enumerate(regimes):
-        eval_data, eval_pre = _get_eval_partition(model_dict[regime_name])
-        indices = sampled_indices.get(regime_name)
-        if eval_data is None or eval_data.empty or indices is None or len(indices) == 0:
-            continue
+        regime_entry: Dict[str, Any] = {"data": sample, "train_indices": train_idx, "test_indices": test_idx}
 
-        data = eval_data.loc[indices].copy()
-        data_pre = eval_pre.loc[indices] if eval_pre is not None else None
-        X = data.iloc[:, :-1]
-        y_true = data.iloc[:, -1]
-        y_mm = _mm_predict(data)
+        # Variant loop
+        for variant_key, display_variant in VARIANTS.items():
+            suffix = variant_suffix(variant_key)
+            variant_sample = augment_for_variant(sample, variant_key)
+            variant_train = variant_sample.iloc[train_idx].reset_index(drop=True)
+            variant_test = variant_sample.iloc[test_idx].reset_index(drop=True)
 
-        for col_idx, model in enumerate(models):
-            ax = axes[row_idx, col_idx] if n_rows > 1 else axes[col_idx]
+            if persist_outputs:
+                if suffix:
+                    variant_sample.to_csv(regime_dir / f"processed/filtered_data_model_sample{suffix}.csv", index=False)
+                    variant_train.to_csv(regime_dir / f"processed/filtered_data_train{suffix}.csv", index=False)
+                    variant_test.to_csv(regime_dir / f"processed/filtered_data_test{suffix}.csv", index=False)
+                else:
+                    variant_train.to_csv(regime_dir / "processed/filtered_data_train.csv", index=False)
+                    variant_test.to_csv(regime_dir / "processed/filtered_data_test.csv", index=False)
 
-            if model == 'pysr':
-                y_pred = model_dict[regime_name]['pysr'].predict(X.values)
-            elif model == 'mm':
-                y_pred = y_mm
-            elif model == 'nn':
-                if data_pre is None:
-                    continue
-                data_pre_subset = data_pre.loc[data.index]
-                y_pred = evaluate_model(model_dict[regime_name]['nn'], data_pre_subset)[1].detach().cpu().numpy().flatten()
+            X_train = variant_train.iloc[:, :-1].values
+            y_train = variant_train.iloc[:, -1].values
+            X_test = variant_test.iloc[:, :-1].values
+            y_test = variant_test.iloc[:, -1].values
+            X_full = variant_sample.iloc[:, :-1].values
+            y_full = variant_sample.iloc[:, -1].values
 
-            error = np.abs(np.log(np.maximum(y_pred, EPS)) - np.log(np.maximum(y_true, EPS)))
-
-            ax.scatter(
-                y_true, error, alpha=0.4, s=20,
-                color=model_colors[model], label=model_labels[model],
-                edgecolors='k', linewidths=0.2
-            )
-
-            if row_idx == len(regimes) - 1:
-                ax.set_xlabel("Groundtruth kcat_cg", fontsize=11)
-            if col_idx == 0:
-                ax.set_ylabel("Log-space MAE\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)", fontsize=11)
-            if row_idx == 0:
-                ax.set_title(model_labels[model], fontsize=13)
-            if row_idx == 0 and col_idx == 0:
-                ax.legend(frameon=False, loc='upper left')
-
-            ax.set_xscale('log')
-
-    fig.suptitle("Model Error Landscape by Regime and Model", fontsize=16, y=1.02)
-    plt.tight_layout()
-    output_path = os.path.join(output_dir, "shared/plots/error_landscape.png")
-    plt.savefig(output_path)
-
-def plot_input_error_correlation(model_dict, output_dir):
-    """
-    Plot feature-error correlations for each regime in a grid.
-    Also save an overall correlation across all regimes.
-    """
-    n = len(model_dict)
-    ncols = 3
-    nrows = (n + ncols - 1) // ncols
-
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 4 * nrows))
-    axes = axes.flatten()
-
-    all_error_df = []
-
-    for idx, (regime, models) in enumerate(model_dict.items()):
-        data, data_pre = _get_eval_partition(models)
-        if data is None or data.empty:
-            continue
-        y_true = data.iloc[:, -1].values
-        X = data.iloc[:, :-1]
-
-        error_df = pd.DataFrame()
-        error_df['pysr_error'] = np.abs(np.log(np.maximum(models['pysr'].predict(X.values), EPS)) - np.log(np.maximum(y_true, EPS)))
-        y_pred_mm = _mm_predict(data)
-        error_df['mm_error'] = np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_true, EPS)))
-        y_pred_nn = evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten()
-        error_df['nn_error'] = np.abs(np.log(np.maximum(y_pred_nn, EPS)) - np.log(np.maximum(y_true, EPS)))
-
-        for col in X.columns:
-            error_df[col] = X[col].values
-
-        corr = error_df.corr()[['pysr_error', 'mm_error', 'nn_error']].drop(['pysr_error', 'mm_error', 'nn_error'], axis=0)
-        all_error_df.append(error_df)
-
-        ax = axes[idx]
-        sns.heatmap(corr, annot=True, cmap='coolwarm', center=0, ax=ax)
-        ax.set_title(f"{regime}")
-
-    # Remove extra subplots
-    for j in range(idx + 1, len(axes)):
-        fig.delaxes(axes[j])
-
-    plt.suptitle("Feature-Error Correlations by Regime", fontsize=16)
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-    plt.savefig(os.path.join(output_dir, "shared/plots/feature_error_correlation_grid.png"))
-    plt.close()
-
-    # Overall correlation
-    full_df = pd.concat(all_error_df, ignore_index=True)
-    overall_corr = full_df.corr()[['pysr_error', 'mm_error', 'nn_error']].drop(['pysr_error', 'mm_error', 'nn_error'], axis=0)
-    plt.figure(figsize=(10, 6))
-    sns.heatmap(overall_corr, annot=True, cmap='coolwarm', center=0)
-    plt.title("Overall Feature-Error Correlation (All Regimes)")
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "shared/plots/feature_error_correlation_overall.png"))
-    plt.close()
-
-def plot_model_error_correlation(model_dict, output_dir):
-    """
-    Plot model-model error correlations for each regime in a grid.
-    Also save an overall correlation across all regimes.
-    """
-    n = len(model_dict)
-    ncols = 3
-    nrows = (n + ncols - 1) // ncols
-
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 4 * nrows))
-    axes = axes.flatten()
-
-    all_model_error_df = []
-
-    for idx, (regime, models) in enumerate(model_dict.items()):
-        data, data_pre = _get_eval_partition(models)
-        if data is None or data.empty:
-            continue
-        y_true = data.iloc[:, -1].values
-        X = data.iloc[:, :-1]
-
-        err_pysr = np.abs(np.log(np.maximum(models['pysr'].predict(X.values), EPS)) - np.log(np.maximum(y_true, EPS)))
-        mm_pred = _mm_predict(data)
-        err_mm = np.abs(np.log(np.maximum(mm_pred, EPS)) - np.log(np.maximum(y_true, EPS)))
-        err_nn = np.abs(
-            np.log(
-                np.maximum(
-                    evaluate_model(models['nn'], data_pre)[1].detach().cpu().numpy().flatten(),
-                    EPS,
+            _emit(
+                format_variant_split(
+                    regime,
+                    display_variant,
+                    train=len(variant_train),
+                    test=len(variant_test),
                 )
             )
-            - np.log(np.maximum(y_true, EPS))
-        )
 
-        df = pd.DataFrame({'PySR': err_pysr, 'MM': err_mm, 'NN': err_nn})
-        all_model_error_df.append(df)
+            # PySR
+            pysr_dir = regime_dir / f"models/pysr{suffix}"
+            pysr_model_path = pysr_dir / "hall_of_fame.pkl"
+            config_override = {"maxsize": 35} if variant_key == "tQSSA" else None
+            pysr_model = run_pysr(
+                X_train,
+                y_train,
+                str(pysr_model_path),
+                log_prefix=f"[{regime}] [{display_variant}]",
+                config_override=config_override,
+            )
+            y_pred_pysr = np.asarray(pysr_model.predict(X_test), dtype=float)
+            pysr_metrics = metric_summary(y_pred_pysr, y_test)
+            _emit(format_model_metrics(regime, display_variant, model_display_name("pysr", variant_key), pysr_metrics))
 
-        corr = df.corr()
-        ax = axes[idx]
-        sns.heatmap(corr, annot=True, cmap='coolwarm', center=0, ax=ax)
-        ax.set_title(f"{regime}")
+            # Michaelis–Menten
+            try:
+                mm_variant_pred = np.asarray(mm_predictions(variant_test)[display_variant], dtype=float)
+            except Exception as exc:
+                _emit(f"[WARN] Failed to compute MM {display_variant}: {exc}")
+                mm_variant_pred = np.zeros_like(y_test)
+            mm_metrics = metric_summary(mm_variant_pred, y_test)
+            _emit(format_model_metrics(regime, display_variant, model_display_name("mm", variant_key), mm_metrics))
 
-    for j in range(idx + 1, len(axes)):
-        fig.delaxes(axes[j])
+            # Neural Network
+            variant_nn_base = augment_for_variant(nn_base, variant_key)
+            nn_pool = _build_nn_pool(variant_nn_base, NN_DATASET_CAP, seed, exclude=variant_sample)
+            nn_features = nn_pool.iloc[:, :-1]
+            nn_target = nn_pool.iloc[:, -1]
+            if nn_features.empty or nn_target.empty:
+                _emit(f"[{regime}] [{display_variant}] NN: insufficient pool")
+                continue
 
-    plt.suptitle("Model Error Correlations by Regime", fontsize=16)
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-    plt.savefig(os.path.join(output_dir, "shared/plots/model_error_correlation_grid.png"))
-    plt.close()
-
-    # Overall correlation
-    df_all = pd.concat(all_model_error_df, ignore_index=True)
-    overall_corr = df_all.corr()
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(overall_corr, annot=True, cmap='coolwarm', center=0)
-    plt.title("Overall Model Error Correlation (All Regimes)")
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "shared/plots/model_error_correlation_overall.png"))
-    plt.close()
-
-def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n_pu_points=200):
-    """
-    For each regime:
-    - Select n_samples covering low to high log-MAE.
-    - Fix all inputs except P_u.
-    - Sweep P_u linearly from 0.01*K_M to 100*K_M (per sample).
-    - Compare NN predictions to Michaelis-Menten curve.
-    - Plot in linear space with adaptive x/y limits.
-    - Add vertical line at the original P_u value from the sample.
-    """
-    for regime, models in model_dict.items():
-        print(f"Generating scaled response curves for {regime}...")
-
-        data, preprocessed_data = _get_eval_partition(models)
-        if data is None or data.empty:
-            print(f"Skipping {regime}: no evaluation data available.")
-            continue
-        data = data.copy()
-        model = models['nn']
-
-        y_true = data.iloc[:, -1].values
-        X = data.iloc[:, :-1]
-        pu_index = X.columns.get_loc("P_u")
-
-        _, pipeline = preprocess_data(X)
-
-        y_pred_mm = _mm_predict(data)
-
-        # Full NN prediction and error
-        y_pred_nn = evaluate_model(model, preprocessed_data)[1].detach().cpu().numpy().flatten()
-        log_mae = np.abs(np.log(np.maximum(y_pred_nn, EPS)) - np.log(np.maximum(y_true, EPS)))
-        log_mae_mm = np.abs(np.log(np.maximum(y_pred_mm, EPS)) - np.log(np.maximum(y_true, EPS)))
-
-        # Select samples from across log-MAE distribution
-        percentiles = np.linspace(0, 100, n_samples + 2)[1:-1]
-        thresholds = np.percentile(log_mae, percentiles)
-        chosen_indices = []
-        for t in thresholds:
-            idx = np.argmin(np.abs(log_mae - t))
-            chosen_indices.append(idx)
-
-        fig, axs = plt.subplots(2, n_samples // 2, figsize=(20, 10), sharex=False, sharey=False)
-        axs = axs.flatten()
-
-        for i, idx in enumerate(chosen_indices):
-            fixed_sample = X.iloc[idx].copy()
-            original_pu = fixed_sample["P_u"]
-
-            pu_vals = np.linspace(0.01 * original_pu, 5 * original_pu, n_pu_points)
-
-            # Sweep P_u
-            varied_inputs = np.tile(fixed_sample.values, (n_pu_points, 1))
-            varied_inputs[:, pu_index] = pu_vals
-
-            # Preprocess inputs
-            X_varied_inputs_pre = pipeline.transform(varied_inputs)
-            X_varied_inputs_pre = torch.tensor(X_varied_inputs_pre, dtype=torch.float32)
-            
-            # NN prediction
-            model.eval()
-            with torch.no_grad():
-                y_nn = np.exp(model(X_varied_inputs_pre))
-            # MM prediction
-            row = data.iloc[idx]
-            if "tK" not in row or not np.isfinite(row["tK"]):
-                raise ValueError(
-                    "tK missing or non-finite for regime '{}' sample index {}".format(regime, idx)
+            nn_X_train, nn_X_val, nn_y_train, nn_y_val = train_test_split(
+                nn_features, nn_target, test_size=0.2, random_state=seed, shuffle=True
+            )
+            _emit(
+                format_variant_split(
+                    regime,
+                    f"{display_variant} NN pool",
+                    train=len(nn_X_train),
+                    val=len(nn_X_val),
                 )
-            y_mm = _mm_predict_row(row, pu_vals)
+            )
 
-            # Plot
-            ax = axs[i]
-            ax.plot(pu_vals, y_nn, label="Neural Network", color=MODEL_COLORS['Neural Network'])
-            ax.plot(pu_vals, y_mm, label="Michaelis-Menten", color=MODEL_COLORS['Michaelis-Menten'], linestyle='--')
-            ax.scatter(original_pu, y_true[idx], color=MODEL_COLORS['Neural Network'], marker='o', s=100, label="Groundtruth kcat_cg")
-            ax.axvline(original_pu, color='gray', linestyle=':', linewidth=1.5, label='Sampled P_u')  
-            ax.set_xlim(0.01 * original_pu, 5 * original_pu)
-            ax.set_xlabel("P_u")
-            if i % (n_samples // 2) == 0:
-                ax.set_ylabel("kcat_cg")
-            ax.set_title(f"Sample {i+1} | Log-MAE: NN = {log_mae[idx]:.3f} - MM {log_mae_mm[idx]:.3f}")
+            nn_X_train_pre, nn_pipeline = preprocess_data(nn_X_train.values)
+            nn_X_val_pre = nn_pipeline.transform(nn_X_val.values)
+            nn_train_pre = pd.DataFrame(
+                np.column_stack([nn_X_train_pre, np.log(nn_y_train.values)]),
+                columns=list(nn_features.columns) + [TARGET_COLUMN],
+            )
+            nn_val_pre = pd.DataFrame(
+                np.column_stack([nn_X_val_pre, np.log(nn_y_val.values)]),
+                columns=list(nn_features.columns) + [TARGET_COLUMN],
+            )
 
-        # Add suptitle slightly higher than default
-        fig.suptitle(f"NN vs MM — Response Curves — {regime}", fontsize=16, y=1.07)
+            train_pre = pd.DataFrame(
+                np.column_stack([nn_pipeline.transform(variant_train.iloc[:, :-1].values), np.log(y_train)]),
+                columns=list(variant_train.columns),
+            )
+            test_pre = pd.DataFrame(
+                np.column_stack([nn_pipeline.transform(variant_test.iloc[:, :-1].values), np.log(y_test)]),
+                columns=list(variant_test.columns),
+            )
+            full_pre = pd.DataFrame(
+                np.column_stack([nn_pipeline.transform(X_full), np.log(y_full)]),
+                columns=list(variant_sample.columns),
+            )
 
-        # Add legend below title, but above subplots
-        handles, labels = axs[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 1.02))
+            nn_dir = regime_dir / f"models/nn{suffix}"
+            nn_dir.mkdir(parents=True, exist_ok=True)
+            nn_path = nn_dir / "model.pkl"
+            retrain_flag = not nn_path.exists()
+            nn_model_ref = train_model(nn_train_pre, nn_val_pre, str(nn_path), verbose=False, retrain=retrain_flag, seed=seed)
 
-        # Adjust tight layout to allow room for both title and legend
-        plt.tight_layout(rect=[0, 0, 1, 0.95])  # bottom, left, right, top
+            _, nn_pred_tensor = evaluate_model(nn_model_ref, test_pre)
+            nn_preds = nn_pred_tensor.detach().cpu().numpy().flatten()
+            nn_metrics = metric_summary(nn_preds, y_test)
+            _emit(format_model_metrics(regime, display_variant, model_display_name("nn", variant_key), nn_metrics))
 
-        # Save cleanly
-        plt.savefig(os.path.join(output_dir, f"{regime}/plots/nn_vs_mm_response_curves_scaled.png"), bbox_inches="tight")
-        plt.close()
+            # Store artifacts
+            regime_entry[f'data{suffix}'] = variant_sample
+            regime_entry[f'train_data{suffix}'] = variant_train
+            regime_entry[f'test_data{suffix}'] = variant_test
+            regime_entry[f'pysr{suffix}'] = pysr_model
+            regime_entry[f'nn{suffix}'] = nn_model_ref
+            regime_entry[f'mm{suffix}'] = mm_variant_pred
+            regime_entry[f'preprocessed{suffix}'] = full_pre.reset_index(drop=True)
+            regime_entry[f'test_preprocessed{suffix}'] = test_pre.reset_index(drop=True)
 
-def plot_horizontal_boxplot_noise_regimes(model_dict, output_dir, error_distributions=None):
-    """
-    Create a vertical stack of horizontal boxplots (1 per noise regime) showing
-    Log-MAE for PySR, Michaelis-Menten, and Neural Network models.
-    Styled for Cell Systems standards.
-    """
-    sns.set(style="whitegrid", font_scale=1.2, rc={"axes.edgecolor": "black", "axes.linewidth": 1.0})
+            if suffix == "":
+                regime_entry['pysr'] = pysr_model
+                regime_entry['nn'] = nn_model_ref
+                regime_entry['mm'] = mm_variant_pred
 
-    if error_distributions is None:
-        error_distributions = _collect_error_distributions(model_dict)
+        model_dict[regime] = regime_entry
+        _emit("")
 
-    regimes = list(error_distributions.keys())
-    if not regimes:
-        print("No regimes available for plotting.")
+    if not model_dict:
+        _emit("No regimes produced results; skipping plotting.")
+        CURRENT_SEED_TAG = previous_tag
+        return OrderedDict()
+
+    CURRENT_SEED_TAG = previous_tag
+    return model_dict
+
+
+def evaluate_models(
+    data,
+    features,
+    output_dir,
+    dataset_size,
+    seed: int,
+    *,
+    num_seeds: int = 3,
+) -> None:
+    seeds = [seed + offset for offset in range(max(1, num_seeds))]
+    seed_model_dicts: List[Dict[str, Dict[str, Any]]] = []
+
+    for idx, run_seed in enumerate(seeds):
+        persist = idx == 0
+        run_output_dir = (
+            output_dir
+            if persist
+            else str(Path(output_dir) / "_multi_seed" / f"seed_{idx + 1}")
+        )
+        _emit(
+            f"[multi-seed] run {idx + 1}/{len(seeds)} | output_dir={run_output_dir}"
+        )
+        model_dict = _evaluate_models_single_seed(
+            data,
+            features,
+            run_output_dir,
+            dataset_size,
+            run_seed,
+            persist_outputs=persist,
+        )
+        if model_dict:
+            seed_model_dicts.append(model_dict)
+
+    if not seed_model_dicts:
+        _emit("No regimes produced results; skipping plotting.")
         return
 
-    fig, axes = plt.subplots(nrows=len(regimes), ncols=1, figsize=(10, 2.8 * len(regimes)), sharex=True)
-    if len(regimes) == 1:
-        axes = [axes]
+    aggregated_errors, seed_medians_map = aggregate_seed_error_statistics(
+        seed_model_dicts,
+        evaluate_model,
+    )
 
-    for ax, regime in zip(axes, regimes):
-        errors = error_distributions.get(regime, {})
-        error_df = _errors_to_dataframe(errors)
-        if error_df.empty:
-            ax.set_visible(False)
-            continue
+    base_model_dict = seed_model_dicts[0]
+    for regime, models in base_model_dict.items():
+        models["aggregated_errors"] = aggregated_errors.get(regime, {})
+        models["aggregated_seed_medians"] = seed_medians_map.get(regime, {})
+        models["seed_values"] = seeds
 
-        sns.boxplot(
-            data=error_df,
-            x="Log-MAE",
-            y="Model",
-            palette=MODEL_COLORS,
-            orient="h",
-            order=MODEL_LINE_ORDER,
-            ax=ax
-        )
-        ax.set_title(_label_for_regime(regime), fontsize=14, weight='bold')
-        ax.set_ylabel("")  # Avoid repeating "Model" label
-        ax.tick_params(axis='both', labelsize=11)
+    plot_model_subregimes(base_model_dict, output_dir)
+    plot_error_distributions(base_model_dict, output_dir)
+    plot_input_error_correlation(base_model_dict, output_dir)
+    plot_model_error_correlation(base_model_dict, output_dir)
+    plot_nn_vs_mm_response_curves_linear(base_model_dict, output_dir)
 
-    # Label only the bottom x-axis
-    axes[-1].set_xlabel("Log-space MAE\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)", fontsize=12)
-    for ax in axes[:-1]:
-        ax.set_xlabel("")
+    error_distributions, seed_medians = _collect_error_distributions(base_model_dict)
+    plot_horizontal_boxplots(base_model_dict, output_dir)
+    plot_vertical_boxplots(base_model_dict, output_dir)
+    plot_noise_lineplots(error_distributions, seed_medians, output_dir, template=False)
+    plot_noise_lineplots(error_distributions, seed_medians, output_dir, template=True)
+    save_pysr_formulas(base_model_dict, features, output_dir)
+    _emit(
+        f"Noise regimes completed across {len(seeds)} seed runs. Outputs written to {output_dir}"
+    )
 
-    plt.tight_layout()
-    os.makedirs(os.path.join(output_dir, "shared/plots"), exist_ok=True)
-    plt.savefig(os.path.join(output_dir, "shared/plots/log_mae_horizontal_boxplot.png"), dpi=300)
-    plt.close()
-
-    # No-outliers version
-    fig, axes = plt.subplots(nrows=len(regimes), ncols=1, figsize=(10, 2.8 * len(regimes)), sharex=True)
-    if len(regimes) == 1:
-        axes = [axes]
-    for ax, regime in zip(axes, regimes):
-        errors = error_distributions.get(regime, {})
-        error_df = _errors_to_dataframe(errors)
-        if error_df.empty:
-            ax.set_visible(False)
-            continue
-        sns.boxplot(
-            data=error_df,
-            x="Log-MAE",
-            y="Model",
-            palette=MODEL_COLORS,
-            orient="h",
-            order=MODEL_LINE_ORDER,
-            ax=ax,
-            showfliers=False,
-        )
-        ax.set_title(_label_for_regime(regime), fontsize=14, weight='bold')
-        ax.set_ylabel("")
-        ax.tick_params(axis='both', labelsize=11)
-    axes[-1].set_xlabel("Log-space MAE\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)", fontsize=12)
-    for ax in axes[:-1]:
-        ax.set_xlabel("")
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "shared/plots/log_mae_horizontal_boxplot_no_outliers.png"), dpi=300)
-    plt.close()
-
-def plot_vertical_boxplot_noise_regimes(model_dict, output_dir, error_distributions=None):
-    """
-    Create a single-row of vertical boxplots (1 per noise regime) showing
-    Log-MAE for PySR, Michaelis-Menten, and Neural Network models.
-    Each subplot has its own y-scale; style matches the horizontal version.
-    """
-    sns.set(style="whitegrid", font_scale=1.2, rc={"axes.edgecolor": "black", "axes.linewidth": 1.0})
-
-    if error_distributions is None:
-        error_distributions = _collect_error_distributions(model_dict)
-
-    regimes = list(error_distributions.keys())
-    if not regimes:
-        print("No regimes available for plotting (vertical).")
-        return
-
-    fig, axes = plt.subplots(nrows=1, ncols=len(regimes), figsize=(3.2 * len(regimes), 4.5), sharey=False)
-    if len(regimes) == 1:
-        axes = [axes]
-
-    for ax, regime in zip(axes, regimes):
-        errors = error_distributions.get(regime, {})
-        error_df = _errors_to_dataframe(errors)
-        if error_df.empty:
-            ax.set_visible(False)
-            continue
-
-        sns.boxplot(
-            data=error_df,
-            x="Model",
-            y="Log-MAE",
-            palette=MODEL_COLORS,
-            orient="v",
-            order=MODEL_LINE_ORDER,
-            ax=ax
-        )
-        ax.set_title(_label_for_regime(regime), fontsize=14, weight='bold')
-        ax.tick_params(axis='both', labelsize=11)
-        for label in ax.get_xticklabels():
-            label.set_rotation(25)
-            label.set_horizontalalignment('right')
-        if ax != axes[0]:
-            ax.set_ylabel("")
-        else:
-            ax.set_ylabel("Log-space MAE\nMean |ln(y_hat + ε) − ln(y + ε)| (ε=1e−20)", fontsize=12)
-
-    plt.tight_layout()
-    os.makedirs(os.path.join(output_dir, "shared/plots"), exist_ok=True)
-    plt.savefig(os.path.join(output_dir, "shared/plots/log_mae_vertical_boxplot.png"), dpi=300)
-    plt.close()
-
-    # No-outliers version (vertical)
-    fig, axes = plt.subplots(nrows=1, ncols=len(regimes), figsize=(3.2 * len(regimes), 4.5), sharey=False)
-    if len(regimes) == 1:
-        axes = [axes]
-    for ax, regime in zip(axes, regimes):
-        errors = error_distributions.get(regime, {})
-        error_df = _errors_to_dataframe(errors)
-        if error_df.empty:
-            ax.set_visible(False)
-            continue
-        sns.boxplot(
-            data=error_df,
-            x="Model",
-            y="Log-MAE",
-            palette=MODEL_COLORS,
-            orient="v",
-            order=MODEL_LINE_ORDER,
-            ax=ax,
-            showfliers=False,
-        )
-        ax.set_title(_label_for_regime(regime), fontsize=14, weight='bold')
-        ax.tick_params(axis='both', labelsize=11)
-        for label in ax.get_xticklabels():
-            label.set_rotation(25)
-            label.set_horizontalalignment('right')
-        if ax != axes[0]:
-            ax.set_ylabel("")
-        else:
-            ax.set_ylabel("Log-MAE", fontsize=12)
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "shared/plots/log_mae_vertical_boxplot_no_outliers.png"), dpi=300)
-    plt.close()
-
+# ── CLI ────────────────────────────────────────────────────────────────────────
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Evaluate noise regimes using symbolic regression and compare with MM and NN.')
+    parser = argparse.ArgumentParser(
+        description='Evaluate noise regimes with PySR/MM/NN (sQSSA/tQSSA-aware), using unified logging & plots.'
+    )
     parser.add_argument('--dataset', required=True, help='CSV dataset path')
     parser.add_argument('--dataset_size', type=int, help='Max samples to use')
     parser.add_argument('--features', type=str, help='Comma-separated list of features or "all"')
-    parser.add_argument('--mode', choices=['filtered', 'full'], default='filtered', help='Noise regime definition to use')
     parser.add_argument('--seed', type=int, default=42, help='Base random seed for reproducibility')
+    parser.add_argument('--num_seeds', type=int, default=3, dest='num_seeds', help='Number of random seeds to evaluate per model (>=1)')
     args = parser.parse_args()
 
     seed = seed_everything(resolve_seed(args.seed))
     data = load_dataset(args.dataset, args.dataset_size, args.features)
+
     dataset_path = Path(args.dataset)
     try:
         base_dir = dataset_path.parents[1]
     except IndexError:
         base_dir = dataset_path.parent
-    output_dir = base_dir / f"noise_regimes_{args.mode}"
+    output_dir = base_dir / "noise_regimes_full"
+
     evaluate_models(
         data,
         args.features,
         output_dir=str(output_dir),
         dataset_size=args.dataset_size,
-        mode=args.mode,
         seed=seed,
+        num_seeds=max(1, args.num_seeds),
     )
 
 if __name__ == '__main__':

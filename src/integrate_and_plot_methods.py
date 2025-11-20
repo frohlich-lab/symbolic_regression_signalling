@@ -10,7 +10,11 @@ import matplotlib.pyplot as plt
 from matplotlib.cm import get_cmap
 from pathlib import Path
 from diffrax import ODETerm, diffeqsolve, Kvaerno3, SaveAt, SteadyStateEvent, PIDController, ImplicitAdjoint
+from typing import Optional
 from plot_style import apply_cell_systems_style
+
+from mm_models import TARGET_COLUMN as MM_TARGET_COLUMN
+from regime_variants import MODEL_COLORS, VARIANTS
 
 # Solver parameters
 STEADY_STATE_ATOL = 1e-14
@@ -31,7 +35,7 @@ N_TIME_STEPS = 22
 solver = Kvaerno3()
 apply_cell_systems_style()
 
-METHOD_LABELS = {
+BASE_METHOD_LABELS = {
     'pysr': 'PySR',
     'aifeynman': 'AI Feynman',
     'dso': 'DSO',
@@ -42,7 +46,7 @@ METHOD_LABELS = {
     'unknown': 'Unknown'
 }
 
-METHOD_COLORS = {
+BASE_METHOD_COLORS = {
     'pysr': '#1f77b4',
     'aifeynman': '#ff7f0e',
     'dso': '#2ca02c',
@@ -52,6 +56,38 @@ METHOD_COLORS = {
     'mm': '#bcbd22',
     'unknown': '#7f7f7f'
 }
+
+
+def split_method_variant(method: str):
+    for variant_key in VARIANTS.keys():
+        suffix = f"_{variant_key}"
+        if method.endswith(suffix):
+            return method[: -len(suffix)], variant_key
+    return method, None
+
+
+def method_display_name(method: str) -> str:
+    base_method, variant_key = split_method_variant(method)
+    base_label = BASE_METHOD_LABELS.get(
+        base_method,
+        base_method.replace('_', ' ').title(),
+    )
+    if variant_key:
+        variant_label = VARIANTS.get(variant_key, variant_key)
+        return f"{base_label} ({variant_label})"
+    return base_label
+
+
+def method_color(base_method: str, variant_key: Optional[str]) -> str:
+    if variant_key and (base_method, variant_key) in MODEL_COLORS:
+        return MODEL_COLORS[(base_method, variant_key)]
+    return BASE_METHOD_COLORS.get(base_method, '#7f7f7f')
+
+
+def adjust_pu_for_variant(p_u_value: float, target_value: float, variant_key: Optional[str]) -> float:
+    if variant_key == "tQSSA":
+        return p_u_value + target_value
+    return p_u_value
 
 def load_dataset(file_path, features=None, trajectory_column=None, data_proportion=1.0):
     """
@@ -206,19 +242,30 @@ def plot_log_MAE_scatter(entries, plot_path, plot_context=None, dataset_context=
         plt.close()
         return
 
-    methods = sorted({entry['method'] for entry in valid_entries})
+    grouped = {}
+    for entry in valid_entries:
+        label = entry['display']
+        bucket = grouped.setdefault(
+            label,
+            {
+                'complexity': [],
+                'loss': [],
+                'base': entry['base'],
+                'variant': entry['variant'],
+            },
+        )
+        bucket['complexity'].append(entry['complexity'])
+        bucket['loss'].append(entry['loss'])
+
     cmap = get_cmap('tab10')
 
     plt.figure(figsize=(8, 6))
     ax = plt.gca()
 
-    for idx, method in enumerate(methods):
-        color = METHOD_COLORS.get(method, cmap(idx % cmap.N))
-        label = METHOD_LABELS.get(method, method.replace('_', ' ').title())
-        method_entries = [entry for entry in valid_entries if entry['method'] == method]
-
-        complexities = [entry['complexity'] for entry in method_entries]
-        losses = [entry['loss'] for entry in method_entries]
+    for idx, (label, payload) in enumerate(grouped.items()):
+        color = method_color(payload['base'], payload['variant']) or cmap(idx % cmap.N)
+        complexities = payload['complexity']
+        losses = payload['loss']
 
         ax.scatter(
             complexities,
@@ -228,7 +275,7 @@ def plot_log_MAE_scatter(entries, plot_path, plot_context=None, dataset_context=
             edgecolor='k',
             linewidth=0.4,
             s=70,
-            alpha=0.85
+            alpha=0.85,
         )
 
         for x, y in zip(complexities, losses):
@@ -239,7 +286,7 @@ def plot_log_MAE_scatter(entries, plot_path, plot_context=None, dataset_context=
                 xytext=(0, 6),
                 ha='center',
                 fontsize=9,
-                color=color
+                color=color,
             )
 
     ax.set_xlabel('Symbolic Formula Complexity')
@@ -272,58 +319,75 @@ def integrate_and_calculate_loss(data, formulas, discovery_scales, output_path, 
     print("Starting integration and loss calculation for all methods...")
     loss_results = {}
     plot_entries = []
+    condition_ids = data['condition_id'].unique()
+    total_conditions = len(condition_ids)
 
     for method, formula_path in formulas.items():
-        print(f"\nProcessing method: {method}")
+        base_method, variant_key = split_method_variant(method)
+        base_key = base_method.lower()
+        display_name = method_display_name(method)
+
+        print(f"\nProcessing method: {display_name}")
         print("Loading formula from:", formula_path)
 
-        # Load and parse the formula
         with open(formula_path, 'r') as f:
             formula_str = f.read().strip()
         expression = sympy.sympify(formula_str)
         complexity = calculate_complexity(expression)
         arguments = ['k_off', 'k_D', 'k_cat', 'k_inact', 'tK', 'P_u']
 
-        if discovery_scales[method] == 'log':
-            log_subs = {arg: sympy.log(arg) for arg in arguments}  
-            # Apply transformation: log(x) → exp(expression(log(x)))
+        scale = discovery_scales.get(base_key, discovery_scales.get(method, 'linear'))
+        if scale == 'log':
+            log_subs = {arg: sympy.log(arg) for arg in arguments}
             transformed_expression = sympy.exp(expression.subs(log_subs))
             ode_function = sympy.lambdify(args=arguments, expr=transformed_expression)
-        elif discovery_scales[method] == 'linear':
+        elif scale == 'linear':
             ode_function = sympy.lambdify(args=arguments, expr=expression)
         else:
-            raise ValueError(f"Unsupported discovery scale: {discovery_scales[method]}")
+            raise ValueError(f"Unsupported discovery scale for {display_name}: {scale}")
 
         def system_ode(t, y, args):
-            tK, P_u, Pp = y
-            k_off, k_D, k_cat, k_inact, K0, krev = args
-            tK_dot = k_inact * (K0 - tK)
-            kfw = ode_function(k_off, k_D, k_cat, k_inact, tK, P_u)
-            P_u_dot = -k_cat * kfw + krev * Pp
-            Pp_dot = k_cat * kfw - krev * Pp
+            tK_val, P_u_val, Pp_val = y
+            k_off_val, k_D_val, k_cat_val, k_inact_val, K0_val, krev_val, target_val = args
+            tK_dot = k_inact_val * (K0_val - tK_val)
+            pu_arg = adjust_pu_for_variant(P_u_val, target_val, variant_key)
+            kfw = ode_function(k_off_val, k_D_val, k_cat_val, k_inact_val, tK_val, pu_arg)
+            P_u_dot = -k_cat_val * kfw + krev_val * Pp_val
+            Pp_dot = k_cat_val * kfw - krev_val * Pp_val
             return jnp.array([tK_dot, P_u_dot, Pp_dot])
 
         ode_term = ODETerm(system_ode)
         loss_df = []
         fails_indices = []
 
-        for i, sample in enumerate(data['condition_id'].unique()):
-            print(f"\nProcessing sample: {i}/{len(data['condition_id'].unique())}")
+        for i, sample in enumerate(condition_ids):
+            print(f"\nProcessing sample: {i}/{total_conditions}")
             data_sample = data[data['condition_id'] == sample]
+            if data_sample.empty:
+                continue
+            target_value = float(data_sample.iloc[0][MM_TARGET_COLUMN])
+            if not np.isfinite(target_value):
+                print(
+                    f"Skipping sample {sample}: non-finite {MM_TARGET_COLUMN} for {display_name}."
+                )
+                continue
             sublists = np.array_split(data_sample, 3)
-            for j, data_sample in enumerate(sublists):  # Assuming there are 3 trajectories per condition
+            for j, data_subset in enumerate(sublists):  # Assuming three trajectories per condition
+                if data_subset.empty:
+                    continue
                 initial_values_ss = jnp.array([
-                    data_sample.iloc[0]['K0_preeq'],
-                    data_sample.iloc[0]["uP0_preeq"],
-                    data_sample.iloc[0]["pP0_preeq"]
+                    data_subset.iloc[0]['K0_preeq'],
+                    data_subset.iloc[0]["uP0_preeq"],
+                    data_subset.iloc[0]["pP0_preeq"],
                 ])
                 params_ss = (
-                    data_sample.iloc[0]["k_off"],
-                    data_sample.iloc[0]["k_D"],
-                    data_sample.iloc[0]["k_cat"],
-                    data_sample.iloc[0]['k_inact'],
-                    data_sample.iloc[0]['K0_preeq'],
-                    data_sample.iloc[0]['krev']
+                    data_subset.iloc[0]["k_off"],
+                    data_subset.iloc[0]["k_D"],
+                    data_subset.iloc[0]["k_cat"],
+                    data_subset.iloc[0]['k_inact'],
+                    data_subset.iloc[0]['K0_preeq'],
+                    data_subset.iloc[0]['krev'],
+                    target_value,
                 )
 
                 print("Integrating to steady state...")
@@ -336,14 +400,15 @@ def integrate_and_calculate_loss(data, formulas, discovery_scales, output_path, 
 
                 initial_values_sim = solution_ss.ys[-1, :]
                 params_simu = (
-                    data_sample.iloc[0]["k_off"],
-                    data_sample.iloc[0]["k_D"],
-                    data_sample.iloc[0]["k_cat"],
-                    data_sample.iloc[0]['k_inact'],
-                    data_sample.iloc[0]['K0'],
-                    data_sample.iloc[0]['krev']
+                    data_subset.iloc[0]["k_off"],
+                    data_subset.iloc[0]["k_D"],
+                    data_subset.iloc[0]["k_cat"],
+                    data_subset.iloc[0]['k_inact'],
+                    data_subset.iloc[0]['K0'],
+                    data_subset.iloc[0]['krev'],
+                    target_value,
                 )
-                ts = jnp.array(data_sample['time'].to_numpy()[:-1])
+                ts = jnp.array(data_subset['time'].to_numpy()[:-1])
 
                 print("Starting simulation integration...")
                 solution_simu = integrate_simulation(ode_term, initial_values_sim, params_simu, solver, ts)
@@ -352,31 +417,32 @@ def integrate_and_calculate_loss(data, formulas, discovery_scales, output_path, 
                     fails_indices.append((i, j))
                     loss_df.append([None, None, None])
                     continue
-                print(data_sample.columns)
+
                 groundtruth = np.vstack([
-                    data_sample['tK'][:-1].to_numpy(),
-                    data_sample['P_u'][:-1].to_numpy(),
-                    data_sample['P_p'][:-1].to_numpy()
+                    data_subset['tK'][:-1].to_numpy(),
+                    data_subset['P_u'][:-1].to_numpy(),
+                    data_subset['P_p'][:-1].to_numpy(),
                 ]).transpose()
                 print("Calculating loss for sample:", i, "trajectory:", j)
                 loss_ls = calculate_loss(groundtruth, solution_simu.ys)
                 loss_df.append(loss_ls)
 
         print("Loss DataFrame contents", loss_df)
-        print([loss[2] for loss in loss_df if loss[2] is not None])
-        average_log_MAE = np.nanmean([loss[2] for loss in loss_df if loss[2] is not None])
-        valid_losses = [loss[2] for loss in loss_df if loss[2] is not None]
+        valid_losses = [loss[2] for loss in loss_df if loss and loss[2] is not None]
         if valid_losses:
-            average_log_MAE = np.nanmean(valid_losses)
+            average_log_MAE = float(np.nanmean(valid_losses))
         else:
-            print(f"No valid simulation results for {method}. Skipping.")
-            average_log_MAE = np.nan  # or continue to next method
-        print(f"Average Log MAE for {method}: {average_log_MAE}")
-        loss_results[method] = average_log_MAE
+            print(f"No valid simulation results for {display_name}. Skipping.")
+            average_log_MAE = np.nan
+        print(f"Average Log MAE for {display_name}: {average_log_MAE}")
+        loss_results[display_name] = average_log_MAE
         plot_entries.append({
             'method': method,
+            'display': display_name,
+            'base': base_method,
+            'variant': variant_key,
             'loss': average_log_MAE,
-            'complexity': complexity
+            'complexity': complexity,
         })
 
     print("Saving loss results to:", output_path)
