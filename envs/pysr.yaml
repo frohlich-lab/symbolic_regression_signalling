@@ -13,3 +13,6 @@ dependencies:
   - pytorch # required for NN in pysr_regimes.py
   - upsetplot
   - rich
+  - seaborn
+  - jax
+  - diffrax

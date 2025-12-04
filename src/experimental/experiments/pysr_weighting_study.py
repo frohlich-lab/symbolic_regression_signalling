@@ -534,18 +534,18 @@ def format_result(res: Mapping[str, object]) -> List[str]:
     return lines
 
 
-# # ---------------------------
-# # Main
-# # ---------------------------
-# def main() -> None:
-#     args = parse_args()
-#     debug = args.debug
-#     os.makedirs(os.path.dirname(args.output), exist_ok=True)
+# ---------------------------
+# Main
+# ---------------------------
+def main() -> None:
+    args = parse_args()
+    debug = args.debug
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
-#     dprint(debug, f"[setup] sys.executable={sys.executable}")
-#     dprint(debug, f"[setup] JULIA_NUM_THREADS={os.environ.get('JULIA_NUM_THREADS')}")
+    dprint(debug, f"[setup] sys.executable={sys.executable}")
+    dprint(debug, f"[setup] JULIA_NUM_THREADS={os.environ.get('JULIA_NUM_THREADS')}")
 
-#     df = load_dataset(args.dataset, args.log10_cutoff, debug=debug)
+    df = load_dataset(args.dataset, args.log10_cutoff, debug=debug)
 
     # Load groups with old-style robustness
     all_groups = load_groups_csv(args.group_definitions, available_markers=df["marker"].unique(), debug=debug)

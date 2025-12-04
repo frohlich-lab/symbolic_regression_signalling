@@ -120,14 +120,20 @@ if exp_sr_output_dir_cfg:
 else:
     exp_sr_output_dir = f"{functional_group_base_dir}/outputs"
 
-exp_feature_modes = experimental_cfg.get("feature_modes", ["all", "gfp"])
+# Pipeline now supports only 'all' feature mode
+exp_feature_modes = ["all"]
 exp_feature_modes_args = " ".join(exp_feature_modes)
-exp_gfp_columns = experimental_cfg.get("gfp_columns", ["GFP", 'p-ERK1-2', 'p-MEK1-2', 'p-ERK1-2_min', 'p-MEK1-2_min'])
-exp_gfp_columns_args = " ".join(exp_gfp_columns)
+exp_gfp_columns = experimental_cfg.get(
+    "gfp_columns",
+    ["GFP", "p-ERK1-2", "p-MEK1-2", "p-ERK1-2_min", "p-MEK1-2_min"],
+)
 exp_confidence_threshold = experimental_cfg.get("confidence_threshold", 4.0)
 exp_models = [model.lower() for model in experimental_cfg.get("models", ["pysr"])]
-exp_run_per_minute_sr = bool(experimental_cfg.get("run_per_minute_sr", False))
 exp_per_minute_max_time = float(experimental_cfg.get("per_minute_max_time", 30.0))
+exp_measured_timepoints = experimental_cfg.get(
+    "measured_timepoints",
+    [0, 5, 10, 15, 30, 60],
+)
 allowed_exp_model_codes = {"pysr", "linreg"}
 for _model_code in exp_models:
     if _model_code not in allowed_exp_model_codes:
@@ -178,40 +184,14 @@ exp_tradeoff_min_bin_samples = int(experimental_cfg.get("tradeoff_min_bin_sample
 exp_tradeoff_eval_feature_mode = experimental_cfg.get("tradeoff_feature_mode_eval", "gfp")
 exp_tradeoff_eval_model_name = experimental_cfg.get("tradeoff_model_name", "pysr")
 exp_tradeoff_include_linreg = bool(experimental_cfg.get("tradeoff_include_linreg", True))
-
-weighting_cfg = experimental_cfg.get("weighting", {})
-weighting_groups = weighting_cfg.get("groups", exp_tradeoff_groups)
-weighting_groups_args = " ".join(shlex.quote(group) for group in weighting_groups)
-weighting_strategies = weighting_cfg.get(
-    "strategies",
-    ["none", "inverse_oom", "sqrt_inverse_oom", "marker_equal"],
+exp_per_minute_sampling_strategy = experimental_cfg.get(
+    "per_minute_sampling_strategy",
+    "early_plus_sparse_late",
 )
-weighting_strategies_args = " ".join(weighting_strategies)
-weighting_fit_modes = weighting_cfg.get("fit_modes", ["weighted"])
-weighting_fit_modes_args = " ".join(weighting_fit_modes)
-weighting_output = weighting_cfg.get(
-    "output",
-    f"{exp_sr_output_dir}/reports/diagnostics/pysr_weighting_study.txt",
-)
-weighting_feature_mode = weighting_cfg.get("feature_mode", "gfp")
-weighting_test_size = float(weighting_cfg.get("test_size", 0.2))
-weighting_random_state = int(weighting_cfg.get("random_state", exp_tradeoff_seed))
-weighting_min_group_size = int(weighting_cfg.get("min_group_size", 200))
-weighting_niterations = int(weighting_cfg.get("niterations", 300))
-weighting_population_size = int(weighting_cfg.get("population_size", 30))
-weighting_populations = int(weighting_cfg.get("populations", 30))
-weighting_max_size = int(weighting_cfg.get("max_size", 20))
-weighting_parsimony = float(weighting_cfg.get("parsimony", 0.8))
-weighting_binary_ops = weighting_cfg.get("binary_operators", ["+", "-", "*", "/"])
-weighting_unary_ops = weighting_cfg.get("unary_operators", [])
+exp_late_sample_window = tuple(experimental_cfg.get("late_sample_window", [30.0, 60.0]))
+exp_late_sample_points = int(experimental_cfg.get("late_sample_points", 15))
 
-# Optional: reuse weighting knobs for the main SR run, too
-exp_sr_weighting_flags = ""
-if weighting_strategies:
-    exp_sr_weighting_flags += f"--weighting {weighting_strategies_args} "
-if weighting_fit_modes:
-    exp_sr_weighting_flags += f"--fit-modes {weighting_fit_modes_args}"
-exp_sr_weighting_flags = exp_sr_weighting_flags.strip()
+weighting_cfg = {}
 
 pysr_grid_cfg = experimental_cfg.get("pysr_grid", {})
 pysr_grid_seed = int(pysr_grid_cfg.get("seed", 1337))
@@ -229,213 +209,116 @@ functional_group_feature_matrix_csv = f"{functional_group_output_root}/functiona
 functional_group_fit_snapshot_csv = f"{functional_group_output_root}/functional_groups_fit_snapshot.csv"
 functional_group_per_minute_csv = f"{functional_group_output_root}/functional_groups_per_minute_fit.csv"
 reports_summary_output = f"{exp_sr_output_dir}/reports/summary/functional_group_summary.csv"
+reports_summary_seed_output = f"{exp_sr_output_dir}/reports/summary/functional_group_summary_seed.csv"
+# Per-minute outputs still live under a subdir for plots convenience
 functional_group_formula_files = [
-    f"{exp_sr_output_dir}/reports/formulas/{mode}.txt" for mode in exp_feature_modes
+    f"{exp_sr_output_dir}/reports/formulas/{mode}_{suffix}.txt"
+    for mode in exp_feature_modes
+    for suffix in ("snapshot", "per_minute")
 ]
 functional_group_summary_output = reports_summary_output
-exp_sr_per_minute_output_dir = f"{exp_sr_output_dir}/per_minute"
-functional_group_summary_per_minute = f"{exp_sr_per_minute_output_dir}/reports/summary/functional_group_summary.csv"
-functional_group_formula_files_per_minute = [
-    f"{exp_sr_per_minute_output_dir}/reports/formulas/{mode}.txt" for mode in exp_feature_modes
-]
-
-tradeoff_diagnostics_output = f"{exp_sr_output_dir}/reports/diagnostics/balancing_tradeoff.txt"
-weighting_study_output = weighting_output
+functional_group_summary_seed_output = reports_summary_seed_output
 
 plots_root = f"{exp_sr_output_dir}/plots"
+plots_overlays_dir = f"{plots_root}/overlays"
+plots_metrics_dir = f"{plots_root}/metrics"
+plots_metrics_scatter_dir = f"{plots_metrics_dir}/scatter"
+plots_metrics_lines_dir = f"{plots_metrics_dir}/lines"
+plots_metrics_features_dir = f"{plots_metrics_dir}/features"
+plots_metrics_boxes_dir = f"{plots_metrics_dir}/boxes"
 
-functional_group_png_output = f"{plots_root}/pysr/metrics/functional_group_log_r2.png"
-functional_group_svg_output = f"{plots_root}/pysr/metrics/functional_group_log_r2.svg"
-functional_group_relative_png_output = f"{plots_root}/pysr/metrics/functional_group_relative_mae.png"
-functional_group_relative_svg_output = f"{plots_root}/pysr/metrics/functional_group_relative_mae.svg"
-functional_group_r2_scatter_png_output = f"{plots_root}/pysr/metrics/functional_group_log_r2_scatter.png"
-functional_group_r2_scatter_svg_output = f"{plots_root}/pysr/metrics/functional_group_log_r2_scatter.svg"
-functional_group_r2_confidence_png_output = f"{plots_root}/pysr/metrics/functional_group_log_r2_confidence.png"
-functional_group_r2_confidence_svg_output = f"{plots_root}/pysr/metrics/functional_group_log_r2_confidence.svg"
-functional_group_r2_confidence_high_png_output = (
-    f"{plots_root}/pysr/metrics/functional_group_log_r2_confidence_high.png"
-)
-functional_group_r2_confidence_high_svg_output = (
-    f"{plots_root}/pysr/metrics/functional_group_log_r2_confidence_high.svg"
-)
-functional_group_r2_direction_png_output = f"{plots_root}/pysr/metrics/functional_group_log_r2_direction.png"
-functional_group_r2_direction_svg_output = f"{plots_root}/pysr/metrics/functional_group_log_r2_direction.svg"
+# Overlay plot outputs (explicit per dataset mode)
+overlay_snapshot_plot = f"{plots_overlays_dir}/marker_overlay_snapshot.png"
+overlay_snapshot_metrics = f"{exp_sr_output_dir}/reports/metrics/marker_overlay_metrics_snapshot.csv"
+overlay_snapshot_plot_svg = f"{plots_overlays_dir}/marker_overlay_snapshot.svg"
+overlay_per_minute_plot = f"{plots_overlays_dir}/marker_overlay_per_minute.png"
+overlay_per_minute_metrics = f"{exp_sr_output_dir}/reports/metrics/marker_overlay_metrics_per_minute.csv"
+overlay_per_minute_plot_svg = f"{plots_overlays_dir}/marker_overlay_per_minute.svg"
+overlay_snapshot_linreg_plot = f"{plots_overlays_dir}/marker_overlay_linear_regression_snapshot.png"
+overlay_snapshot_linreg_plot_svg = f"{plots_overlays_dir}/marker_overlay_linear_regression_snapshot.svg"
+overlay_snapshot_linreg_metrics = f"{exp_sr_output_dir}/reports/metrics/marker_overlay_metrics_linear_regression_snapshot.csv"
+overlay_per_minute_linreg_plot = f"{plots_overlays_dir}/marker_overlay_linear_regression_per_minute.png"
+overlay_per_minute_linreg_plot_svg = f"{plots_overlays_dir}/marker_overlay_linear_regression_per_minute.svg"
+overlay_per_minute_linreg_metrics = f"{exp_sr_output_dir}/reports/metrics/marker_overlay_metrics_linear_regression_per_minute.csv"
+integration_snapshot_metrics = f"{exp_sr_output_dir}/reports/metrics/marker_integration_metrics_snapshot.csv"
+integration_per_minute_metrics = f"{exp_sr_output_dir}/reports/metrics/marker_integration_metrics_per_minute.csv"
+integration_snapshot_traj = f"{exp_sr_output_dir}/reports/metrics/marker_integration_trajectories_snapshot.csv"
+integration_per_minute_traj = f"{exp_sr_output_dir}/reports/metrics/marker_integration_trajectories_per_minute.csv"
 
-functional_group_model_comparison_gfp_png_output = (
-    f"{plots_root}/comparisons/core/functional_group_model_comparison_gfp.png"
-)
-functional_group_model_comparison_gfp_svg_output = (
-    f"{plots_root}/comparisons/core/functional_group_model_comparison_gfp.svg"
-)
-functional_group_model_comparison_all_png_output = (
-    f"{plots_root}/comparisons/core/functional_group_model_comparison_all.png"
-)
-functional_group_model_comparison_all_svg_output = (
-    f"{plots_root}/comparisons/core/functional_group_model_comparison_all.svg"
-)
-functional_group_model_comparison_gfp_high_png_output = (
-    f"{plots_root}/comparisons/core/high/functional_group_model_comparison_gfp_high.png"
-)
-functional_group_model_comparison_gfp_high_svg_output = (
-    f"{plots_root}/comparisons/core/high/functional_group_model_comparison_gfp_high.svg"
-)
-functional_group_model_comparison_all_high_png_output = (
-    f"{plots_root}/comparisons/core/high/functional_group_model_comparison_all_high.png"
-)
-functional_group_model_comparison_all_high_svg_output = (
-    f"{plots_root}/comparisons/core/high/functional_group_model_comparison_all_high.svg"
-)
+select_k_dir = f"{plots_root}/select_k_sweep"
+select_k_metrics = f"{select_k_dir}/select_k_metrics.csv"
+select_k_metrics_agg = f"{select_k_dir}/select_k_metrics_agg.csv"
+select_k_importance = f"{select_k_dir}/select_k_importance.csv"
+select_k_importance_agg = f"{select_k_dir}/select_k_importance_agg.csv"
+select_k_boxplot_dt = f"{select_k_dir}/boxplot_dt_r2.png"
+select_k_boxplot_integ = f"{select_k_dir}/boxplot_integ_r2.png"
+select_k_boxplot_ode = f"{select_k_dir}/boxplot_ode_r2.png"
+select_k_ribbon_coef = f"{select_k_dir}/ribbon_coef_importance.png"
+select_k_ribbon_variance = f"{select_k_dir}/ribbon_variance_importance.png"
 
-functional_group_upset_gfp_png_output = f"{plots_root}/pysr/upset/upset_gfp.png"
-functional_group_upset_gfp_svg_output = f"{plots_root}/pysr/upset/upset_gfp.svg"
-functional_group_upset_all_png_output = f"{plots_root}/pysr/upset/upset_all.png"
-functional_group_upset_all_svg_output = f"{plots_root}/pysr/upset/upset_all.svg"
+# Metrics scatter outputs
+metrics_models_r2 = f"{plots_metrics_scatter_dir}/dt/metrics_models_scatter_r2.png"
+metrics_models_r2_svg = f"{plots_metrics_scatter_dir}/dt/metrics_models_scatter_r2.svg"
+metrics_models_relmae = f"{plots_metrics_scatter_dir}/dt/metrics_models_scatter_relmae.png"
+metrics_models_relmae_svg = f"{plots_metrics_scatter_dir}/dt/metrics_models_scatter_relmae.svg"
+metrics_pysr_modes_r2 = f"{plots_metrics_scatter_dir}/dt/metrics_pysr_modes_r2.png"
+metrics_pysr_modes_r2_svg = f"{plots_metrics_scatter_dir}/dt/metrics_pysr_modes_r2.svg"
+metrics_pysr_modes_relmae = f"{plots_metrics_scatter_dir}/dt/metrics_pysr_modes_relmae.png"
+metrics_pysr_modes_relmae_svg = f"{plots_metrics_scatter_dir}/dt/metrics_pysr_modes_relmae.svg"
+metrics_linreg_modes_r2 = f"{plots_metrics_scatter_dir}/dt/metrics_linreg_modes_r2.png"
+metrics_linreg_modes_r2_svg = f"{plots_metrics_scatter_dir}/dt/metrics_linreg_modes_r2.svg"
+metrics_linreg_modes_relmae = f"{plots_metrics_scatter_dir}/dt/metrics_linreg_modes_relmae.png"
+metrics_linreg_modes_relmae_svg = f"{plots_metrics_scatter_dir}/dt/metrics_linreg_modes_relmae.svg"
+metrics_r2_lineplot = f"{plots_metrics_lines_dir}/metrics_r2_by_marker.png"
+metrics_r2_lineplot_svg = f"{plots_metrics_lines_dir}/metrics_r2_by_marker.svg"
+metrics_integrated_r2_lineplot = f"{plots_metrics_lines_dir}/metrics_integrated_r2_by_marker.png"
+metrics_integrated_r2_lineplot_svg = f"{plots_metrics_lines_dir}/metrics_integrated_r2_by_marker.svg"
+metrics_integrated_ode_r2_lineplot = f"{plots_metrics_lines_dir}/metrics_integrated_ode_r2_by_marker.png"
+metrics_integrated_ode_r2_lineplot_svg = f"{plots_metrics_lines_dir}/metrics_integrated_ode_r2_by_marker.svg"
+metrics_r2_boxplot = f"{plots_metrics_boxes_dir}/metrics_r2_boxplot.png"
+metrics_r2_boxplot_svg = f"{plots_metrics_boxes_dir}/metrics_r2_boxplot.svg"
+metrics_integrated_r2_boxplot = f"{plots_metrics_boxes_dir}/metrics_integrated_r2_boxplot.png"
+metrics_integrated_r2_boxplot_svg = f"{plots_metrics_boxes_dir}/metrics_integrated_r2_boxplot.svg"
+metrics_integrated_ode_r2_boxplot = f"{plots_metrics_boxes_dir}/metrics_integrated_ode_r2_boxplot.png"
+metrics_integrated_ode_r2_boxplot_svg = f"{plots_metrics_boxes_dir}/metrics_integrated_ode_r2_boxplot.svg"
+feature_usage_plots_png = [
+    f"{plots_metrics_features_dir}/feature_usage_pysr_snapshot.png",
+    f"{plots_metrics_features_dir}/feature_usage_pysr_per_minute.png",
+    f"{plots_metrics_features_dir}/feature_usage_linear_regression_snapshot.png",
+    f"{plots_metrics_features_dir}/feature_usage_linear_regression_per_minute.png",
+]
+feature_usage_plots_svg = [
+    f"{plots_metrics_features_dir}/feature_usage_pysr_snapshot.svg",
+    f"{plots_metrics_features_dir}/feature_usage_pysr_per_minute.svg",
+    f"{plots_metrics_features_dir}/feature_usage_linear_regression_snapshot.svg",
+    f"{plots_metrics_features_dir}/feature_usage_linear_regression_per_minute.svg",
+]
+feature_importance_plots_png = [
+    f"{plots_metrics_features_dir}/feature_importance_total_snapshot.png",
+    f"{plots_metrics_features_dir}/feature_importance_stacked_snapshot.png",
+    f"{plots_metrics_features_dir}/feature_importance_coef_stacked_snapshot.png",
+    f"{plots_metrics_features_dir}/feature_importance_box_snapshot.png",
+    f"{plots_metrics_features_dir}/feature_importance_total_per_minute.png",
+    f"{plots_metrics_features_dir}/feature_importance_stacked_per_minute.png",
+    f"{plots_metrics_features_dir}/feature_importance_coef_stacked_per_minute.png",
+    f"{plots_metrics_features_dir}/feature_importance_box_per_minute.png",
+]
+feature_importance_plots_svg = [
+    f"{plots_metrics_features_dir}/feature_importance_total_snapshot.svg",
+    f"{plots_metrics_features_dir}/feature_importance_stacked_snapshot.svg",
+    f"{plots_metrics_features_dir}/feature_importance_coef_stacked_snapshot.svg",
+    f"{plots_metrics_features_dir}/feature_importance_box_snapshot.svg",
+    f"{plots_metrics_features_dir}/feature_importance_total_per_minute.svg",
+    f"{plots_metrics_features_dir}/feature_importance_stacked_per_minute.svg",
+    f"{plots_metrics_features_dir}/feature_importance_coef_stacked_per_minute.svg",
+    f"{plots_metrics_features_dir}/feature_importance_box_per_minute.svg",
+]
 
-fits_dir = f"{plots_root}/pysr/fits"
-fits_done = f"{fits_dir}/.done"
-per_minute_plots_root = f"{exp_sr_per_minute_output_dir}/plots"
-per_minute_fits_dir = f"{per_minute_plots_root}/pysr/fits"
-per_minute_pysr_done = f"{per_minute_plots_root}/pysr/.done"
-per_minute_linreg_done = f"{per_minute_plots_root}/linear_regression/.done"
 fit_sanity_dir = f"{plots_root}/fit_sanity"
 fit_sanity_done = f"{fit_sanity_dir}/.done"
 
 pysr_grid_output_dir = f"{plots_root}/pysr_grid"
 pysr_grid_results_csv = f"{pysr_grid_output_dir}/pysr_hyperparam_grid_results.csv"
-
-pysr_plot_outputs = [
-    functional_group_png_output,
-    functional_group_svg_output,
-    functional_group_relative_png_output,
-    functional_group_relative_svg_output,
-    functional_group_r2_scatter_png_output,
-    functional_group_r2_scatter_svg_output,
-    functional_group_r2_confidence_png_output,
-    functional_group_r2_confidence_svg_output,
-    functional_group_r2_confidence_high_png_output,
-    functional_group_r2_confidence_high_svg_output,
-    functional_group_r2_direction_png_output,
-    functional_group_r2_direction_svg_output,
-    functional_group_model_comparison_gfp_png_output,
-    functional_group_model_comparison_gfp_svg_output,
-    functional_group_model_comparison_all_png_output,
-    functional_group_model_comparison_all_svg_output,
-    functional_group_model_comparison_gfp_high_png_output,
-    functional_group_model_comparison_gfp_high_svg_output,
-    functional_group_model_comparison_all_high_png_output,
-    functional_group_model_comparison_all_high_svg_output,
-    functional_group_upset_gfp_png_output,
-    functional_group_upset_gfp_svg_output,
-    functional_group_upset_all_png_output,
-    functional_group_upset_all_svg_output,
-]
-
-pysr_grid_outputs = [pysr_grid_results_csv]
-
-functional_group_png_output_linear_regression = (
-    f"{plots_root}/linear_regression/metrics/functional_group_log_r2.png"
-)
-functional_group_svg_output_linear_regression = (
-    f"{plots_root}/linear_regression/metrics/functional_group_log_r2.svg"
-)
-functional_group_relative_png_output_linear_regression = (
-    f"{plots_root}/linear_regression/metrics/functional_group_relative_mae.png"
-)
-functional_group_relative_svg_output_linear_regression = (
-    f"{plots_root}/linear_regression/metrics/functional_group_relative_mae.svg"
-)
-functional_group_r2_scatter_png_output_linear_regression = (
-    f"{plots_root}/linear_regression/metrics/functional_group_log_r2_scatter.png"
-)
-functional_group_r2_scatter_svg_output_linear_regression = (
-    f"{plots_root}/linear_regression/metrics/functional_group_log_r2_scatter.svg"
-)
-functional_group_r2_confidence_png_output_linear_regression = (
-    f"{plots_root}/linear_regression/metrics/functional_group_log_r2_confidence.png"
-)
-functional_group_r2_confidence_svg_output_linear_regression = (
-    f"{plots_root}/linear_regression/metrics/functional_group_log_r2_confidence.svg"
-)
-functional_group_r2_confidence_high_png_output_linear_regression = (
-    f"{plots_root}/linear_regression/metrics/functional_group_log_r2_confidence_high.png"
-)
-functional_group_r2_confidence_high_svg_output_linear_regression = (
-    f"{plots_root}/linear_regression/metrics/functional_group_log_r2_confidence_high.svg"
-)
-functional_group_r2_direction_png_output_linear_regression = (
-    f"{plots_root}/linear_regression/metrics/functional_group_log_r2_direction.png"
-)
-functional_group_r2_direction_svg_output_linear_regression = (
-    f"{plots_root}/linear_regression/metrics/functional_group_log_r2_direction.svg"
-)
-
-functional_group_model_comparison_gfp_png_output_linear_regression = (
-    f"{plots_root}/comparisons/linear_regression/functional_group_model_comparison_gfp.png"
-)
-functional_group_model_comparison_gfp_svg_output_linear_regression = (
-    f"{plots_root}/comparisons/linear_regression/functional_group_model_comparison_gfp.svg"
-)
-functional_group_model_comparison_all_png_output_linear_regression = (
-    f"{plots_root}/comparisons/linear_regression/functional_group_model_comparison_all.png"
-)
-functional_group_model_comparison_all_svg_output_linear_regression = (
-    f"{plots_root}/comparisons/linear_regression/functional_group_model_comparison_all.svg"
-)
-functional_group_model_comparison_gfp_high_png_output_linear_regression = (
-    f"{plots_root}/comparisons/linear_regression/high/functional_group_model_comparison_gfp_high.png"
-)
-functional_group_model_comparison_gfp_high_svg_output_linear_regression = (
-    f"{plots_root}/comparisons/linear_regression/high/functional_group_model_comparison_gfp_high.svg"
-)
-functional_group_model_comparison_all_high_png_output_linear_regression = (
-    f"{plots_root}/comparisons/linear_regression/high/functional_group_model_comparison_all_high.png"
-)
-functional_group_model_comparison_all_high_svg_output_linear_regression = (
-    f"{plots_root}/comparisons/linear_regression/high/functional_group_model_comparison_all_high.svg"
-)
-
-functional_group_upset_gfp_png_output_linear_regression = (
-    f"{plots_root}/linear_regression/upset/upset_gfp.png"
-)
-functional_group_upset_gfp_svg_output_linear_regression = (
-    f"{plots_root}/linear_regression/upset/upset_gfp.svg"
-)
-functional_group_upset_all_png_output_linear_regression = (
-    f"{plots_root}/linear_regression/upset/upset_all.png"
-)
-functional_group_upset_all_svg_output_linear_regression = (
-    f"{plots_root}/linear_regression/upset/upset_all.svg"
-)
-
-linreg_plot_outputs = [
-    functional_group_png_output_linear_regression,
-    functional_group_svg_output_linear_regression,
-    functional_group_relative_png_output_linear_regression,
-    functional_group_relative_svg_output_linear_regression,
-    functional_group_r2_scatter_png_output_linear_regression,
-    functional_group_r2_scatter_svg_output_linear_regression,
-    functional_group_r2_confidence_png_output_linear_regression,
-    functional_group_r2_confidence_svg_output_linear_regression,
-    functional_group_r2_confidence_high_png_output_linear_regression,
-    functional_group_r2_confidence_high_svg_output_linear_regression,
-    functional_group_r2_direction_png_output_linear_regression,
-    functional_group_r2_direction_svg_output_linear_regression,
-    functional_group_model_comparison_gfp_png_output_linear_regression,
-    functional_group_model_comparison_gfp_svg_output_linear_regression,
-    functional_group_model_comparison_all_png_output_linear_regression,
-    functional_group_model_comparison_all_svg_output_linear_regression,
-    functional_group_model_comparison_gfp_high_png_output_linear_regression,
-    functional_group_model_comparison_gfp_high_svg_output_linear_regression,
-    functional_group_model_comparison_all_high_png_output_linear_regression,
-    functional_group_model_comparison_all_high_svg_output_linear_regression,
-    functional_group_upset_gfp_png_output_linear_regression,
-    functional_group_upset_gfp_svg_output_linear_regression,
-    functional_group_upset_all_png_output_linear_regression,
-    functional_group_upset_all_svg_output_linear_regression,
-]
-
-pysr_outputs = (pysr_plot_outputs + pysr_grid_outputs) if run_pysr else []
-linreg_outputs = linreg_plot_outputs if run_linreg else []
 
 # Precompute paths for temporary and final formula files
 temp_files = [entry["temp"] for entry in model_details]
@@ -503,20 +386,40 @@ if enzyme_model == "experimental":
         functional_group_fit_snapshot_csv,
         functional_group_per_minute_csv,
         functional_group_summary_output,
-        tradeoff_diagnostics_output,
-        weighting_study_output,
+        overlay_snapshot_plot,
+        overlay_snapshot_plot_svg,
+        overlay_snapshot_metrics,
+        overlay_per_minute_plot,
+        overlay_per_minute_plot_svg,
+        overlay_per_minute_metrics,
+        integration_snapshot_metrics,
+        integration_per_minute_metrics,
+        integration_snapshot_traj,
+        integration_per_minute_traj,
+        select_k_metrics,
+        select_k_metrics_agg,
+        select_k_importance,
+        select_k_importance_agg,
+        select_k_boxplot_dt,
+        select_k_boxplot_integ,
+        select_k_boxplot_ode,
+        select_k_ribbon_coef,
+        select_k_ribbon_variance,
+        metrics_models_r2,
+        metrics_models_r2_svg,
+        metrics_models_relmae,
+        metrics_models_relmae_svg,
+        metrics_pysr_modes_r2,
+        metrics_pysr_modes_r2_svg,
+        metrics_pysr_modes_relmae,
+        metrics_pysr_modes_relmae_svg,
+        metrics_linreg_modes_r2,
+        metrics_linreg_modes_r2_svg,
+        metrics_linreg_modes_relmae,
+        metrics_linreg_modes_relmae_svg,
     ]
 
-    experimental_rule_all_inputs.extend(pysr_outputs)
-    experimental_rule_all_inputs.extend(linreg_outputs)
-
     experimental_rule_all_inputs.extend(functional_group_formula_files)
-    if exp_run_per_minute_sr:
-        experimental_rule_all_inputs.append(functional_group_summary_per_minute)
-        experimental_rule_all_inputs.extend(functional_group_formula_files_per_minute)
-        experimental_rule_all_inputs.append(per_minute_pysr_done)
-        if run_linreg:
-            experimental_rule_all_inputs.append(per_minute_linreg_done)
     experimental_rule_all_inputs.append(fit_sanity_done)
 
     rule all:
@@ -585,427 +488,272 @@ if enzyme_model == "experimental":
 
     rule experimental_functional_group_sr:
         input:
-            dataset=functional_group_fit_snapshot_csv
+            dataset=functional_group_fit_snapshot_csv,
+            per_minute=functional_group_per_minute_csv
         output:
             summary=functional_group_summary_output,
+            seed_summary=functional_group_summary_seed_output,
             formulas=functional_group_formula_files
         conda:
             "envs/pysr.yaml"
         params:
             output_dir=exp_sr_output_dir,
-            feature_modes=exp_feature_modes_args,
-            gfp_columns=exp_gfp_columns_args,
             group_definitions_csv=exp_group_definitions_csv,
-            models=exp_models_args
+            models=exp_models_args,
+            measured=" ".join(str(t) for t in exp_measured_timepoints)
         shell:
             """
             mkdir -p {params.output_dir}
             python src/experimental/sr_pipeline/run_functional_groups.py \
                 --dataset {input.dataset} \
+                --per-minute-dataset {input.per_minute} \
                 --output-dir {params.output_dir} \
-                --feature-modes {params.feature_modes} \
-                --gfp-columns {params.gfp_columns} \
                 --group-definitions-csv {params.group_definitions_csv} \
-                --models {params.models}
+                --models {params.models} \
+                --measured-timepoints {params.measured}
             """
 
-    if exp_run_per_minute_sr:
-        rule experimental_functional_group_sr_per_minute:
-            input:
-                dataset=functional_group_per_minute_csv
-            output:
-                summary=functional_group_summary_per_minute,
-                formulas=functional_group_formula_files_per_minute
-            conda:
-                "envs/pysr.yaml"
-            params:
-                output_dir=exp_sr_per_minute_output_dir,
-                feature_modes=exp_feature_modes_args,
-                gfp_columns=exp_gfp_columns_args,
-                group_definitions_csv=exp_group_definitions_csv,
-                models=exp_models_args,
-                max_time=exp_per_minute_max_time
-            shell:
-                """
-                mkdir -p {params.output_dir}
-                python src/experimental/sr_pipeline/run_functional_groups.py \
-                    --dataset {input.dataset} \
+    rule experimental_select_k_linreg:
+        input:
+            per_minute=functional_group_per_minute_csv
+        output:
+            metrics=select_k_metrics,
+            metrics_agg=select_k_metrics_agg,
+            importance=select_k_importance,
+            importance_agg=select_k_importance_agg,
+            boxplot_dt=select_k_boxplot_dt,
+            boxplot_integ=select_k_boxplot_integ,
+            boxplot_ode=select_k_boxplot_ode,
+            ribbon_coef=select_k_ribbon_coef,
+            ribbon_variance=select_k_ribbon_variance
+        conda:
+            "envs/pysr.yaml"
+        params:
+            out_dir=select_k_dir,
+            measured=" ".join(str(t) for t in exp_measured_timepoints),
+            max_time=exp_per_minute_max_time,
+            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
+            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
+            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
+            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
+            seeds="42 43 44",
+        shell:
+            """
+            mkdir -p {params.out_dir}
+            python src/experimental/sr_pipeline/select_k_linreg_per_minute.py \
+                --dataset {input.per_minute} \
+                --output-dir {params.out_dir} \
+                --per-minute-max-time {params.max_time} \
+                --per-minute-sampling-strategy {params.strategy} \
+                --late-sample-window {params.late_window_start} {params.late_window_end} \
+                --late-sample-points {params.late_points} \
+                --seeds {params.seeds} \
+                --measured-timepoints {params.measured}
+            """
+
+    rule experimental_plots:
+        input:
+            summary_mean=functional_group_summary_output,
+            summary_seed=functional_group_summary_seed_output,
+            snapshot=functional_group_fit_snapshot_csv,
+            per_minute=functional_group_per_minute_csv
+        output:
+            overlay_snapshot=overlay_snapshot_plot,
+            overlay_snapshot_svg=overlay_snapshot_plot_svg,
+            metrics_snapshot=overlay_snapshot_metrics,
+            overlay_per_minute=overlay_per_minute_plot,
+            overlay_per_minute_svg=overlay_per_minute_plot_svg,
+            metrics_per_minute=overlay_per_minute_metrics,
+            overlay_snapshot_linreg=overlay_snapshot_linreg_plot,
+            overlay_snapshot_linreg_svg=overlay_snapshot_linreg_plot_svg,
+            metrics_snapshot_linreg=overlay_snapshot_linreg_metrics,
+            overlay_per_minute_linreg=overlay_per_minute_linreg_plot,
+            overlay_per_minute_linreg_svg=overlay_per_minute_linreg_plot_svg,
+            metrics_per_minute_linreg=overlay_per_minute_linreg_metrics,
+            integration_snapshot=integration_snapshot_metrics,
+            integration_per_minute=integration_per_minute_metrics,
+            integration_snapshot_traj=integration_snapshot_traj,
+            integration_per_minute_traj=integration_per_minute_traj,
+            metrics_models_r2=metrics_models_r2,
+            metrics_models_r2_svg=metrics_models_r2_svg,
+            metrics_models_relmae=metrics_models_relmae,
+            metrics_models_relmae_svg=metrics_models_relmae_svg,
+            metrics_pysr_modes_r2=metrics_pysr_modes_r2,
+            metrics_pysr_modes_r2_svg=metrics_pysr_modes_r2_svg,
+            metrics_pysr_modes_relmae=metrics_pysr_modes_relmae,
+            metrics_pysr_modes_relmae_svg=metrics_pysr_modes_relmae_svg,
+            metrics_linreg_modes_r2=metrics_linreg_modes_r2,
+            metrics_linreg_modes_r2_svg=metrics_linreg_modes_r2_svg,
+            metrics_linreg_modes_relmae=metrics_linreg_modes_relmae,
+            metrics_linreg_modes_relmae_svg=metrics_linreg_modes_relmae_svg,
+            metrics_r2_lineplot=metrics_r2_lineplot,
+            metrics_r2_lineplot_svg=metrics_r2_lineplot_svg,
+            metrics_integrated_r2_lineplot=metrics_integrated_r2_lineplot,
+            metrics_integrated_r2_lineplot_svg=metrics_integrated_r2_lineplot_svg,
+            metrics_integrated_ode_r2_lineplot=metrics_integrated_ode_r2_lineplot,
+            metrics_integrated_ode_r2_lineplot_svg=metrics_integrated_ode_r2_lineplot_svg,
+            metrics_r2_boxplot=metrics_r2_boxplot,
+            metrics_r2_boxplot_svg=metrics_r2_boxplot_svg,
+            metrics_integrated_r2_boxplot=metrics_integrated_r2_boxplot,
+            metrics_integrated_r2_boxplot_svg=metrics_integrated_r2_boxplot_svg,
+            metrics_integrated_ode_r2_boxplot=metrics_integrated_ode_r2_boxplot,
+            metrics_integrated_ode_r2_boxplot_svg=metrics_integrated_ode_r2_boxplot_svg,
+            feature_usage_png=feature_usage_plots_png,
+            feature_usage_svg=feature_usage_plots_svg,
+            feature_importance_png=feature_importance_plots_png,
+            feature_importance_svg=feature_importance_plots_svg
+        conda:
+            "envs/pysr.yaml"
+        params:
+            overlays_dir=plots_overlays_dir,
+            metrics_plots_dir=plots_metrics_dir,
+            measured=" ".join(str(t) for t in exp_measured_timepoints),
+            metrics_dir=f"{exp_sr_output_dir}/reports/metrics",
+        shell:
+            """
+            mkdir -p {params.overlays_dir} {params.metrics_plots_dir} {params.metrics_dir}
+            # Integration metrics (per seed when available, otherwise single summary)
+            reports_root="$(dirname {params.metrics_dir})"
+            seed_summaries=($(ls "$reports_root"/seed_*/summary/functional_group_summary.csv 2>/dev/null || true))
+
+            rm -f {output.integration_snapshot} {output.integration_per_minute} \
+                  {output.integration_snapshot_traj} {output.integration_per_minute_traj}
+
+            if [ "${{#seed_summaries[@]}}" -gt 0 ]; then
+                for summary_path in "${{seed_summaries[@]}}"; do
+                    # Seed id lives one directory above the summary folder (seed_<id>/summary/...)
+                    seed_id="$(basename "$(dirname "$(dirname "$summary_path")")" | sed 's/seed_//')"
+                    python src/experimental/sr_pipeline/compute_marker_integration.py \
+                        --dataset {input.snapshot} \
+                        --summary "$summary_path" \
+                        --dataset-mode snapshot \
+                        --output {output.integration_snapshot}.tmp \
+                        --trajectories-output {output.integration_snapshot_traj}.tmp \
+                        --measured-timepoints {params.measured} \
+                        --seed "$seed_id"
+                    if [ ! -f {output.integration_snapshot} ]; then
+                        mv {output.integration_snapshot}.tmp {output.integration_snapshot}
+                        mv {output.integration_snapshot_traj}.tmp {output.integration_snapshot_traj}
+                    else
+                        tail -n +2 {output.integration_snapshot}.tmp >> {output.integration_snapshot}
+                        tail -n +2 {output.integration_snapshot_traj}.tmp >> {output.integration_snapshot_traj}
+                        rm -f {output.integration_snapshot}.tmp {output.integration_snapshot_traj}.tmp
+                    fi
+
+                    python src/experimental/sr_pipeline/compute_marker_integration.py \
+                        --dataset {input.per_minute} \
+                        --summary "$summary_path" \
+                        --dataset-mode per_minute \
+                        --output {output.integration_per_minute}.tmp \
+                        --trajectories-output {output.integration_per_minute_traj}.tmp \
+                        --measured-timepoints {params.measured} \
+                        --seed "$seed_id"
+                    if [ ! -f {output.integration_per_minute} ]; then
+                        mv {output.integration_per_minute}.tmp {output.integration_per_minute}
+                        mv {output.integration_per_minute_traj}.tmp {output.integration_per_minute_traj}
+                    else
+                        tail -n +2 {output.integration_per_minute}.tmp >> {output.integration_per_minute}
+                        tail -n +2 {output.integration_per_minute_traj}.tmp >> {output.integration_per_minute_traj}
+                        rm -f {output.integration_per_minute}.tmp {output.integration_per_minute_traj}.tmp
+                    fi
+                done
+            else
+                python src/experimental/sr_pipeline/compute_marker_integration.py \
+                    --dataset {input.snapshot} \
+                    --summary {input.summary_seed} \
+                    --dataset-mode snapshot \
+                    --output {output.integration_snapshot} \
+                    --trajectories-output {output.integration_snapshot_traj} \
+                    --measured-timepoints {params.measured}
+                python src/experimental/sr_pipeline/compute_marker_integration.py \
+                    --dataset {input.per_minute} \
+                    --summary {input.summary_seed} \
                     --dataset-mode per_minute \
-                    --per-minute-max-time {params.max_time} \
-                    --disable-balancing \
-                    --output-dir {params.output_dir} \
-                    --feature-modes {params.feature_modes} \
-                    --gfp-columns {params.gfp_columns} \
-                    --group-definitions-csv {params.group_definitions_csv} \
-                    --models {params.models}
-                """
+                    --output {output.integration_per_minute} \
+                    --trajectories-output {output.integration_per_minute_traj} \
+                    --measured-timepoints {params.measured}
+            fi
 
-        rule experimental_functional_group_plots_per_minute:
-            input:
-                summary=functional_group_summary_per_minute
-            output:
-                done=per_minute_pysr_done
-            conda:
-                "envs/pysr.yaml"
-            params:
-                output_dir=per_minute_plots_root,
-                basename="pysr/metrics/functional_group_log_r2",
-                relative_basename="pysr/metrics/functional_group_relative_mae",
-                r2_basename="pysr/metrics/functional_group_log_r2_scatter",
-                r2_confidence_basename="pysr/metrics/functional_group_log_r2_confidence",
-                r2_confidence_high_basename="pysr/metrics/functional_group_log_r2_confidence_high",
-                r2_direction_basename="pysr/metrics/functional_group_log_r2_direction",
-                comparison_gfp_basename="comparisons/core/functional_group_model_comparison_gfp",
-                comparison_all_basename="comparisons/core/functional_group_model_comparison_all",
-                comparison_gfp_high_basename="comparisons/core/high/functional_group_model_comparison_gfp_high",
-                comparison_all_high_basename="comparisons/core/high/functional_group_model_comparison_all_high",
-                upset_gfp_basename="pysr/upset/upset_gfp",
-                upset_all_basename="pysr/upset/upset_all",
-                group_definitions_csv=exp_group_definitions_csv,
-                confidence_threshold=exp_confidence_threshold,
-                dataset=functional_group_per_minute_csv,
-                log10_cutoff=exp_log10_cutoff,
-                fit_grid_columns=exp_fit_grid_columns,
-                fit_output_subdir="pysr/fits"
-            shell:
-                """
-                mkdir -p {params.output_dir} "{params.output_dir}/pysr/fits"
-                python src/experimental/sr_pipeline/summarize_functional_groups.py \
-                    --summary {input.summary} \
-                    --output-dir {params.output_dir} \
-                    --group-definitions-csv {params.group_definitions_csv} \
-                    --basename {params.basename} \
-                    --model "PySR" \
-                    --relative-basename {params.relative_basename} \
-                    --r2-basename {params.r2_basename} \
-                    --r2-confidence-basename {params.r2_confidence_basename} \
-                    --r2-confidence-high-basename {params.r2_confidence_high_basename} \
-                    --confidence-threshold {params.confidence_threshold} \
-                    --r2-direction-basename {params.r2_direction_basename} \
-                    --comparison-gfp-basename {params.comparison_gfp_basename} \
-                    --comparison-all-basename {params.comparison_all_basename} \
-                    --comparison-gfp-high-basename {params.comparison_gfp_high_basename} \
-                    --comparison-all-high-basename {params.comparison_all_high_basename} \
-                    --upset-gfp-basename {params.upset_gfp_basename} \
-                    --upset-all-basename {params.upset_all_basename} \
-                    --variant per_minute \
-                    --dataset {params.dataset} \
-                    --log10-cutoff {params.log10_cutoff} \
-                    --fit-grid-columns {params.fit_grid_columns} \
-                    --fit-output-subdir {params.fit_output_subdir}
+            # Aggregate predicted trajectories across seeds for phase mapping/plots
+            rm -f {params.metrics_dir}/predicted_trajectories_snapshot.csv {params.metrics_dir}/predicted_trajectories_per_minute.csv
+            if [ "${{#seed_summaries[@]}}" -gt 0 ]; then
+                for summary_path in "${{seed_summaries[@]}}"; do
+                    seed_dir="$(dirname "$summary_path")/../metrics"
+                    for mode in snapshot per_minute; do
+                        src_file="$seed_dir/predicted_trajectories_${{mode}}.csv"
+                        dest_file="{params.metrics_dir}/predicted_trajectories_${{mode}}.csv"
+                        if [ -f "$src_file" ]; then
+                            if [ ! -f "$dest_file" ]; then
+                                cp "$src_file" "$dest_file"
+                            else
+                                tail -n +2 "$src_file" >> "$dest_file"
+                            fi
+                        fi
+                    done
+                done
+            fi
 
-                echo ok > "{output.done}.tmp"
-                mv "{output.done}.tmp" "{output.done}"
-                """
+            # Snapshot plots
+            python src/experimental/sr_pipeline/plot_marker_overlays.py \
+                --dataset {input.snapshot} \
+                --summary {input.summary_seed} \
+                --output-dir {params.overlays_dir} \
+                --dataset-mode snapshot \
+                --filter-dataset-mode snapshot \
+                --measured-timepoints {params.measured} \
+                --fig-base marker_overlay_snapshot \
+                --metrics-csv marker_overlay_metrics_snapshot.csv \
+                --metrics-output-dir {params.metrics_dir} \
+                --integration-trajectories {output.integration_snapshot_traj} \
+                --integration-metrics {output.integration_snapshot}
+            python src/experimental/sr_pipeline/plot_marker_overlays.py \
+                --dataset {input.snapshot} \
+                --summary {input.summary_seed} \
+                --output-dir {params.overlays_dir} \
+                --dataset-mode snapshot \
+                --filter-dataset-mode snapshot \
+                --measured-timepoints {params.measured} \
+                --fig-base marker_overlay_linear_regression_snapshot \
+                --metrics-csv marker_overlay_metrics_linear_regression_snapshot.csv \
+                --metrics-output-dir {params.metrics_dir} \
+                --integration-trajectories {output.integration_snapshot_traj} \
+                --integration-metrics {output.integration_snapshot} \
+                --model "Linear Regression"
 
-        if run_linreg:
-            rule experimental_functional_group_plots_per_minute_linreg:
-                input:
-                    summary=functional_group_summary_per_minute
-                output:
-                    done=per_minute_linreg_done
-                conda:
-                    "envs/pysr.yaml"
-                params:
-                    output_dir=per_minute_plots_root,
-                    basename="linear_regression/metrics/functional_group_log_r2",
-                    relative_basename="linear_regression/metrics/functional_group_relative_mae",
-                    r2_basename="linear_regression/metrics/functional_group_log_r2_scatter",
-                    r2_confidence_basename="linear_regression/metrics/functional_group_log_r2_confidence",
-                    r2_confidence_high_basename="linear_regression/metrics/functional_group_log_r2_confidence_high",
-                    r2_direction_basename="linear_regression/metrics/functional_group_log_r2_direction",
-                    comparison_gfp_basename="comparisons/linear_regression/functional_group_model_comparison_gfp",
-                    comparison_all_basename="comparisons/linear_regression/functional_group_model_comparison_all",
-                    comparison_gfp_high_basename="comparisons/linear_regression/high/functional_group_model_comparison_gfp_high",
-                    comparison_all_high_basename="comparisons/linear_regression/high/functional_group_model_comparison_all_high",
-                    upset_gfp_basename="linear_regression/upset/upset_gfp",
-                    upset_all_basename="linear_regression/upset/upset_all",
-                    group_definitions_csv=exp_group_definitions_csv,
-                    confidence_threshold=exp_confidence_threshold
-                shell:
-                    """
-                    mkdir -p {params.output_dir} "{params.output_dir}/linear_regression"
-                    python src/experimental/sr_pipeline/summarize_functional_groups.py \
-                        --summary {input.summary} \
-                        --output-dir {params.output_dir} \
-                        --group-definitions-csv {params.group_definitions_csv} \
-                        --basename {params.basename} \
-                        --model "Linear Regression" \
-                        --relative-basename {params.relative_basename} \
-                        --r2-basename {params.r2_basename} \
-                        --r2-confidence-basename {params.r2_confidence_basename} \
-                        --r2-confidence-high-basename {params.r2_confidence_high_basename} \
-                        --confidence-threshold {params.confidence_threshold} \
-                        --r2-direction-basename {params.r2_direction_basename} \
-                        --comparison-gfp-basename {params.comparison_gfp_basename} \
-                        --comparison-all-basename {params.comparison_all_basename} \
-                        --comparison-gfp-high-basename {params.comparison_gfp_high_basename} \
-                        --comparison-all-high-basename {params.comparison_all_high_basename} \
-                        --upset-gfp-basename {params.upset_gfp_basename} \
-                        --upset-all-basename {params.upset_all_basename} \
-                        --variant per_minute
+            # Per-minute plots
+            python src/experimental/sr_pipeline/plot_marker_overlays.py \
+                --dataset {input.per_minute} \
+                --summary {input.summary_seed} \
+                --output-dir {params.overlays_dir} \
+                --dataset-mode per_minute \
+                --filter-dataset-mode per_minute \
+                --measured-timepoints {params.measured} \
+                --fig-base marker_overlay_per_minute \
+                --metrics-csv marker_overlay_metrics_per_minute.csv \
+                --metrics-output-dir {params.metrics_dir} \
+                --integration-trajectories {output.integration_per_minute_traj} \
+                --integration-metrics {output.integration_per_minute}
+            python src/experimental/sr_pipeline/plot_marker_overlays.py \
+                --dataset {input.per_minute} \
+                --summary {input.summary_seed} \
+                --output-dir {params.overlays_dir} \
+                --dataset-mode per_minute \
+                --filter-dataset-mode per_minute \
+                --measured-timepoints {params.measured} \
+                --fig-base marker_overlay_linear_regression_per_minute \
+                --metrics-csv marker_overlay_metrics_linear_regression_per_minute.csv \
+                --metrics-output-dir {params.metrics_dir} \
+                --integration-trajectories {output.integration_per_minute_traj} \
+                --integration-metrics {output.integration_per_minute} \
+                --model "Linear Regression"
 
-                    echo ok > "{output.done}.tmp"
-                    mv "{output.done}.tmp" "{output.done}"
-                    """
-
-    rule experimental_balancing_tradeoff:
-        input:
-            dataset=functional_group_fit_snapshot_csv,
-            group_defs=exp_group_definitions_csv
-        output:
-            report=tradeoff_diagnostics_output
-        conda:
-            "envs/pysr.yaml"
-        params:
-            log10_cutoff=exp_log10_cutoff,
-            caps=exp_tradeoff_caps_args,
-            groups_flag=f"--groups {exp_tradeoff_groups_args}" if exp_tradeoff_groups_args else "",
-            include_uncapped="--include-uncapped" if exp_tradeoff_include_uncapped else "",
-            run_flag="--run-pysr" if exp_tradeoff_run_pysr else "",
-            pysr_output_root=f"--pysr-output-root {shlex.quote(exp_tradeoff_output_root)}",
-            pysr_feature_modes=f"--pysr-feature-modes {exp_feature_modes_args}" if exp_feature_modes_args else "",
-            pysr_gfp_columns=f"--pysr-gfp-columns {exp_gfp_columns_args}" if exp_gfp_columns_args else "",
-            pysr_models=f"--pysr-models {exp_models_args}" if exp_models_args else "",
-            skip_existing="--skip-existing" if exp_tradeoff_skip_existing else "",
-            uncapped_max=f"--uncapped-max-value {exp_tradeoff_uncapped_max}",
-            seed=f"--seed {exp_tradeoff_seed}",
-            pysr_random_state=f"--pysr-random-state {exp_tradeoff_seed}",
-            min_bin_samples=f"--min-bin-samples {exp_tradeoff_min_bin_samples}",
-            feature_mode_eval=f"--pysr-feature-mode-eval {exp_tradeoff_eval_feature_mode}",
-            model_name_eval=f"--pysr-model-name {exp_tradeoff_eval_model_name}",
-            linreg_flag="--include-linreg" if exp_tradeoff_include_linreg else ""
-        shell:
-            """
-            mkdir -p $(dirname {output.report})
-            python src/experimental/experiments/evaluate_balancing_tradeoff.py \
-                --dataset {input.dataset} \
-                --group-definitions {input.group_defs} \
-                --log10-cutoff {params.log10_cutoff} \
-                --max-samples {params.caps} \
-                {params.groups_flag} \
-                {params.include_uncapped} \
-                {params.seed} \
-                {params.run_flag} \
-                {params.pysr_output_root} \
-                {params.pysr_feature_modes} \
-                {params.pysr_gfp_columns} \
-                {params.pysr_models} \
-                {params.pysr_random_state} \
-                {params.min_bin_samples} \
-                {params.uncapped_max} \
-                {params.feature_mode_eval} \
-                {params.model_name_eval} \
-                {params.skip_existing} \
-                {params.linreg_flag} \
-            --output {output.report}
-        """
-
-    rule experimental_pysr_weighting_study:
-        input:
-            dataset=functional_group_fit_snapshot_csv,
-            group_defs=exp_group_definitions_csv
-        output:
-            report=weighting_study_output
-        conda:
-            "envs/pysr.yaml"
-        params:
-            groups_str=" ".join(weighting_groups),
-            gfp_columns_str=" ".join(exp_gfp_columns),
-            weighting_str=" ".join(weighting_strategies),
-            fit_modes_str=["weighted", "duplicate"],
-            log10_cutoff=exp_log10_cutoff,
-            test_size=weighting_test_size,
-            random_state=weighting_random_state,
-            min_group_size=weighting_min_group_size,
-            max_iterations=weighting_niterations,
-            population_size=weighting_population_size,
-            populations=weighting_populations,
-            max_size=weighting_max_size,
-            parsimony=weighting_parsimony
-        shell:
-            r"""
-            set -euo pipefail
-            mkdir -p "$(dirname {output.report})"
-
-            python src/experimental/experiments/pysr_weighting_study.py \
-            --dataset {input.dataset} \
-            --group-definitions {input.group_defs} \
-            --groups {params.groups_str} \
-            --gfp-columns {params.gfp_columns_str} \
-            --weighting {params.weighting_str} \
-            --fit-modes {params.fit_modes_str} \
-            --log10-cutoff {params.log10_cutoff} \
-            --test-size {params.test_size} \
-            --random-state {params.random_state} \
-            --min-group-size {params.min_group_size} \
-            --max-iterations {params.max_iterations} \
-            --population-size {params.population_size} \
-            --populations {params.populations} \
-            --max-size {params.max_size} \
-            --parsimony {params.parsimony} \
-            --output {output.report}
-            """
-
-    rule experimental_functional_group_plots:
-        input:
-            summary=functional_group_summary_output
-        output:
-            png=functional_group_png_output,
-            svg=functional_group_svg_output,
-            png_relative=functional_group_relative_png_output,
-            svg_relative=functional_group_relative_svg_output,
-            png_r2=functional_group_r2_scatter_png_output,
-            svg_r2=functional_group_r2_scatter_svg_output,
-            png_r2_conf=functional_group_r2_confidence_png_output,
-            svg_r2_conf=functional_group_r2_confidence_svg_output,
-            png_r2_conf_high=functional_group_r2_confidence_high_png_output,
-            svg_r2_conf_high=functional_group_r2_confidence_high_svg_output,
-            png_r2_dir=functional_group_r2_direction_png_output,
-            svg_r2_dir=functional_group_r2_direction_svg_output,
-            png_model_comp_gfp=functional_group_model_comparison_gfp_png_output,
-            svg_model_comp_gfp=functional_group_model_comparison_gfp_svg_output,
-            png_model_comp_all=functional_group_model_comparison_all_png_output,
-            svg_model_comp_all=functional_group_model_comparison_all_svg_output,
-            png_model_comp_gfp_high=functional_group_model_comparison_gfp_high_png_output,
-            svg_model_comp_gfp_high=functional_group_model_comparison_gfp_high_svg_output,
-            png_model_comp_all_high=functional_group_model_comparison_all_high_png_output,
-            svg_model_comp_all_high=functional_group_model_comparison_all_high_svg_output,
-            png_upset_gfp=functional_group_upset_gfp_png_output,
-            svg_upset_gfp=functional_group_upset_gfp_svg_output,
-            png_upset_all=functional_group_upset_all_png_output,
-            svg_upset_all=functional_group_upset_all_svg_output,
-            # NEW: track the fits folder (which contains group__marker.* files) via a sentinel
-            fits_dir=directory(fits_dir),
-            fits_done=fits_done
-        conda:
-            "envs/pysr.yaml"
-        params:
-            output_dir=plots_root,
-            basename=_relative_basename(functional_group_png_output, plots_root),
-            model=exp_model_name_map["pysr"],
-            variant="legacy",
-            relative_basename=_relative_basename(functional_group_relative_png_output, plots_root),
-            r2_basename=_relative_basename(functional_group_r2_scatter_png_output, plots_root),
-            r2_confidence_basename=_relative_basename(functional_group_r2_confidence_png_output, plots_root),
-            r2_confidence_high_basename=_relative_basename(functional_group_r2_confidence_high_png_output, plots_root),
-            confidence_threshold=exp_confidence_threshold,
-            r2_direction_basename=_relative_basename(functional_group_r2_direction_png_output, plots_root),
-            group_definitions_csv=exp_group_definitions_csv,
-            comparison_gfp_basename=_relative_basename(functional_group_model_comparison_gfp_png_output, plots_root),
-            comparison_all_basename=_relative_basename(functional_group_model_comparison_all_png_output, plots_root),
-            comparison_gfp_high_basename=_relative_basename(functional_group_model_comparison_gfp_high_png_output, plots_root),
-            comparison_all_high_basename=_relative_basename(functional_group_model_comparison_all_high_png_output, plots_root),
-            upset_gfp_basename=_relative_basename(functional_group_upset_gfp_png_output, plots_root),
-            upset_all_basename=_relative_basename(functional_group_upset_all_png_output, plots_root),
-            dataset=functional_group_fit_snapshot_csv,
-            log10_cutoff=exp_log10_cutoff,
-            fit_groups_arg=(" --fit-groups " + exp_fit_groups_args) if exp_fit_groups_args else "",
-            fit_grid_columns=exp_fit_grid_columns,
-            fit_output_subdir=exp_fit_output_subdir
-        shell:
-            r"""
-            mkdir -p {params.output_dir} "{output.fits_dir}"
-            python src/experimental/sr_pipeline/summarize_functional_groups.py \
-                --summary {input.summary} \
-                --output-dir {params.output_dir} \
-                --group-definitions-csv {params.group_definitions_csv} \
-                --basename {params.basename} \
-                --model "{params.model}" \
-                --relative-basename {params.relative_basename} \
-                --r2-basename {params.r2_basename} \
-                --r2-confidence-basename {params.r2_confidence_basename} \
-                --r2-confidence-high-basename {params.r2_confidence_high_basename} \
-                --confidence-threshold {params.confidence_threshold} \
-                --r2-direction-basename {params.r2_direction_basename} \
-                --comparison-gfp-basename {params.comparison_gfp_basename} \
-                --comparison-all-basename {params.comparison_all_basename} \
-                --comparison-gfp-high-basename {params.comparison_gfp_high_basename} \
-                --comparison-all-high-basename {params.comparison_all_high_basename} \
-                --upset-gfp-basename {params.upset_gfp_basename} \
-                --upset-all-basename {params.upset_all_basename} \
-                --variant {params.variant} \
-                --dataset {params.dataset} \
-                --log10-cutoff {params.log10_cutoff}{params.fit_groups_arg} \
-                --fit-grid-columns {params.fit_grid_columns} \
-                --fit-output-subdir {params.fit_output_subdir}
-
-            # Mark the fits dir complete (avoids listing every group__marker file)
-            echo ok > "{output.fits_done}.tmp"
-            mv "{output.fits_done}.tmp" "{output.fits_done}"
-            """
-
-    if run_linreg:
-        rule experimental_functional_group_plots_linreg:
-            input:
-                summary=functional_group_summary_output
-            output:
-                png=functional_group_png_output_linear_regression,
-                svg=functional_group_svg_output_linear_regression,
-                png_relative=functional_group_relative_png_output_linear_regression,
-                svg_relative=functional_group_relative_svg_output_linear_regression,
-                png_r2=functional_group_r2_scatter_png_output_linear_regression,
-                svg_r2=functional_group_r2_scatter_svg_output_linear_regression,
-                png_r2_conf=functional_group_r2_confidence_png_output_linear_regression,
-                svg_r2_conf=functional_group_r2_confidence_svg_output_linear_regression,
-                png_r2_conf_high=functional_group_r2_confidence_high_png_output_linear_regression,
-                svg_r2_conf_high=functional_group_r2_confidence_high_svg_output_linear_regression,
-                png_r2_dir=functional_group_r2_direction_png_output_linear_regression,
-                svg_r2_dir=functional_group_r2_direction_svg_output_linear_regression,
-                png_model_comp_gfp=functional_group_model_comparison_gfp_png_output_linear_regression,
-                svg_model_comp_gfp=functional_group_model_comparison_gfp_svg_output_linear_regression,
-                png_model_comp_all=functional_group_model_comparison_all_png_output_linear_regression,
-                svg_model_comp_all=functional_group_model_comparison_all_svg_output_linear_regression,
-                png_model_comp_gfp_high=functional_group_model_comparison_gfp_high_png_output_linear_regression,
-                svg_model_comp_gfp_high=functional_group_model_comparison_gfp_high_svg_output_linear_regression,
-                png_model_comp_all_high=functional_group_model_comparison_all_high_png_output_linear_regression,
-                svg_model_comp_all_high=functional_group_model_comparison_all_high_svg_output_linear_regression,
-                png_upset_gfp=functional_group_upset_gfp_png_output_linear_regression,
-                svg_upset_gfp=functional_group_upset_gfp_svg_output_linear_regression,
-                png_upset_all=functional_group_upset_all_png_output_linear_regression,
-                svg_upset_all=functional_group_upset_all_svg_output_linear_regression
-            conda:
-                "envs/pysr.yaml"
-            params:
-                output_dir=plots_root,
-                basename=_relative_basename(functional_group_png_output_linear_regression, plots_root),
-                model=exp_model_name_map["linreg"],
-                variant="legacy",
-                relative_basename=_relative_basename(functional_group_relative_png_output_linear_regression, plots_root),
-                r2_basename=_relative_basename(functional_group_r2_scatter_png_output_linear_regression, plots_root),
-                r2_confidence_basename=_relative_basename(functional_group_r2_confidence_png_output_linear_regression, plots_root),
-                r2_confidence_high_basename=_relative_basename(functional_group_r2_confidence_high_png_output_linear_regression, plots_root),
-                confidence_threshold=exp_confidence_threshold,
-                r2_direction_basename=_relative_basename(functional_group_r2_direction_png_output_linear_regression, plots_root),
-                group_definitions_csv=exp_group_definitions_csv,
-                upset_gfp_basename=_relative_basename(functional_group_upset_gfp_png_output_linear_regression, plots_root),
-                upset_all_basename=_relative_basename(functional_group_upset_all_png_output_linear_regression, plots_root),
-                comparison_gfp_basename=_relative_basename(functional_group_model_comparison_gfp_png_output_linear_regression, plots_root),
-                comparison_all_basename=_relative_basename(functional_group_model_comparison_all_png_output_linear_regression, plots_root),
-                comparison_gfp_high_basename=_relative_basename(functional_group_model_comparison_gfp_high_png_output_linear_regression, plots_root),
-                comparison_all_high_basename=_relative_basename(functional_group_model_comparison_all_high_png_output_linear_regression, plots_root)
-            shell:
-                """
-                mkdir -p {params.output_dir}
-                python src/experimental/sr_pipeline/summarize_functional_groups.py \
-                    --summary {input.summary} \
-                    --output-dir {params.output_dir} \
-                    --group-definitions-csv {params.group_definitions_csv} \
-                    --basename {params.basename} \
-                    --model "{params.model}" \
-                    --relative-basename {params.relative_basename} \
-                    --r2-basename {params.r2_basename} \
-                    --r2-confidence-basename {params.r2_confidence_basename} \
-                    --r2-confidence-high-basename {params.r2_confidence_high_basename} \
-                    --confidence-threshold {params.confidence_threshold} \
-                    --r2-direction-basename {params.r2_direction_basename} \
-                --comparison-gfp-basename {params.comparison_gfp_basename} \
-                --comparison-all-basename {params.comparison_all_basename} \
-                --comparison-gfp-high-basename {params.comparison_gfp_high_basename} \
-                --comparison-all-high-basename {params.comparison_all_high_basename} \
-                --upset-gfp-basename {params.upset_gfp_basename} \
-                --upset-all-basename {params.upset_all_basename} \
-                --variant {params.variant}
+            # Metrics scatter/KDE (all rows, both models)
+            python src/experimental/sr_pipeline/plot_metrics_summary.py \
+                --summary {input.summary_mean} \
+                --output-dir {params.metrics_plots_dir} \
+                --integration-metrics-dir {params.metrics_dir} \
+                --snapshot-dataset {input.snapshot} \
+                --per-minute-dataset {input.per_minute}
             """
 
     if run_pysr:
@@ -1028,8 +776,7 @@ if enzyme_model == "experimental":
                 upper_scale=pysr_grid_upper_scale,
                 min_bin=pysr_grid_min_bin_samples,
                 max_bin=pysr_grid_max_bin_samples,
-                log10_cutoff=exp_log10_cutoff,
-                gfp_columns=exp_gfp_columns_args
+                log10_cutoff=exp_log10_cutoff
             shell:
                 """
                 mkdir -p {params.output_dir}
@@ -1046,9 +793,8 @@ if enzyme_model == "experimental":
                     --upper-scale {params.upper_scale} \
                     --min-bin-samples {params.min_bin} \
                     --max-bin-samples {params.max_bin} \
-                    --log10-cutoff {params.log10_cutoff} \
-                    --gfp-columns {params.gfp_columns}
-                """
+                    --log10-cutoff {params.log10_cutoff}
+            """
 
 else:
 
