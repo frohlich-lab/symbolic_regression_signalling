@@ -551,12 +551,123 @@ if enzyme_model == "experimental":
                 --measured-timepoints {params.measured}
             """
 
-    rule experimental_plots:
+    rule experimental_marker_integration:
         input:
             summary_mean=functional_group_summary_output,
             summary_seed=functional_group_summary_seed_output,
             snapshot=functional_group_fit_snapshot_csv,
             per_minute=functional_group_per_minute_csv
+        output:
+            integration_snapshot=integration_snapshot_metrics,
+            integration_per_minute=integration_per_minute_metrics,
+            integration_snapshot_traj=integration_snapshot_traj,
+            integration_per_minute_traj=integration_per_minute_traj,
+            predicted_snapshot=f"{exp_sr_output_dir}/reports/metrics/predicted_trajectories_snapshot.csv",
+            predicted_per_minute=f"{exp_sr_output_dir}/reports/metrics/predicted_trajectories_per_minute.csv"
+        conda:
+            "envs/pysr.yaml"
+        params:
+            metrics_dir=f"{exp_sr_output_dir}/reports/metrics",
+            measured=" ".join(str(t) for t in exp_measured_timepoints),
+        shell:
+            """
+            mkdir -p {params.metrics_dir}
+            reports_root="$(dirname {params.metrics_dir})"
+            seed_summaries=($(ls "$reports_root"/seed_*/summary/functional_group_summary.csv 2>/dev/null || true))
+
+            rm -f {output.integration_snapshot} {output.integration_per_minute} \
+                  {output.integration_snapshot_traj} {output.integration_per_minute_traj}
+
+            if [ "${#seed_summaries[@]}" -gt 0 ]; then
+                for summary_path in "${seed_summaries[@]}"; do
+                    seed_id="$(basename "$(dirname "$(dirname "$summary_path")")" | sed 's/seed_//')"
+                    python src/experimental/sr_pipeline/compute_marker_integration.py \
+                        --dataset {input.snapshot} \
+                        --summary "$summary_path" \
+                        --sr-trajectories "$reports_root/seed_${seed_id}/metrics/predicted_trajectories_snapshot.csv" \
+                        --dataset-mode snapshot \
+                        --output {output.integration_snapshot}.tmp \
+                        --trajectories-output {output.integration_snapshot_traj}.tmp \
+                        --aggregate-output {output.integration_snapshot}.agg_all.csv \
+                        --measured-timepoints {params.measured} \
+                        --seed "$seed_id"
+                    if [ ! -f {output.integration_snapshot} ]; then
+                        mv {output.integration_snapshot}.tmp {output.integration_snapshot}
+                        mv {output.integration_snapshot_traj}.tmp {output.integration_snapshot_traj}
+                    else
+                        tail -n +2 {output.integration_snapshot}.tmp >> {output.integration_snapshot}
+                        tail -n +2 {output.integration_snapshot_traj}.tmp >> {output.integration_snapshot_traj}
+                        rm -f {output.integration_snapshot}.tmp {output.integration_snapshot_traj}.tmp
+                    fi
+
+                    python src/experimental/sr_pipeline/compute_marker_integration.py \
+                        --dataset {input.per_minute} \
+                        --summary "$summary_path" \
+                        --sr-trajectories "$reports_root/seed_${seed_id}/metrics/predicted_trajectories_per_minute.csv" \
+                        --dataset-mode per_minute \
+                        --output {output.integration_per_minute}.tmp \
+                        --trajectories-output {output.integration_per_minute_traj}.tmp \
+                        --aggregate-output {output.integration_per_minute}.agg_all.csv \
+                        --measured-timepoints {params.measured} \
+                        --seed "$seed_id"
+                    if [ ! -f {output.integration_per_minute} ]; then
+                        mv {output.integration_per_minute}.tmp {output.integration_per_minute}
+                        mv {output.integration_per_minute_traj}.tmp {output.integration_per_minute_traj}
+                    else
+                        tail -n +2 {output.integration_per_minute}.tmp >> {output.integration_per_minute}
+                        tail -n +2 {output.integration_per_minute_traj}.tmp >> {output.integration_per_minute_traj}
+                        rm -f {output.integration_per_minute}.tmp {output.integration_per_minute_traj}.tmp
+                    fi
+                done
+            else
+                python src/experimental/sr_pipeline/compute_marker_integration.py \
+                    --dataset {input.snapshot} \
+                    --summary {input.summary_seed} \
+                    --sr-trajectories {output.predicted_snapshot} \
+                    --dataset-mode snapshot \
+                    --output {output.integration_snapshot} \
+                    --trajectories-output {output.integration_snapshot_traj} \
+                    --measured-timepoints {params.measured}
+                python src/experimental/sr_pipeline/compute_marker_integration.py \
+                    --dataset {input.per_minute} \
+                    --summary {input.summary_seed} \
+                    --sr-trajectories {output.predicted_per_minute} \
+                    --dataset-mode per_minute \
+                    --output {output.integration_per_minute} \
+                    --trajectories-output {output.integration_per_minute_traj} \
+                    --measured-timepoints {params.measured}
+            fi
+
+            # Aggregate predicted trajectories across seeds for phase mapping/plots
+            rm -f {output.predicted_snapshot} {output.predicted_per_minute}
+            if [ "${#seed_summaries[@]}" -gt 0 ]; then
+                for summary_path in "${seed_summaries[@]}"; do
+                    seed_dir="$(dirname "$summary_path")/../metrics"
+                    for mode in snapshot per_minute; do
+                        src_file="$seed_dir/predicted_trajectories_${mode}.csv"
+                        dest_file="{params.metrics_dir}/predicted_trajectories_${mode}.csv"
+                        if [ -f "$src_file" ]; then
+                            if [ ! -f "$dest_file" ]; then
+                                cp "$src_file" "$dest_file"
+                            else
+                                tail -n +2 "$src_file" >> "$dest_file"
+                            fi
+                        fi
+                    done
+                done
+            fi
+            """
+
+    rule experimental_plots:
+        input:
+            summary_mean=functional_group_summary_output,
+            summary_seed=functional_group_summary_seed_output,
+            snapshot=functional_group_fit_snapshot_csv,
+            per_minute=functional_group_per_minute_csv,
+            integration_snapshot=integration_snapshot_metrics,
+            integration_per_minute=integration_per_minute_metrics,
+            integration_snapshot_traj=integration_snapshot_traj,
+            integration_per_minute_traj=integration_per_minute_traj
         output:
             overlay_snapshot=overlay_snapshot_plot,
             overlay_snapshot_svg=overlay_snapshot_plot_svg,
@@ -570,10 +681,6 @@ if enzyme_model == "experimental":
             overlay_per_minute_linreg=overlay_per_minute_linreg_plot,
             overlay_per_minute_linreg_svg=overlay_per_minute_linreg_plot_svg,
             metrics_per_minute_linreg=overlay_per_minute_linreg_metrics,
-            integration_snapshot=integration_snapshot_metrics,
-            integration_per_minute=integration_per_minute_metrics,
-            integration_snapshot_traj=integration_snapshot_traj,
-            integration_per_minute_traj=integration_per_minute_traj,
             metrics_models_r2=metrics_models_r2,
             metrics_models_r2_svg=metrics_models_r2_svg,
             metrics_models_relmae=metrics_models_relmae,
@@ -612,91 +719,12 @@ if enzyme_model == "experimental":
         shell:
             """
             mkdir -p {params.overlays_dir} {params.metrics_plots_dir} {params.metrics_dir}
-            # Integration metrics (per seed when available, otherwise single summary)
-            reports_root="$(dirname {params.metrics_dir})"
-            seed_summaries=($(ls "$reports_root"/seed_*/summary/functional_group_summary.csv 2>/dev/null || true))
-
-            rm -f {output.integration_snapshot} {output.integration_per_minute} \
-                  {output.integration_snapshot_traj} {output.integration_per_minute_traj}
-
-            if [ "${{#seed_summaries[@]}}" -gt 0 ]; then
-                for summary_path in "${{seed_summaries[@]}}"; do
-                    # Seed id lives one directory above the summary folder (seed_<id>/summary/...)
-                    seed_id="$(basename "$(dirname "$(dirname "$summary_path")")" | sed 's/seed_//')"
-                    python src/experimental/sr_pipeline/compute_marker_integration.py \
-                        --dataset {input.snapshot} \
-                        --summary "$summary_path" \
-                        --dataset-mode snapshot \
-                        --output {output.integration_snapshot}.tmp \
-                        --trajectories-output {output.integration_snapshot_traj}.tmp \
-                        --measured-timepoints {params.measured} \
-                        --seed "$seed_id"
-                    if [ ! -f {output.integration_snapshot} ]; then
-                        mv {output.integration_snapshot}.tmp {output.integration_snapshot}
-                        mv {output.integration_snapshot_traj}.tmp {output.integration_snapshot_traj}
-                    else
-                        tail -n +2 {output.integration_snapshot}.tmp >> {output.integration_snapshot}
-                        tail -n +2 {output.integration_snapshot_traj}.tmp >> {output.integration_snapshot_traj}
-                        rm -f {output.integration_snapshot}.tmp {output.integration_snapshot_traj}.tmp
-                    fi
-
-                    python src/experimental/sr_pipeline/compute_marker_integration.py \
-                        --dataset {input.per_minute} \
-                        --summary "$summary_path" \
-                        --dataset-mode per_minute \
-                        --output {output.integration_per_minute}.tmp \
-                        --trajectories-output {output.integration_per_minute_traj}.tmp \
-                        --measured-timepoints {params.measured} \
-                        --seed "$seed_id"
-                    if [ ! -f {output.integration_per_minute} ]; then
-                        mv {output.integration_per_minute}.tmp {output.integration_per_minute}
-                        mv {output.integration_per_minute_traj}.tmp {output.integration_per_minute_traj}
-                    else
-                        tail -n +2 {output.integration_per_minute}.tmp >> {output.integration_per_minute}
-                        tail -n +2 {output.integration_per_minute_traj}.tmp >> {output.integration_per_minute_traj}
-                        rm -f {output.integration_per_minute}.tmp {output.integration_per_minute_traj}.tmp
-                    fi
-                done
-            else
-                python src/experimental/sr_pipeline/compute_marker_integration.py \
-                    --dataset {input.snapshot} \
-                    --summary {input.summary_seed} \
-                    --dataset-mode snapshot \
-                    --output {output.integration_snapshot} \
-                    --trajectories-output {output.integration_snapshot_traj} \
-                    --measured-timepoints {params.measured}
-                python src/experimental/sr_pipeline/compute_marker_integration.py \
-                    --dataset {input.per_minute} \
-                    --summary {input.summary_seed} \
-                    --dataset-mode per_minute \
-                    --output {output.integration_per_minute} \
-                    --trajectories-output {output.integration_per_minute_traj} \
-                    --measured-timepoints {params.measured}
-            fi
-
-            # Aggregate predicted trajectories across seeds for phase mapping/plots
-            rm -f {params.metrics_dir}/predicted_trajectories_snapshot.csv {params.metrics_dir}/predicted_trajectories_per_minute.csv
-            if [ "${{#seed_summaries[@]}}" -gt 0 ]; then
-                for summary_path in "${{seed_summaries[@]}}"; do
-                    seed_dir="$(dirname "$summary_path")/../metrics"
-                    for mode in snapshot per_minute; do
-                        src_file="$seed_dir/predicted_trajectories_${{mode}}.csv"
-                        dest_file="{params.metrics_dir}/predicted_trajectories_${{mode}}.csv"
-                        if [ -f "$src_file" ]; then
-                            if [ ! -f "$dest_file" ]; then
-                                cp "$src_file" "$dest_file"
-                            else
-                                tail -n +2 "$src_file" >> "$dest_file"
-                            fi
-                        fi
-                    done
-                done
-            fi
 
             # Snapshot plots
             python src/experimental/sr_pipeline/plot_marker_overlays.py \
                 --dataset {input.snapshot} \
                 --summary {input.summary_seed} \
+                --summary-seed {input.summary_seed} \
                 --output-dir {params.overlays_dir} \
                 --dataset-mode snapshot \
                 --filter-dataset-mode snapshot \
@@ -704,11 +732,12 @@ if enzyme_model == "experimental":
                 --fig-base marker_overlay_snapshot \
                 --metrics-csv marker_overlay_metrics_snapshot.csv \
                 --metrics-output-dir {params.metrics_dir} \
-                --integration-trajectories {output.integration_snapshot_traj} \
-                --integration-metrics {output.integration_snapshot}
+                --integration-trajectories {input.integration_snapshot_traj} \
+                --integration-metrics {input.integration_snapshot}
             python src/experimental/sr_pipeline/plot_marker_overlays.py \
                 --dataset {input.snapshot} \
                 --summary {input.summary_seed} \
+                --summary-seed {input.summary_seed} \
                 --output-dir {params.overlays_dir} \
                 --dataset-mode snapshot \
                 --filter-dataset-mode snapshot \
@@ -716,14 +745,15 @@ if enzyme_model == "experimental":
                 --fig-base marker_overlay_linear_regression_snapshot \
                 --metrics-csv marker_overlay_metrics_linear_regression_snapshot.csv \
                 --metrics-output-dir {params.metrics_dir} \
-                --integration-trajectories {output.integration_snapshot_traj} \
-                --integration-metrics {output.integration_snapshot} \
+                --integration-trajectories {input.integration_snapshot_traj} \
+                --integration-metrics {input.integration_snapshot} \
                 --model "Linear Regression"
 
             # Per-minute plots
             python src/experimental/sr_pipeline/plot_marker_overlays.py \
                 --dataset {input.per_minute} \
                 --summary {input.summary_seed} \
+                --summary-seed {input.summary_seed} \
                 --output-dir {params.overlays_dir} \
                 --dataset-mode per_minute \
                 --filter-dataset-mode per_minute \
@@ -731,11 +761,12 @@ if enzyme_model == "experimental":
                 --fig-base marker_overlay_per_minute \
                 --metrics-csv marker_overlay_metrics_per_minute.csv \
                 --metrics-output-dir {params.metrics_dir} \
-                --integration-trajectories {output.integration_per_minute_traj} \
-                --integration-metrics {output.integration_per_minute}
+                --integration-trajectories {input.integration_per_minute_traj} \
+                --integration-metrics {input.integration_per_minute}
             python src/experimental/sr_pipeline/plot_marker_overlays.py \
                 --dataset {input.per_minute} \
                 --summary {input.summary_seed} \
+                --summary-seed {input.summary_seed} \
                 --output-dir {params.overlays_dir} \
                 --dataset-mode per_minute \
                 --filter-dataset-mode per_minute \
@@ -743,8 +774,8 @@ if enzyme_model == "experimental":
                 --fig-base marker_overlay_linear_regression_per_minute \
                 --metrics-csv marker_overlay_metrics_linear_regression_per_minute.csv \
                 --metrics-output-dir {params.metrics_dir} \
-                --integration-trajectories {output.integration_per_minute_traj} \
-                --integration-metrics {output.integration_per_minute} \
+                --integration-trajectories {input.integration_per_minute_traj} \
+                --integration-metrics {input.integration_per_minute} \
                 --model "Linear Regression"
 
             # Metrics scatter/KDE (all rows, both models)
@@ -756,7 +787,7 @@ if enzyme_model == "experimental":
                 --per-minute-dataset {input.per_minute}
             """
 
-    if run_pysr:
+if run_pysr:
         rule experimental_functional_group_pysr_grid:
             input:
                 summary=functional_group_summary_output,

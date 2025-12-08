@@ -14,13 +14,16 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 import sys
+import os
+import random
 from typing import Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 
-import numpy as np
-import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+import numpy as np
+import pandas as pd
 
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
@@ -28,7 +31,25 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from utils.seeding import seed_everything
+from experimental.sr_pipeline.metrics import binwise_r2
+
+# Keep experimental pipeline self contained; avoid cross-importing shared utils.
+def seed_everything(seed: int) -> int:
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        import torch  # optional dependency
+
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        if hasattr(torch.backends, "cudnn"):
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+    except Exception:
+        pass
+    return seed
 
 # Columns that should not be passed to the regression model as inputs.
 EXCLUDE_COLUMNS = {"p-ERK1-2_dt", "p-MEK1-2_dt", "marker", "timepoint", "GFP_bin"}
@@ -334,38 +355,6 @@ def _compute_regression_metrics(
     }
 
 
-def _binwise_r2(
-    frame: pd.DataFrame,
-    target_col: str,
-    pred_col: str,
-    measured_timepoints: Sequence[float],
-    dataset_mode: str,
-) -> Optional[float]:
-    """Compute mean R2 across GFP_bin trajectories (per-bin R2, then average)."""
-    if "GFP_bin" not in frame.columns:
-        return None
-    r2_vals: List[float] = []
-    for _, g in frame.groupby("GFP_bin"):
-        y_true = pd.to_numeric(g[target_col], errors="coerce").to_numpy()
-        y_pred = pd.to_numeric(g[pred_col], errors="coerce").to_numpy()
-        mask = np.isfinite(y_true) & np.isfinite(y_pred)
-        if dataset_mode == "per_minute" and "timepoint" in g.columns:
-            measured_mask = np.isin(g["timepoint"].to_numpy(), measured_timepoints)
-            mask &= measured_mask
-        if mask.sum() < 2:
-            continue
-        y_true_f = y_true[mask]
-        y_pred_f = y_pred[mask]
-        if len(np.unique(y_pred_f)) <= 1:
-            continue
-        den = np.sum((y_true_f - np.mean(y_true_f)) ** 2)
-        if den <= 0:
-            continue
-        # Clamp negatives to zero to avoid penalizing below-baseline fits when averaging
-        r2_vals.append(max(0.0, 1.0 - np.sum((y_true_f - y_pred_f) ** 2) / den))
-    return float(np.mean(r2_vals)) if r2_vals else None
-
-
 def _format_linear_formula(
     pipeline: Pipeline,
     feature_names: Sequence[str],
@@ -589,19 +578,21 @@ def train_group_models(
                 )
                 train_df["__y_pred__"] = y_pred_train
                 test_df_raw["__y_pred__"] = y_pred_test_raw
-                metrics_raw["train_r2"] = _binwise_r2(
+                metrics_raw["train_r2"] = binwise_r2(
                     train_df,
                     "p-ERK1-2_dt",
                     "__y_pred__",
                     measured_timepoints,
                     dataset_mode,
+                    clamp_negative=True,
                 )
-                metrics_raw["test_r2"] = _binwise_r2(
+                metrics_raw["test_r2"] = binwise_r2(
                     test_df_raw,
                     "p-ERK1-2_dt",
                     "__y_pred__",
                     measured_timepoints,
                     dataset_mode,
+                    clamp_negative=True,
                 )
             else:
                 metrics_raw = _compute_regression_metrics(
@@ -663,19 +654,21 @@ def train_group_models(
                 )
                 train_df["__y_pred__"] = y_pred_train
                 test_df_raw["__y_pred__"] = y_pred_lin
-                metrics_lin_raw["train_r2"] = _binwise_r2(
+                metrics_lin_raw["train_r2"] = binwise_r2(
                     train_df,
                     "p-ERK1-2_dt",
                     "__y_pred__",
                     measured_timepoints,
                     dataset_mode,
+                    clamp_negative=True,
                 )
-                metrics_lin_raw["test_r2"] = _binwise_r2(
+                metrics_lin_raw["test_r2"] = binwise_r2(
                     test_df_raw,
                     "p-ERK1-2_dt",
                     "__y_pred__",
                     measured_timepoints,
                     dataset_mode,
+                    clamp_negative=True,
                 )
             else:
                 metrics_lin_raw = _compute_regression_metrics(
@@ -844,6 +837,50 @@ def run_pipeline(args: argparse.Namespace) -> Path:
 
         sr_kwargs: Optional[Dict[str, object]] = None
         if run_pysr:
+            loss_required_pERK = r"""
+            import SymbolicRegression: Dataset, eval_tree_array
+
+            # REQUIRED FEATURE INDEX (1-based)
+            const REQUIRED_IDX = 2   # p_ERK1_2 is x1 → index 2 in Julia
+
+            function loss_with_required_pERK(tree, dataset::Dataset{T,L}, options)::L where {T,L}
+                prediction, complete = eval_tree_array(tree, dataset.X, options)
+                if !complete
+                    return L(Inf)
+                end
+
+                base = sum((prediction .- dataset.y).^2) / dataset.n
+
+                # true if expression uses REQUIRED_IDX as a feature
+                has_required = any(n ->
+                    n.degree == 0 && !n.constant && n.feature == REQUIRED_IDX,
+                    tree,
+                )
+
+                return has_required ? base : base + L(1000)
+            end
+
+            # Same but for mini-batches
+            function loss_with_required_pERK(tree, dataset::Dataset{T,L}, options, idx)::L where {T,L}
+                X = idx === nothing ? dataset.X : dataset.X[:, idx]
+                y = idx === nothing ? dataset.y : view(dataset.y, idx)
+
+                prediction, complete = eval_tree_array(tree, X, options)
+                if !complete
+                    return L(Inf)
+                end
+
+                base = sum((prediction .- y).^2) / length(y)
+
+                has_required = any(n ->
+                    n.degree == 0 && !n.constant && n.feature == REQUIRED_IDX,
+                    tree,
+                )
+
+                return has_required ? base : base + L(1000)
+            end
+            """
+
             sr_kwargs = {
                 "niterations": args.max_iterations,
                 "population_size": args.population_size,
@@ -855,6 +892,11 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 "batching": args.batching,
                 "annealing": args.annealing,
                 "verbosity": args.verbosity,
+
+                # 👇 New bits
+                "loss_function": """println(">>> Custom loss LOADED")""" + loss_required_pERK,
+                # optional but a bit safer / clearer for custom loss:
+                "loss_scale": "log",
             }
 
         total_modes = len(args.feature_modes)
@@ -901,6 +943,7 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                     continue
 
                 # Structured block per marker
+                # Structured block per marker
                 block_lines: List[str] = []
                 prefix = f"[seed={RUN_SEED}] " if RUN_SEED is not None else ""
                 block_lines.append(f"{prefix}[{run_mode}/{feature_mode}] Marker={group_name}")
@@ -911,10 +954,14 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                     block_lines.append(f"    Train samples: {result.train_samples}")
                     block_lines.append(f"    Test samples : {result.test_samples}")
                     block_lines.append(
-                        f"    Train R2     : {result.train_r2:.4f}" if result.train_r2 is not None else "    Train R2     : N/A"
+                        f"    Train R2     : {result.train_r2:.4f}"
+                        if result.train_r2 is not None
+                        else "    Train R2     : N/A"
                     )
                     block_lines.append(
-                        f"    Test R2      : {result.test_r2:.4f}" if result.test_r2 is not None else "    Test R2      : N/A"
+                        f"    Test R2      : {result.test_r2:.4f}"
+                        if result.test_r2 is not None
+                        else "    Test R2      : N/A"
                     )
                     block_lines.append(
                         f"    Train relMAE : {result.train_relative_mae:.4f}"
@@ -925,6 +972,10 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                         f"    Test relMAE  : {result.test_relative_mae:.4f}"
                         if result.test_relative_mae is not None
                         else "    Test relMAE  : N/A"
+                    )
+                    # 👇 New line: print the formula in the log
+                    block_lines.append(
+                        f"    Formula      : {result.formula}" if result.formula is not None else "    Formula      : N/A"
                     )
                 LOGGER.info("\n".join(block_lines))
 

@@ -22,6 +22,10 @@ from pathlib import Path
 import sys
 from typing import Dict, List, Optional, Sequence, Tuple
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -32,9 +36,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+from experimental.sr_pipeline.metrics import binwise_r2
 
 from experimental.sr_pipeline.compute_marker_integration import (
     NoClipStateTransform,
@@ -283,34 +285,6 @@ def main() -> None:
             return np.nan
         return float(max(0.0, val))
 
-    def _binwise_r2(
-        frame: pd.DataFrame,
-        target_col: str,
-        pred_col: str,
-        measured_timepoints: Sequence[float],
-        dataset_mode: str,
-    ) -> float:
-        """Compute mean R2 across GFP_bin trajectories (per-bin R2, then average)."""
-        r2_vals: List[float] = []
-        for _, g in frame.groupby("GFP_bin"):
-            y_true = pd.to_numeric(g[target_col], errors="coerce").to_numpy()
-            y_pred = pd.to_numeric(g[pred_col], errors="coerce").to_numpy()
-            mask = np.isfinite(y_true) & np.isfinite(y_pred)
-            if dataset_mode == "per_minute":
-                measured_mask = np.isin(g["timepoint"].to_numpy(), measured_timepoints)
-                mask &= measured_mask
-            if mask.sum() < 2:
-                continue
-            y_true_f = y_true[mask]
-            y_pred_f = y_pred[mask]
-            if len(np.unique(y_pred_f)) <= 1:
-                continue
-            den = np.sum((y_true_f - np.mean(y_true_f)) ** 2)
-            if den <= 0:
-                continue
-            r2_vals.append(1.0 - np.sum((y_true_f - y_pred_f) ** 2) / den)
-        return float(np.mean(r2_vals)) if r2_vals else np.nan
-
     step_counter = 0
     for seed in seeds:
         sampled = apply_per_minute_sampling(
@@ -371,21 +345,23 @@ def main() -> None:
                 test_with_pred["__y_pred__"] = preds_test
 
                 dt_r2_train = _clamp_r2(
-                    _binwise_r2(
+                    binwise_r2(
                         train_with_pred,
                         target_col=target_col,
                         pred_col="__y_pred__",
                         measured_timepoints=args.measured_timepoints,
                         dataset_mode="per_minute",
+                        clamp_negative=True,
                     )
                 )
                 dt_r2_test = _clamp_r2(
-                    _binwise_r2(
+                    binwise_r2(
                         test_with_pred,
                         target_col=target_col,
                         pred_col="__y_pred__",
                         measured_timepoints=args.measured_timepoints,
                         dataset_mode="per_minute",
+                        clamp_negative=True,
                     )
                 )
 

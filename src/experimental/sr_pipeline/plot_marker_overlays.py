@@ -32,6 +32,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Create overlay/integration plots per marker from SR summary.")
     parser.add_argument("--dataset", type=Path, required=True, help="CSV used for SR (snapshot or per-minute).")
     parser.add_argument("--summary", type=Path, required=True, help="functional_group_summary.csv from SR run.")
+    parser.add_argument(
+        "--summary-seed",
+        type=Path,
+        default=None,
+        help="Optional functional_group_summary_seed.csv (per-seed) if you want overlays per seed.",
+    )
     parser.add_argument("--output-dir", type=Path, required=True, help="Directory to write plots/metrics.")
     parser.add_argument(
         "--predicted-trajectories",
@@ -74,13 +80,13 @@ def parse_args() -> argparse.Namespace:
         "--integration-trajectories",
         type=Path,
         default=None,
-        help="Optional precomputed integration trajectories CSV (from compute_marker_integration.py).",
+        help="Optional precomputed integration trajectories CSV (prefer *_agg_mean if available).",
     )
     parser.add_argument(
         "--integration-metrics",
         type=Path,
         default=None,
-        help="Optional precomputed integration metrics CSV (from compute_marker_integration.py).",
+        help="Optional precomputed integration metrics CSV (prefer *_agg_mean if available).",
     )
     parser.add_argument(
         "--markers-per-fig",
@@ -125,6 +131,7 @@ def evaluate_formula(formula: str, features: pd.DataFrame) -> np.ndarray:
 def make_overlay_plots(
     dataset: pd.DataFrame,
     summary: pd.DataFrame,
+    summary_seed: Optional[pd.DataFrame],
     args: argparse.Namespace,
 ) -> None:
     base_output_dir = Path(args.output_dir)
@@ -135,6 +142,10 @@ def make_overlay_plots(
         summary = summary[summary["dataset_mode"] == args.filter_dataset_mode].copy()
     if summary.empty:
         raise ValueError(f"No rows for model {args.model} in summary.")
+    if summary_seed is not None:
+        summary_seed = summary_seed[summary_seed["model"] == args.model].copy()
+        if args.filter_dataset_mode and "dataset_mode" in summary_seed.columns:
+            summary_seed = summary_seed[summary_seed["dataset_mode"] == args.filter_dataset_mode].copy()
 
     markers = sorted(summary["group_name"].unique().tolist())
     if not markers:
@@ -157,34 +168,78 @@ def make_overlay_plots(
     target_col = sanitize_feature_names(["p-ERK1-2_dt"])[0]
     dataset[target_col] = pd.to_numeric(dataset["p-ERK1-2_dt"], errors="coerce")
 
-    # Optional predicted trajectories (avoids re-evaluating formulas)
+    # Optional predicted trajectories (plots should use a single seed; prefer base file)
     pred_df_all = None
     if args.predicted_trajectories:
-        pred_df_all = pd.read_csv(args.predicted_trajectories)
-        if "model" in pred_df_all.columns:
-            pred_df_all = pred_df_all[pred_df_all["model"] == args.model]
-        if "dataset_mode" in pred_df_all.columns:
-            pred_df_all = pred_df_all[pred_df_all["dataset_mode"] == args.dataset_mode]
-        if pred_df_all.empty:
-            pred_df_all = None
+        pred_path = Path(args.predicted_trajectories)
+        if pred_path.exists():
+            pred_df_all = pd.read_csv(pred_path)
+        elif pred_path.with_name(pred_path.stem + "_agg_mean.csv").exists():
+            # Fallback only if base file missing; note this mixes seeds
+            pred_df_all = pd.read_csv(pred_path.with_name(pred_path.stem + "_agg_mean.csv"))
+            LOGGER.warning("Using aggregated predicted trajectories (base file missing); seed mixing possible.")
+        if pred_df_all is not None:
+            if "model" in pred_df_all.columns:
+                pred_df_all = pred_df_all[pred_df_all["model"] == args.model]
+            if "dataset_mode" in pred_df_all.columns:
+                pred_df_all = pred_df_all[pred_df_all["dataset_mode"] == args.dataset_mode]
+            if pred_df_all.empty:
+                pred_df_all = None
 
     # Optional precomputed integration data
     integration_df_all = None
     if args.integration_trajectories:
-        integration_df_all = pd.read_csv(args.integration_trajectories)
-        integration_df_all = integration_df_all[integration_df_all["model"] == args.model]
-        if "dataset_mode" in integration_df_all.columns:
-            integration_df_all = integration_df_all[integration_df_all["dataset_mode"] == args.dataset_mode]
-        if integration_df_all.empty:
-            integration_df_all = None
+        base_path = Path(args.integration_trajectories)
+        if base_path.exists():
+            integration_df_all = pd.read_csv(base_path)
+        elif base_path.with_name(base_path.stem + "_agg_mean.csv").exists():
+            # Fallback only if base file missing; note this mixes seeds
+            integration_df_all = pd.read_csv(base_path.with_name(base_path.stem + "_agg_mean.csv"))
+            LOGGER.warning("Using aggregated integration trajectories (base file missing); seed mixing possible.")
+        if integration_df_all is not None:
+            integration_df_all = integration_df_all[integration_df_all["model"] == args.model]
+            if "dataset_mode" in integration_df_all.columns:
+                integration_df_all = integration_df_all[integration_df_all["dataset_mode"] == args.dataset_mode]
+            if integration_df_all.empty:
+                integration_df_all = None
+
+    # Integration metrics: prefer aggregated mean, then all_seeds, then base (mean on the fly if seeds present)
     integration_metrics_df_all = None
     if args.integration_metrics:
-        integration_metrics_df_all = pd.read_csv(args.integration_metrics)
-        integration_metrics_df_all = integration_metrics_df_all[integration_metrics_df_all["model"] == args.model]
-        if "dataset_mode" in integration_metrics_df_all.columns:
-            integration_metrics_df_all = integration_metrics_df_all[integration_metrics_df_all["dataset_mode"] == args.dataset_mode]
-        if integration_metrics_df_all.empty:
-            integration_metrics_df_all = None
+        base_path = Path(args.integration_metrics)
+        agg_mean = base_path.with_name(base_path.stem + "_agg_mean.csv")
+        all_seeds = base_path.with_name(base_path.stem + "_all_seeds.csv")
+        if agg_mean.exists():
+            integration_metrics_df_all = pd.read_csv(agg_mean)
+        elif all_seeds.exists():
+            tmp = pd.read_csv(all_seeds)
+            keys = [c for c in ["marker", "model", "dataset_mode"] if c in tmp.columns]
+            numeric_cols = tmp.select_dtypes(include=[np.number]).columns.tolist()
+            numeric_cols = [c for c in numeric_cols if c != "seed"]
+            integration_metrics_df_all = tmp.groupby(keys, dropna=False)[numeric_cols].mean().reset_index()
+            if "formula" in tmp.columns and "formula" not in integration_metrics_df_all.columns:
+                first_formulas = tmp.groupby(keys, dropna=False)["formula"].first().reset_index()
+                integration_metrics_df_all = integration_metrics_df_all.merge(first_formulas, on=keys, how="left")
+        elif base_path.exists():
+            tmp = pd.read_csv(base_path)
+            if "seed" in tmp.columns:
+                keys = [c for c in ["marker", "model", "dataset_mode"] if c in tmp.columns]
+                numeric_cols = tmp.select_dtypes(include=[np.number]).columns.tolist()
+                numeric_cols = [c for c in numeric_cols if c != "seed"]
+                integration_metrics_df_all = tmp.groupby(keys, dropna=False)[numeric_cols].mean().reset_index()
+                if "formula" in tmp.columns and "formula" not in integration_metrics_df_all.columns:
+                    first_formulas = tmp.groupby(keys, dropna=False)["formula"].first().reset_index()
+                    integration_metrics_df_all = integration_metrics_df_all.merge(first_formulas, on=keys, how="left")
+            else:
+                integration_metrics_df_all = tmp
+        if integration_metrics_df_all is not None:
+            integration_metrics_df_all = integration_metrics_df_all[integration_metrics_df_all["model"] == args.model]
+            if "dataset_mode" in integration_metrics_df_all.columns:
+                integration_metrics_df_all = integration_metrics_df_all[
+                    integration_metrics_df_all["dataset_mode"] == args.dataset_mode
+                ]
+            if integration_metrics_df_all.empty:
+                integration_metrics_df_all = None
 
     seed_col = None
     for cand in ("seed", "random_state"):
@@ -677,7 +732,13 @@ def main() -> None:
     args = parse_args()
     dataset = pd.read_csv(args.dataset)
     summary = pd.read_csv(args.summary)
-    make_overlay_plots(dataset, summary, args)
+    summary_seed = None
+    if args.summary_seed:
+        try:
+            summary_seed = pd.read_csv(args.summary_seed)
+        except Exception:
+            summary_seed = None
+    make_overlay_plots(dataset, summary, summary_seed, args)
 
 
 if __name__ == "__main__":

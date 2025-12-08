@@ -64,6 +64,7 @@ from experimental.sr_pipeline.run_functional_groups import (
     choose_bin_split,
     sanitize_feature_names,
 )
+from experimental.sr_pipeline.metrics import coefficient_of_determination
 
 
 def parse_args() -> argparse.Namespace:
@@ -72,6 +73,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--summary", type=Path, required=True, help="functional_group_summary.csv from SR run.")
     parser.add_argument("--output", type=Path, required=True, help="CSV path for integration metrics.")
     parser.add_argument("--trajectories-output", type=Path, required=True, help="CSV path for integrated trajectories.")
+    parser.add_argument(
+        "--sr-trajectories",
+        type=Path,
+        default=None,
+        help="Optional predicted_trajectories CSV from SR (reuse its train/test split instead of re-splitting).",
+    )
     parser.add_argument("--dataset-mode", choices=("snapshot", "per_minute"), default="snapshot")
     parser.add_argument(
         "--measured-timepoints",
@@ -158,6 +165,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=15,
         help="Points to keep per marker/bin in the late window for early_plus_sparse_late sampling.",
+    )
+    parser.add_argument(
+        "--aggregate-output",
+        type=Path,
+        default=None,
+        help="Optional path to maintain aggregated metrics across seeds (mean over numeric columns).",
     )
     return parser.parse_args()
 
@@ -458,10 +471,9 @@ def integrate_single_marker(
         meas_mask = np.isin(t, measured_timepoints) if use_mask else np.ones_like(t, dtype=bool)
         if meas_mask.sum() > 1:
             try:
-                num = np.sum((obs_dt[meas_mask] - dt_pred[meas_mask]) ** 2)
-                den = np.sum((obs_dt[meas_mask] - np.mean(obs_dt[meas_mask])) ** 2)
-                if den > 0:
-                    dt_r2_vals.append(1.0 - num / den)
+                r2_dt = coefficient_of_determination(obs_dt[meas_mask], dt_pred[meas_mask])
+                if np.isfinite(r2_dt):
+                    dt_r2_vals.append(float(r2_dt))
             except Exception:
                 pass
         if (
@@ -470,9 +482,10 @@ def integrate_single_marker(
             and obs_pe is not None
         ):
             try:
-                r2 = np.corrcoef(obs_pe[meas_mask], integ[meas_mask])[0, 1] ** 2
-                integ_r2_vals.append(float(r2))
-                integrated_bins += 1
+                r2 = coefficient_of_determination(obs_pe[meas_mask], integ[meas_mask])
+                if np.isfinite(r2):
+                    integ_r2_vals.append(float(r2))
+                    integrated_bins += 1
             except Exception:
                 pass
 
@@ -797,9 +810,10 @@ def integrate_marker_ode(
             and np.isfinite(obs_pe[meas_mask]).sum() > 1
         ):
             try:
-                r2 = np.corrcoef(obs_pe[meas_mask], integ[meas_mask])[0, 1] ** 2
-                integ_r2_vals.append(float(r2))
-                integrated_bins += 1
+                r2 = coefficient_of_determination(obs_pe[meas_mask], integ[meas_mask])
+                if np.isfinite(r2):
+                    integ_r2_vals.append(float(r2))
+                    integrated_bins += 1
             except Exception:
                 pass
 
@@ -844,6 +858,21 @@ def main() -> None:
 
     p_symbol = sanitize_feature_names(["p-ERK1-2"])[0]
 
+    sr_split_map: Dict[str, Dict[str, set]] = {}
+    if args.sr_trajectories is not None:
+        try:
+            traj_df = pd.read_csv(args.sr_trajectories)
+            traj_df["GFP_bin"] = pd.to_numeric(traj_df["GFP_bin"], errors="coerce")
+            traj_df["dataset_mode"] = traj_df.get("dataset_mode", args.dataset_mode)
+            for marker in traj_df["marker"].unique():
+                sub = traj_df[(traj_df["marker"] == marker) & (traj_df["dataset_mode"] == args.dataset_mode)]
+                train_bins = set(sub[sub["phase"] == "train"]["GFP_bin"].dropna().astype(int).tolist())
+                test_bins = set(sub[sub["phase"] == "test"]["GFP_bin"].dropna().astype(int).tolist())
+                if train_bins and test_bins:
+                    sr_split_map[str(marker)] = {"train": train_bins, "test": test_bins}
+        except Exception as exc:
+            print(f"[compute_marker_integration] Failed to load SR trajectories for split reuse: {exc}")
+
     for _, row in summary.iterrows():
         marker = row["group_name"]
         formula = row["formula"]
@@ -855,7 +884,11 @@ def main() -> None:
             continue
         safe_eps = args.pysr_safe_division_eps if row["model"] == "PySR" else None
         expr = sanitize_formula(formula, safe_division_eps=safe_eps)
-        train_bins, test_bins = choose_bin_split(sub, test_size=args.test_size, random_state=args.random_state)
+        if marker in sr_split_map:
+            train_bins = sr_split_map[marker]["train"]
+            test_bins = sr_split_map[marker]["test"]
+        else:
+            train_bins, test_bins = choose_bin_split(sub, test_size=args.test_size, random_state=args.random_state)
         if not train_bins or not test_bins:
             print(f"[compute_marker_integration] Skipping marker {marker}: unable to split train/test bins.")
             continue
@@ -999,6 +1032,35 @@ def main() -> None:
     out_df = pd.DataFrame(metrics)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_csv(args.output, index=False)
+
+    # maintain combined + aggregated metrics across seeds if requested
+    if args.aggregate_output is None:
+        agg_all_path = args.output.with_name(args.output.stem + "_all_seeds.csv")
+        agg_mean_path = args.output.with_name(args.output.stem + "_agg_mean.csv")
+    else:
+        agg_all_path = args.aggregate_output
+        agg_mean_path = args.aggregate_output.with_name(args.aggregate_output.stem + "_mean.csv")
+    try:
+        if agg_all_path.exists():
+            existing = pd.read_csv(agg_all_path)
+            combined = pd.concat([existing, out_df], ignore_index=True)
+        else:
+            combined = out_df.copy()
+        combined.to_csv(agg_all_path, index=False)
+
+        keys = [c for c in ["marker", "model", "dataset_mode"] if c in combined.columns]
+        numeric_cols = combined.select_dtypes(include=[np.number]).columns.tolist()
+        numeric_cols = [c for c in numeric_cols if c != "seed"]
+        agg_mean = combined.groupby(keys, dropna=False)[numeric_cols].mean().reset_index()
+        if "formula" in combined.columns and "formula" not in agg_mean.columns:
+            first_formulas = combined.groupby(keys, dropna=False)["formula"].first().reset_index()
+            agg_mean = agg_mean.merge(first_formulas, on=keys, how="left")
+        agg_mean.to_csv(agg_mean_path, index=False)
+        print(f"Wrote combined seed metrics to {agg_all_path}")
+        print(f"Wrote mean-over-seeds metrics to {agg_mean_path}")
+    except Exception as exc:
+        print(f"[compute_marker_integration] Failed to aggregate metrics across seeds: {exc}")
+
     traj_df = pd.DataFrame(traj_records)
     args.trajectories_output.parent.mkdir(parents=True, exist_ok=True)
     traj_df.to_csv(args.trajectories_output, index=False)
