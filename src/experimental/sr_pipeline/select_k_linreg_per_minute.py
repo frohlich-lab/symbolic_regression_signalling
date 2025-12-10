@@ -39,15 +39,11 @@ from sklearn.preprocessing import StandardScaler
 from experimental.sr_pipeline.metrics import binwise_r2
 
 from experimental.sr_pipeline.compute_marker_integration import (
-    NoClipStateTransform,
     evaluate_formula,
     integrate_marker_ode,
     integrate_single_marker,
     make_formula_function,
     prepare_sr_dataset,
-    ODE_DERIV_MARGIN_FRAC,
-    ODE_DERIV_PERCENTILES,
-    ODE_TSIT5_DERIV_CLIP,
 )
 from experimental.sr_pipeline.run_functional_groups import (
     EXCLUDE_COLUMNS,
@@ -55,6 +51,7 @@ from experimental.sr_pipeline.run_functional_groups import (
     choose_bin_split,
     _compute_regression_metrics,
 )
+from experimental.sr_pipeline.seeding import canonicalize_seeds, seed_all
 
 MEASURED_TIMEPOINTS = (0.0, 5.0, 10.0, 15.0, 30.0, 60.0)
 
@@ -127,26 +124,7 @@ def parse_args() -> argparse.Namespace:
         default=MEASURED_TIMEPOINTS,
         help="Measured timepoints to retain for per-minute evaluation.",
     )
-    parser.add_argument(
-        "--prefer-radau",
-        action="store_true",
-        help="Prefer SciPy Radau fallback for ODE integration when JAX is unavailable.",
-    )
     return parser.parse_args()
-
-
-def _compute_deriv_clip(values: np.ndarray) -> Tuple[float, float]:
-    arr = np.asarray(values, dtype=float)
-    arr = arr[np.isfinite(arr)]
-    if arr.size == 0:
-        return (-ODE_TSIT5_DERIV_CLIP, ODE_TSIT5_DERIV_CLIP)
-    lo, hi = np.percentile(arr, [p * 100.0 for p in ODE_DERIV_PERCENTILES])
-    span = hi - lo
-    lo = lo - span * ODE_DERIV_MARGIN_FRAC
-    hi = hi + span * ODE_DERIV_MARGIN_FRAC
-    lo = float(np.clip(lo, -ODE_TSIT5_DERIV_CLIP, ODE_TSIT5_DERIV_CLIP))
-    hi = float(np.clip(hi, -ODE_TSIT5_DERIV_CLIP, ODE_TSIT5_DERIV_CLIP))
-    return lo, hi
 
 
 def _extract_coefficients(
@@ -246,7 +224,7 @@ def _plot_ribbon(
 def main() -> None:
     args = parse_args()
 
-    seeds = list(dict.fromkeys(args.seeds)) if args.seeds else [args.random_state]
+    seeds = canonicalize_seeds(args.random_state, args.seeds)
 
     raw = pd.read_csv(args.dataset)
     metrics_rows: List[Dict[str, object]] = []
@@ -254,6 +232,7 @@ def main() -> None:
 
     total_steps = 0
     for seed in seeds:
+        seed_all(seed)
         sampled = apply_per_minute_sampling(
             raw,
             strategy=args.per_minute_sampling_strategy,
@@ -287,6 +266,7 @@ def main() -> None:
 
     step_counter = 0
     for seed in seeds:
+        seed_all(seed)
         sampled = apply_per_minute_sampling(
             raw,
             strategy=args.per_minute_sampling_strategy,
@@ -381,37 +361,32 @@ def main() -> None:
                 intercept, coef_map, selected = _extract_coefficients(pipeline, feature_cols)
                 expr = _build_linear_expr(intercept, coef_map)
                 try:
-                    formula_fn_np, symbols = make_formula_function(expr, backend="numpy")
-                    deriv_clip = _compute_deriv_clip(evaluate_formula(expr, train_df[feature_cols].copy()))
+                    formula_fn_jax, symbols = make_formula_function(expr, backend="jax")
                     ode_train, _ = integrate_marker_ode(
                         train_df.copy(),
                         target_col,
                         args.measured_timepoints,
                         "per_minute",
-                        formula_fn_np,
+                        formula_fn_jax,
                         symbols,
                         "p_ERK1_2",
-                        formula_fn_fallback=formula_fn_np,
-                        state_transform=NoClipStateTransform(),
-                        deriv_clip=deriv_clip,
-                        prefer_radau=args.prefer_radau,
+                        restrict_to_measured=False,
                         include_trajectories=False,
                         phase="train",
+                        log_label=f"{marker} train",
                     )
                     ode_test, _ = integrate_marker_ode(
                         test_df.copy(),
                         target_col,
                         args.measured_timepoints,
                         "per_minute",
-                        formula_fn_np,
+                        formula_fn_jax,
                         symbols,
                         "p_ERK1_2",
-                        formula_fn_fallback=formula_fn_np,
-                        state_transform=NoClipStateTransform(),
-                        deriv_clip=deriv_clip,
-                        prefer_radau=args.prefer_radau,
+                        restrict_to_measured=False,
                         include_trajectories=False,
                         phase="test",
+                        log_label=f"{marker} test",
                     )
                 except Exception:
                     ode_train, ode_test = {"ode_integ_r2_median": np.nan}, {"ode_integ_r2_median": np.nan}

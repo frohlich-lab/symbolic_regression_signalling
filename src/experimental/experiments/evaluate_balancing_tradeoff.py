@@ -32,7 +32,7 @@ import sympy as sp
 
 DEFAULT_DATASET = Path("data/experimental/processed/functional_groups/functional_groups_fit_snapshot.csv")
 DEFAULT_GROUP_DEFS = Path("data/experimental/processed/functional_groups.csv")
-DEFAULT_SUMMARY = Path("data/experimental/functional_groups/outputs/reports/summary/functional_group_summary.csv")
+DEFAULT_SUMMARY = Path("data/experimental/runs/aggregated/reports/summary/functional_group_summary.csv")
 
 TARGET_COLUMN_SANITIZED = "p_ERK1_2_dt"
 RAW_MARKER_KEY = "marker"
@@ -523,7 +523,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pysr-output-root",
         type=Path,
-        default=Path("data/experimental/functional_groups/outputs/tradeoff_runs"),
+        default=Path("data/experimental/runs/tradeoff_runs"),
         help="Root directory for per-cap PySR outputs.",
     )
     parser.add_argument(

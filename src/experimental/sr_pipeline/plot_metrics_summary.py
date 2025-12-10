@@ -20,12 +20,13 @@ import sympy as sp
 from tqdm.auto import tqdm
 
 from experimental.sr_pipeline.run_functional_groups import EXCLUDE_COLUMNS, sanitize_feature_names
+from experimental.sr_pipeline import seed_annotations as seed_annot
 
 # Class colouring shared across plots
 CLASS_PALETTE = {"driver": "#1b9e77", "brake": "#d95f02", "neutral": "#636363"}
 MEASURED_DEFAULT = (0.0, 5.0, 10.0, 15.0, 30.0, 60.0)
 PLACEHOLDER_TEXT = "No data"
-DEFAULT_SEED_NOTE: Optional[str] = None
+DEFAULT_SEED_NOTE: Optional[str] = seed_annot.DEFAULT_SEED_NOTE
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pairwise scatter plots for R2 and relMAE across models/modes.")
@@ -179,6 +180,22 @@ def _compute_samples_by_mode(df: pd.DataFrame) -> pd.Series:
     )
 
 
+def _infer_seeds_from_path(path: Path) -> List[str]:
+    """Extract seed ids from a summary path (e.g., .../seed_42/summary/...)."""
+    return seed_annot.seeds_from_paths([path])
+
+
+def _collect_seeds_from_csv(path: Path) -> List[str]:
+    """Collect seed-like columns from a CSV if present; prefer explicit columns."""
+    if not path.exists():
+        return []
+    try:
+        df = pd.read_csv(path, usecols=lambda c: c in ("seed", "random_state"))
+    except Exception:
+        return []
+    return seed_annot.seeds_from_df(df)
+
+
 def _match_preferred_label(options: Sequence[object], target: Optional[str]) -> Optional[object]:
     """Return the first value from options whose normalized string matches target."""
     if not options or target is None:
@@ -192,18 +209,12 @@ def _match_preferred_label(options: Sequence[object], target: Optional[str]) -> 
 
 def _add_seed_note(fig: plt.Figure, note: Optional[str]) -> None:
     """Write seed/aggregation note onto a figure."""
-    final_note = note if note is not None else DEFAULT_SEED_NOTE
-    if final_note:
-        fig.text(0.01, 0.01, final_note, ha="left", va="bottom", fontsize=9, color="#444444")
+    seed_annot.add_seed_note(fig, note=note, default=DEFAULT_SEED_NOTE)
 
 
 def _format_seed_label(seeds: Sequence[object], *, averaged: bool) -> Optional[str]:
     """Format a seed label indicating whether values are averaged."""
-    cleaned = [str(s) for s in seeds if pd.notna(s)]
-    if not cleaned:
-        return None
-    joined = ", ".join(cleaned)
-    return f"Averaged over seeds: {joined}" if averaged else f"Seeds: {joined}"
+    return seed_annot.format_seed_label(seeds, averaged=averaged, default=None)
 
 
 def _plot_scatter_variants(
@@ -1394,20 +1405,68 @@ def main() -> None:
 
     df_seed = df.copy() if seed_col else None
     seeds_seen = df[seed_col].dropna().unique() if seed_col else None
+    aggregated_over_seeds = False
+    inferred_seeds = _infer_seeds_from_path(args.summary)
+    seed_hints: List[str] = []
+    # Collect seed hints from integration metrics or trajectories if provided
+    for mode in ("snapshot", "per_minute"):
+        if args.integration_metrics_dir:
+            metrics_path = Path(args.integration_metrics_dir) / f"marker_integration_metrics_{mode}.csv"
+            seed_hints.extend(_collect_seeds_from_csv(metrics_path))
+        if args.trajectories_dir:
+            traj_path = Path(args.trajectories_dir) / f"predicted_trajectories_{mode}.csv"
+            seed_hints.extend(_collect_seeds_from_csv(traj_path))
+    summary_path_lower = str(args.summary).lower()
+    if "aggregated" in summary_path_lower or "all_seeds" in args.summary.name.lower():
+        aggregated_over_seeds = True
+    if args.integration_metrics_dir and "aggregated" in str(args.integration_metrics_dir).lower():
+        aggregated_over_seeds = True
+    if not seed_col:
+        summary_name = args.summary.name.lower()
+        if "seed" in summary_name or "agg" in summary_name or "mean" in summary_name:
+            aggregated_over_seeds = True
+        if inferred_seeds:
+            seeds_seen = inferred_seeds
+            seed_col = "inferred_seed"
+            aggregated_over_seeds = aggregated_over_seeds or len(inferred_seeds) > 1
+        elif seed_hints:
+            seeds_seen = seed_hints
+            seed_col = "inferred_seed"
+            aggregated_over_seeds = aggregated_over_seeds or len(seed_hints) > 1
+    if seed_col and df_seed is None:
+        df_seed = df.copy()
+    if seed_col and seeds_seen is None:
+        if seed_col in df_seed.columns:
+            seeds_seen = df_seed[seed_col].dropna().unique()
+        elif inferred_seeds:
+            seeds_seen = inferred_seeds
+        elif seed_hints:
+            seeds_seen = seed_hints
     if seed_col:
-        uniq_seeds = sorted(df_seed[seed_col].dropna().unique().tolist())
-        print(f"[plot_metrics_summary] Detected seed column '{seed_col}' with {len(uniq_seeds)} seeds: {uniq_seeds}")
-        keys = [k for k in ["group_name", "dataset_mode", "feature_mode", "model"] if k in df.columns]
-        numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns if c != seed_col]
-        df_mean_num = df.groupby(keys, dropna=False)[numeric_cols].mean().reset_index()
-        df_non_num = pd.DataFrame()
-        if "formula" in df.columns:
-            df_non_num = df.groupby(keys, dropna=False)["formula"].first().reset_index()
-        if not df_non_num.empty:
-            df = df_mean_num.merge(df_non_num, on=keys, how="left")
+        if seed_col in df_seed.columns:
+            uniq_seeds = sorted(df_seed[seed_col].dropna().unique().tolist())
+            print(f"[plot_metrics_summary] Detected seed column '{seed_col}' with {len(uniq_seeds)} seeds: {uniq_seeds}")
+            keys = [k for k in ["group_name", "dataset_mode", "feature_mode", "model"] if k in df.columns]
+            numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns if c != seed_col]
+            df_mean_num = df.groupby(keys, dropna=False)[numeric_cols].mean().reset_index()
+            df_non_num = pd.DataFrame()
+            if "formula" in df.columns:
+                df_non_num = df.groupby(keys, dropna=False)["formula"].first().reset_index()
+            if not df_non_num.empty:
+                df = df_mean_num.merge(df_non_num, on=keys, how="left")
+            else:
+                df = df_mean_num
+            aggregated_over_seeds = True
+            print(f"[plot_metrics_summary] Aggregated metrics across seeds using mean per {keys}.")
         else:
-            df = df_mean_num
-        print(f"[plot_metrics_summary] Aggregated metrics across seeds using mean per {keys}.")
+            if seeds_seen is None:
+                uniq_seeds = []
+            elif hasattr(seeds_seen, "tolist"):
+                uniq_seeds = sorted(seeds_seen.tolist())
+            else:
+                uniq_seeds = sorted([str(s) for s in seeds_seen])
+            if uniq_seeds:
+                print(f"[plot_metrics_summary] Using inferred seeds {uniq_seeds} (no seed column present).")
 
     # If seeds slipped through, average numeric columns across seeds before plotting.
     if "seed" in df.columns:
@@ -1421,7 +1480,12 @@ def main() -> None:
 
     global DEFAULT_SEED_NOTE
     if seed_col and seeds_seen is not None and len(seeds_seen) > 0:
-        DEFAULT_SEED_NOTE = _format_seed_label(seeds_seen, averaged=True) or "Seed: single"
+        if len(seeds_seen) == 1:
+            DEFAULT_SEED_NOTE = _format_seed_label(seeds_seen, averaged=False) or "Seed: single"
+        else:
+            DEFAULT_SEED_NOTE = _format_seed_label(seeds_seen, averaged=True) or "Seed: averaged"
+    elif aggregated_over_seeds:
+        DEFAULT_SEED_NOTE = "Seed: averaged"
     else:
         DEFAULT_SEED_NOTE = "Seed: single"
 

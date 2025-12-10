@@ -16,6 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from experimental.sr_pipeline import seed_annotations as seed_annot
 from experimental.sr_pipeline.run_functional_groups import EXCLUDE_COLUMNS, sanitize_feature_names
 from experimental.sr_pipeline.compute_marker_integration import evaluate_formula
 
@@ -80,13 +81,13 @@ def parse_args() -> argparse.Namespace:
         "--integration-trajectories",
         type=Path,
         default=None,
-        help="Optional precomputed integration trajectories CSV (prefer *_agg_mean if available).",
+        help="Optional precomputed integration trajectories CSV (prefer *_all_seeds_mean if available).",
     )
     parser.add_argument(
         "--integration-metrics",
         type=Path,
         default=None,
-        help="Optional precomputed integration metrics CSV (prefer *_agg_mean if available).",
+        help="Optional precomputed integration metrics CSV (prefer *_all_seeds_mean if available).",
     )
     parser.add_argument(
         "--markers-per-fig",
@@ -170,14 +171,22 @@ def make_overlay_plots(
 
     # Optional predicted trajectories (plots should use a single seed; prefer base file)
     pred_df_all = None
+    pred_aggregated = False
     if args.predicted_trajectories:
         pred_path = Path(args.predicted_trajectories)
+        alt_pred = [
+            pred_path.with_name(pred_path.stem + "_all_seeds_mean.csv"),
+            pred_path.with_name(pred_path.stem + "_agg_mean.csv"),
+        ]
         if pred_path.exists():
             pred_df_all = pd.read_csv(pred_path)
-        elif pred_path.with_name(pred_path.stem + "_agg_mean.csv").exists():
-            # Fallback only if base file missing; note this mixes seeds
-            pred_df_all = pd.read_csv(pred_path.with_name(pred_path.stem + "_agg_mean.csv"))
-            LOGGER.warning("Using aggregated predicted trajectories (base file missing); seed mixing possible.")
+        else:
+            for candidate in alt_pred:
+                if candidate.exists():
+                    pred_df_all = pd.read_csv(candidate)
+                    LOGGER.warning("Using aggregated predicted trajectories (base file missing); seed mixing possible.")
+                    pred_aggregated = True
+                    break
         if pred_df_all is not None:
             if "model" in pred_df_all.columns:
                 pred_df_all = pred_df_all[pred_df_all["model"] == args.model]
@@ -188,14 +197,22 @@ def make_overlay_plots(
 
     # Optional precomputed integration data
     integration_df_all = None
+    integration_aggregated = False
     if args.integration_trajectories:
         base_path = Path(args.integration_trajectories)
+        alt_traj = [
+            base_path.with_name(base_path.stem + "_all_seeds_mean.csv"),
+            base_path.with_name(base_path.stem + "_agg_mean.csv"),
+        ]
         if base_path.exists():
             integration_df_all = pd.read_csv(base_path)
-        elif base_path.with_name(base_path.stem + "_agg_mean.csv").exists():
-            # Fallback only if base file missing; note this mixes seeds
-            integration_df_all = pd.read_csv(base_path.with_name(base_path.stem + "_agg_mean.csv"))
-            LOGGER.warning("Using aggregated integration trajectories (base file missing); seed mixing possible.")
+        else:
+            for candidate in alt_traj:
+                if candidate.exists():
+                    integration_df_all = pd.read_csv(candidate)
+                    LOGGER.warning("Using aggregated integration trajectories (base file missing); seed mixing possible.")
+                    integration_aggregated = True
+                    break
         if integration_df_all is not None:
             integration_df_all = integration_df_all[integration_df_all["model"] == args.model]
             if "dataset_mode" in integration_df_all.columns:
@@ -205,12 +222,18 @@ def make_overlay_plots(
 
     # Integration metrics: prefer aggregated mean, then all_seeds, then base (mean on the fly if seeds present)
     integration_metrics_df_all = None
+    integration_metrics_aggregated = False
     if args.integration_metrics:
         base_path = Path(args.integration_metrics)
-        agg_mean = base_path.with_name(base_path.stem + "_agg_mean.csv")
+        agg_mean = base_path.with_name(base_path.stem + "_all_seeds_mean.csv")
+        legacy_mean = base_path.with_name(base_path.stem + "_agg_mean.csv")
         all_seeds = base_path.with_name(base_path.stem + "_all_seeds.csv")
         if agg_mean.exists():
             integration_metrics_df_all = pd.read_csv(agg_mean)
+            integration_metrics_aggregated = True
+        elif legacy_mean.exists():
+            integration_metrics_df_all = pd.read_csv(legacy_mean)
+            integration_metrics_aggregated = True
         elif all_seeds.exists():
             tmp = pd.read_csv(all_seeds)
             keys = [c for c in ["marker", "model", "dataset_mode"] if c in tmp.columns]
@@ -220,6 +243,7 @@ def make_overlay_plots(
             if "formula" in tmp.columns and "formula" not in integration_metrics_df_all.columns:
                 first_formulas = tmp.groupby(keys, dropna=False)["formula"].first().reset_index()
                 integration_metrics_df_all = integration_metrics_df_all.merge(first_formulas, on=keys, how="left")
+            integration_metrics_aggregated = True
         elif base_path.exists():
             tmp = pd.read_csv(base_path)
             if "seed" in tmp.columns:
@@ -230,6 +254,7 @@ def make_overlay_plots(
                 if "formula" in tmp.columns and "formula" not in integration_metrics_df_all.columns:
                     first_formulas = tmp.groupby(keys, dropna=False)["formula"].first().reset_index()
                     integration_metrics_df_all = integration_metrics_df_all.merge(first_formulas, on=keys, how="left")
+                integration_metrics_aggregated = True
             else:
                 integration_metrics_df_all = tmp
         if integration_metrics_df_all is not None:
@@ -246,6 +271,8 @@ def make_overlay_plots(
         if cand in summary.columns:
             seed_col = cand
             break
+    if seed_col is None:
+        raise ValueError("Summary must include a seed or random_state column for overlays.")
 
     def _run_for_seed(seed_value: Optional[object]) -> None:
         if seed_value is not None and seed_col:
@@ -255,52 +282,75 @@ def make_overlay_plots(
         if summary_seed.empty:
             LOGGER.warning("No summary rows for seed=%s; skipping overlay.", seed_value)
             return
-        # Select a consistent seed from predictions/integration to avoid mixing seeds.
-        def _pick_seed(df_all: Optional[pd.DataFrame]) -> Optional[object]:
-            if df_all is None:
-                return None
-            for col in ("seed", "random_state"):
-                if col in df_all.columns:
-                    seeds = [s for s in df_all[col].dropna().unique().tolist()]
-                    return sorted(seeds, key=str)[0] if seeds else None
-            return None
 
-        chosen_seed = seed_value
+        cols = (seed_col,) if seed_col else ("seed", "random_state")
+        summary_seeds = seed_annot.seeds_from_df(summary_seed, columns=cols)
+
+        chosen_seed = seed_annot.pick_seed(
+            pred_df_all,
+            preferred=seed_value,
+            columns=cols,
+        )
         if chosen_seed is None:
-            chosen_seed = _pick_seed(pred_df_all) or _pick_seed(integration_df_all) or _pick_seed(integration_metrics_df_all)
+            chosen_seed = seed_annot.pick_seed(integration_df_all, columns=cols)
+        if chosen_seed is None:
+            chosen_seed = seed_annot.pick_seed(integration_metrics_df_all, columns=cols)
+        if chosen_seed is None:
+            chosen_seed = seed_annot.pick_seed(summary_seed, columns=cols)
 
         pred_df = pred_df_all
-        if pred_df_all is not None:
+        if pred_df_all is not None and chosen_seed is not None:
             for col in ("seed", "random_state"):
-                if col in pred_df_all.columns and chosen_seed is not None:
+                if col in pred_df_all.columns:
                     pred_df = pred_df_all[pred_df_all[col] == chosen_seed].copy()
                     break
-            if seed_col and seed_col in pred_df_all.columns and seed_value is not None:
-                pred_df = pred_df_all[pred_df_all[seed_col] == seed_value].copy()
-            if pred_df is not None and pred_df.empty:
-                pred_df = None
+        if pred_df is None and chosen_seed is not None and summary_seeds:
+            # Inject seed column if predictions lack it but summary has a single seed
+            pred_df = pred_df_all.copy() if pred_df_all is not None else None
+            if pred_df is not None and "seed" not in pred_df.columns:
+                pred_df["seed"] = chosen_seed
+        if pred_df is not None and pred_df.empty:
+            pred_df = None
 
         integration_df = integration_df_all
-        if integration_df_all is not None:
+        if integration_df_all is not None and chosen_seed is not None:
             for col in ("seed", "random_state"):
-                if col in integration_df_all.columns and chosen_seed is not None:
+                if col in integration_df_all.columns:
                     integration_df = integration_df_all[integration_df_all[col] == chosen_seed].copy()
                     break
-            if seed_col and seed_col in integration_df_all.columns and seed_value is not None:
-                integration_df = integration_df_all[integration_df_all[seed_col] == seed_value].copy()
-            if integration_df is not None and integration_df.empty:
-                integration_df = None
+        if integration_df is None and chosen_seed is not None and summary_seeds:
+            integration_df = integration_df_all.copy() if integration_df_all is not None else None
+            if integration_df is not None and "seed" not in integration_df.columns:
+                integration_df["seed"] = chosen_seed
+        if integration_df is not None and integration_df.empty:
+            integration_df = None
 
         integration_metrics_df = integration_metrics_df_all
-        if integration_metrics_df_all is not None:
+        if integration_metrics_df_all is not None and chosen_seed is not None:
             for col in ("seed", "random_state"):
-                if col in integration_metrics_df_all.columns and chosen_seed is not None:
+                if col in integration_metrics_df_all.columns:
                     integration_metrics_df = integration_metrics_df_all[integration_metrics_df_all[col] == chosen_seed].copy()
                     break
-            if seed_col and seed_col in integration_metrics_df_all.columns and seed_value is not None:
-                integration_metrics_df = integration_metrics_df_all[integration_metrics_df_all[seed_col] == seed_value].copy()
-            if integration_metrics_df is not None and integration_metrics_df.empty:
-                integration_metrics_df = None
+        if integration_metrics_df is None and chosen_seed is not None and summary_seeds:
+            integration_metrics_df = integration_metrics_df_all.copy() if integration_metrics_df_all is not None else None
+            if integration_metrics_df is not None and "seed" not in integration_metrics_df.columns:
+                integration_metrics_df["seed"] = chosen_seed
+        if integration_metrics_df is not None and integration_metrics_df.empty:
+            integration_metrics_df = None
+
+        seeds_available = summary_seeds or seed_annot.seeds_from_df(pred_df) or seed_annot.seeds_from_df(integration_df) or seed_annot.seeds_from_df(integration_metrics_df)
+        averaged = (
+            pred_aggregated
+            or integration_aggregated
+            or integration_metrics_aggregated
+            or (chosen_seed is None and len(seeds_available) > 1)
+        )
+        default_note = "Averaged over seeds" if averaged else seed_annot.DEFAULT_SEED_NOTE
+        seed_note = seed_annot.format_seed_label(
+            [chosen_seed] if chosen_seed is not None else seeds_available,
+            averaged=averaged,
+            default=default_note,
+        )
 
         if args.per_seed_overlays and seed_value is not None:
             seed_out = base_output_dir / f"seed_{seed_value}"
@@ -318,6 +368,7 @@ def make_overlay_plots(
             seed_out,
             sanitized,
             target_col,
+            seed_note,
         )
 
     if args.per_seed_overlays and seed_col:
@@ -338,6 +389,7 @@ def _make_overlay_plots_core(
     output_dir: Path,
     sanitized_features: List[str],
     target_col: str,
+    seed_note: Optional[str],
 ) -> None:
     if integration_metrics_df is not None and "group_name" not in integration_metrics_df.columns and "marker" in integration_metrics_df.columns:
         integration_metrics_df["group_name"] = integration_metrics_df["marker"]
@@ -391,6 +443,7 @@ def _make_overlay_plots_core(
             handles, labels = axes.flat[0].get_legend_handles_labels()
             fig.legend(handles, labels, loc="upper right")
             fig.suptitle(f"{marker} | PySR per-minute dt fit")
+            seed_annot.add_seed_note(fig, note=seed_note)
             fig.tight_layout(rect=(0, 0, 1, 0.96))
             for ext in ("png", "svg"):
                 fig.savefig(plot_dir / f"{marker}_dt_curves.{ext}", dpi=200, bbox_inches="tight")
@@ -449,14 +502,12 @@ def _make_overlay_plots_core(
                         if "ode_integ_r2_median_train" in mrow and pd.notna(mrow["ode_integ_r2_median_train"])
                         else None
                     )
-                    ode_test_r2 = (
-                        float(mrow.get("ode_integ_r2_median") or mrow.get("integrated_ode_r2"))
-                        if (
-                            ("ode_integ_r2_median" in mrow and pd.notna(mrow["ode_integ_r2_median"]))
-                            or ("integrated_ode_r2" in mrow and pd.notna(mrow["integrated_ode_r2"]))
-                        )
-                        else None
-                    )
+                    if "ode_integ_r2_median" in mrow and pd.notna(mrow["ode_integ_r2_median"]):
+                        ode_test_r2 = float(mrow["ode_integ_r2_median"])
+                    elif "integrated_ode_r2" in mrow and pd.notna(mrow["integrated_ode_r2"]):
+                        ode_test_r2 = float(mrow["integrated_ode_r2"])
+                    else:
+                        ode_test_r2 = None
 
             if pred_df is not None:
                 sub_pred = pred_df[pred_df["marker"] == marker].copy()
@@ -706,6 +757,7 @@ def _make_overlay_plots_core(
                     title="GFP_bin", bbox_to_anchor=(1.05, 1), loc="upper left", fontsize="x-small"
                 )
 
+        seed_annot.add_seed_note(fig, note=seed_note)
         fig.tight_layout()
         chunk_suffix = f"_{chunk_idx // chunk_size:02d}" if num_chunks > 1 else ""
         fig_base = f"{args.fig_base}{chunk_suffix}"

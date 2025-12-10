@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("data/experimental/functional_groups/outputs/fit_sanity"),
+        default=Path("data/experimental/runs/aggregated/plots/fit_sanity"),
         help="Directory for emitted PNG grids.",
     )
     parser.add_argument(

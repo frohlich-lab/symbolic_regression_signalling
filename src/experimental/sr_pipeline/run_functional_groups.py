@@ -11,11 +11,10 @@ import argparse
 import ast
 import json
 import logging
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 import sys
-import os
-import random
 from typing import Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -31,25 +30,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from experimental.sr_pipeline.metrics import binwise_r2
-
-# Keep experimental pipeline self contained; avoid cross-importing shared utils.
-def seed_everything(seed: int) -> int:
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    random.seed(seed)
-    np.random.seed(seed)
-    try:
-        import torch  # optional dependency
-
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
-        if hasattr(torch.backends, "cudnn"):
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
-    except Exception:
-        pass
-    return seed
+from experimental.sr_pipeline.metrics import binwise_r2, binwise_r2_stats
+from experimental.sr_pipeline.seeding import canonicalize_seeds, seed_all
 
 # Columns that should not be passed to the regression model as inputs.
 EXCLUDE_COLUMNS = {"p-ERK1-2_dt", "p-MEK1-2_dt", "marker", "timepoint", "GFP_bin"}
@@ -61,11 +43,20 @@ if not LOGGER.handlers:
     handler.setFormatter(
         logging.Formatter("[%(asctime)s] %(levelname)s | %(message)s", "%H:%M:%S")
     )
-    LOGGER.addHandler(handler)
+LOGGER.addHandler(handler)
 LOGGER.setLevel(logging.INFO)
 LOGGER.propagate = False
 
 RUN_SEED: Optional[int] = None
+
+
+def _is_runs_layout(base: Path) -> bool:
+    """
+    Return True when the output base looks like the new experimental layout:
+    data/experimental/runs with aggregated/ and seeds/ children.
+    """
+    return base.name == "runs" or (base / "seeds").exists() or (base / "aggregated").exists()
+
 
 def log_progress(stage: str, current: int, total: int) -> None:
     if total <= 0:
@@ -81,6 +72,15 @@ def log_progress(stage: str, current: int, total: int) -> None:
         LOGGER.info("%s [%d/%d | %.1f%%]", stage, current, total, percent)
 
 
+def _run_module(cmd: List[str], description: str) -> None:
+    """Run a Python module as a subprocess with logging."""
+    try:
+        LOGGER.info("Running %s", description)
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as exc:
+        LOGGER.warning("Failed to run %s: %s", description, exc)
+
+
 @dataclass
 class GroupResult:
     group_name: str
@@ -92,8 +92,15 @@ class GroupResult:
     test_r2: Optional[float]
     test_samples: int
     train_samples: int
+    # per-bin stats (equal weight per bin)
+    test_r2_bin_mean: Optional[float] = None
+    test_r2_bin_median: Optional[float] = None
+    test_r2_bin_count: Optional[int] = None
     train_relative_mae: Optional[float] = None
     train_r2: Optional[float] = None
+    train_r2_bin_mean: Optional[float] = None
+    train_r2_bin_median: Optional[float] = None
+    train_r2_bin_count: Optional[int] = None
     target_space: Literal["linear"] = "linear"
 
 
@@ -204,19 +211,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-iterations",
         type=int,
-        default=400,
+        default=600,
         help="PySR niterations parameter (default mirrors notebook).",
     )
     parser.add_argument(
         "--population-size",
         type=int,
-        default=30,
+        default=35,
         help="PySR population size per generation.",
     )
     parser.add_argument(
         "--populations",
         type=int,
-        default=30,
+        default=35,
         help="PySR populations (parallel demes).",
     )
     parser.add_argument(
@@ -543,6 +550,7 @@ def train_group_models(
                     "p-ERK1-2_dt_true": _y_true,
                     "p-ERK1-2_dt_pred": _y_pred,
                     "p-ERK1-2": _pe,
+                    "seed": RUN_SEED,
                 }
             )
 
@@ -578,7 +586,7 @@ def train_group_models(
                 )
                 train_df["__y_pred__"] = y_pred_train
                 test_df_raw["__y_pred__"] = y_pred_test_raw
-                metrics_raw["train_r2"] = binwise_r2(
+                train_stats = binwise_r2_stats(
                     train_df,
                     "p-ERK1-2_dt",
                     "__y_pred__",
@@ -586,7 +594,7 @@ def train_group_models(
                     dataset_mode,
                     clamp_negative=True,
                 )
-                metrics_raw["test_r2"] = binwise_r2(
+                test_stats = binwise_r2_stats(
                     test_df_raw,
                     "p-ERK1-2_dt",
                     "__y_pred__",
@@ -594,6 +602,16 @@ def train_group_models(
                     dataset_mode,
                     clamp_negative=True,
                 )
+                if train_stats:
+                    metrics_raw["train_r2"] = train_stats["mean"]
+                    metrics_raw["train_r2_bin_mean"] = train_stats["mean"]
+                    metrics_raw["train_r2_bin_median"] = train_stats["median"]
+                    metrics_raw["train_r2_bin_count"] = train_stats["count"]
+                if test_stats:
+                    metrics_raw["test_r2"] = test_stats["mean"]
+                    metrics_raw["test_r2_bin_mean"] = test_stats["mean"]
+                    metrics_raw["test_r2_bin_median"] = test_stats["median"]
+                    metrics_raw["test_r2_bin_count"] = test_stats["count"]
             else:
                 metrics_raw = _compute_regression_metrics(
                     y_true_train_eval,
@@ -620,10 +638,16 @@ def train_group_models(
                 formula=formula,
                 test_relative_mae=metrics_raw["test_relative_mae"],
                 test_r2=metrics_raw["test_r2"],
+                test_r2_bin_mean=metrics_raw.get("test_r2_bin_mean"),
+                test_r2_bin_median=metrics_raw.get("test_r2_bin_median"),
+                test_r2_bin_count=metrics_raw.get("test_r2_bin_count"),
                 test_samples=len(y_test_raw),
                 train_samples=len(y_train),
                 train_relative_mae=metrics_raw["train_relative_mae"],
                 train_r2=metrics_raw["train_r2"],
+                train_r2_bin_mean=metrics_raw.get("train_r2_bin_mean"),
+                train_r2_bin_median=metrics_raw.get("train_r2_bin_median"),
+                train_r2_bin_count=metrics_raw.get("train_r2_bin_count"),
             )
         )
 
@@ -654,7 +678,7 @@ def train_group_models(
                 )
                 train_df["__y_pred__"] = y_pred_train
                 test_df_raw["__y_pred__"] = y_pred_lin
-                metrics_lin_raw["train_r2"] = binwise_r2(
+                train_stats = binwise_r2_stats(
                     train_df,
                     "p-ERK1-2_dt",
                     "__y_pred__",
@@ -662,7 +686,7 @@ def train_group_models(
                     dataset_mode,
                     clamp_negative=True,
                 )
-                metrics_lin_raw["test_r2"] = binwise_r2(
+                test_stats = binwise_r2_stats(
                     test_df_raw,
                     "p-ERK1-2_dt",
                     "__y_pred__",
@@ -670,6 +694,16 @@ def train_group_models(
                     dataset_mode,
                     clamp_negative=True,
                 )
+                if train_stats:
+                    metrics_lin_raw["train_r2"] = train_stats["mean"]
+                    metrics_lin_raw["train_r2_bin_mean"] = train_stats["mean"]
+                    metrics_lin_raw["train_r2_bin_median"] = train_stats["median"]
+                    metrics_lin_raw["train_r2_bin_count"] = train_stats["count"]
+                if test_stats:
+                    metrics_lin_raw["test_r2"] = test_stats["mean"]
+                    metrics_lin_raw["test_r2_bin_mean"] = test_stats["mean"]
+                    metrics_lin_raw["test_r2_bin_median"] = test_stats["median"]
+                    metrics_lin_raw["test_r2_bin_count"] = test_stats["count"]
             else:
                 metrics_lin_raw = _compute_regression_metrics(
                     y_train.values,
@@ -696,10 +730,16 @@ def train_group_models(
                 formula=formula_lin,
                 test_relative_mae=metrics_lin_raw["test_relative_mae"],
                 test_r2=metrics_lin_raw["test_r2"],
+                test_r2_bin_mean=metrics_lin_raw.get("test_r2_bin_mean"),
+                test_r2_bin_median=metrics_lin_raw.get("test_r2_bin_median"),
+                test_r2_bin_count=metrics_lin_raw.get("test_r2_bin_count"),
                 test_samples=len(y_test_raw),
                 train_samples=len(y_train),
                 train_relative_mae=metrics_lin_raw["train_relative_mae"],
                 train_r2=metrics_lin_raw["train_r2"],
+                train_r2_bin_mean=metrics_lin_raw.get("train_r2_bin_mean"),
+                train_r2_bin_median=metrics_lin_raw.get("train_r2_bin_median"),
+                train_r2_bin_count=metrics_lin_raw.get("train_r2_bin_count"),
             )
         )
     return results
@@ -742,8 +782,11 @@ def run_pipeline(args: argparse.Namespace) -> Path:
     RUN_SEED = args.random_state
     output_dir: Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    # Allow callers to point directly at a seed reports directory (e.g., .../reports/seed_42).
-    if output_dir.name.startswith("seed_") and output_dir.parent.name == "reports":
+    # Allow callers to point directly at a seed directory in the new layout (…/seeds/seed_<id>)
+    # or a legacy reports/seed_<id> path.
+    if output_dir.parent.name == "seeds":
+        reports_dir = output_dir
+    elif output_dir.name.startswith("seed_") and output_dir.parent.name == "reports":
         reports_dir = output_dir
     elif output_dir.name == "reports":
         reports_dir = output_dir
@@ -755,8 +798,12 @@ def run_pipeline(args: argparse.Namespace) -> Path:
     for path in (reports_dir, summary_dir, formulas_dir):
         path.mkdir(parents=True, exist_ok=True)
     metrics_dir.mkdir(parents=True, exist_ok=True)
+    plots_dir = output_dir / "plots"
+    overlays_dir = plots_dir / "overlays"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    overlays_dir.mkdir(parents=True, exist_ok=True)
 
-    seed_everything(args.random_state)
+    seed_all(args.random_state)
     LOGGER.info(
         "Starting functional group symbolic regression | random_state=%s | dataset_mode=%s | feature_modes=%s",
         args.random_state,
@@ -782,6 +829,7 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         run_configs = [("snapshot", args.dataset), ("per_minute", args.per_minute_dataset)]
     else:
         run_configs = [(args.dataset_mode, args.dataset)]
+    dataset_by_mode: Dict[str, Path] = {mode: path for mode, path in run_configs}
 
     all_results: List[GroupResult] = []
     trajectories_by_mode: Dict[str, List[Dict[str, object]]] = {"snapshot": [], "per_minute": []}
@@ -892,6 +940,7 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 "batching": args.batching,
                 "annealing": args.annealing,
                 "verbosity": args.verbosity,
+                "random_state": args.random_state,
 
                 # 👇 New bits
                 "loss_function": """println(">>> Custom loss LOADED")""" + loss_required_pERK,
@@ -1015,18 +1064,25 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 "test_log_relative_mae": res.test_relative_mae,  # legacy compatibility
                 "test_mae": None,
                 "test_log_mae": None,
-                "test_r2": res.test_r2,
-                "test_log_r2": res.test_r2,  # legacy compatibility
-                "train_relative_mae": res.train_relative_mae,
-                "train_log_relative_mae": res.train_relative_mae,
-                "train_mae": None,
-                "train_log_mae": None,
-                "train_r2": res.train_r2,
-                "train_log_r2": res.train_r2,
-                "train_samples": res.train_samples,
-                "test_samples_raw": res.test_samples,
-                "target_space": res.target_space,
-                "primary_test_r2": res.test_r2,
+            "test_r2": res.test_r2,
+            "test_log_r2": res.test_r2,  # legacy compatibility
+            "test_r2_bin_mean": res.test_r2_bin_mean,
+            "test_r2_bin_median": res.test_r2_bin_median,
+            "test_r2_bin_count": res.test_r2_bin_count,
+            "train_relative_mae": res.train_relative_mae,
+            "train_log_relative_mae": res.train_relative_mae,
+            "train_mae": None,
+            "train_log_mae": None,
+            "train_r2": res.train_r2,
+            "train_log_r2": res.train_r2,
+            "train_r2_bin_mean": res.train_r2_bin_mean,
+            "train_r2_bin_median": res.train_r2_bin_median,
+            "train_r2_bin_count": res.train_r2_bin_count,
+            "train_samples": res.train_samples,
+            "test_samples_raw": res.test_samples,
+            "target_space": res.target_space,
+            "primary_test_r2": res.test_r2,
+            "seed": RUN_SEED,
             }
             for res in all_results
         ]
@@ -1035,27 +1091,101 @@ def run_pipeline(args: argparse.Namespace) -> Path:
     summary_df.to_csv(summary_path, index=False)
     LOGGER.info("Wrote summary CSV to %s", summary_path)
     LOGGER.info("Symbolic regression pipeline completed | random_state=%s", args.random_state)
+
+    # Integration metrics + trajectories per dataset mode (feeds aggregated metrics)
+    for run_mode, dataset_path in dataset_by_mode.items():
+        metrics_out = metrics_dir / f"marker_integration_metrics_{run_mode}.csv"
+        traj_out = metrics_dir / f"marker_integration_trajectories_{run_mode}.csv"
+        sr_traj = metrics_dir / f"predicted_trajectories_{run_mode}.csv"
+        cmd = [
+            sys.executable,
+            "-m",
+            "experimental.sr_pipeline.compute_marker_integration",
+            "--dataset",
+            str(dataset_path),
+            "--summary",
+            str(summary_path),
+            "--output",
+            str(metrics_out),
+            "--trajectories-output",
+            str(traj_out),
+            "--dataset-mode",
+            run_mode,
+            "--test-size",
+            str(args.test_size),
+            "--random-state",
+            str(args.random_state),
+            "--seed",
+            str(args.random_state),
+            "--measured-timepoints",
+            *[str(t) for t in args.measured_timepoints],
+        ]
+        if sr_traj.exists():
+            cmd.extend(["--sr-trajectories", str(sr_traj)])
+        _run_module(cmd, f"integration metrics ({run_mode})")
+
+        # Per-seed overlay plots per model
+        if not sr_traj.exists():
+            continue
+        integ_traj = traj_out
+        integ_metrics = metrics_out
+        base_args = [
+            sys.executable,
+            "-m",
+            "experimental.sr_pipeline.plot_marker_overlays",
+            "--dataset",
+            str(dataset_path),
+            "--summary",
+            str(summary_path),
+            "--output-dir",
+            str(overlays_dir),
+            "--predicted-trajectories",
+            str(sr_traj),
+            "--dataset-mode",
+            run_mode,
+            "--measured-timepoints",
+            *[str(t) for t in args.measured_timepoints],
+            "--markers-per-fig",
+            "0",
+        ]
+        if integ_traj.exists():
+            base_args.extend(["--integration-trajectories", str(integ_traj)])
+        if integ_metrics.exists():
+            base_args.extend(["--integration-metrics", str(integ_metrics)])
+        for model in ("PySR", "Linear Regression"):
+            cmd_overlay = base_args + ["--model", model]
+            _run_module(cmd_overlay, f"overlay plots ({run_mode}, {model})")
     return summary_path
 
 
 def main() -> None:
     args = parse_args()
-    # If no seeds provided, run three seeds: base random_state and the next two ints.
-    if args.seeds:
-        seeds = args.seeds
-    else:
-        seeds = [args.random_state, args.random_state + 1, args.random_state + 2]
+    seeds = canonicalize_seeds(args.random_state, args.seeds)
     LOGGER.info("Running seeds in order: %s", seeds)
+    runs_layout = _is_runs_layout(args.output_dir)
+    seeds_root = args.output_dir / "seeds" if runs_layout else args.output_dir / "reports"
+    aggregated_root = args.output_dir / "aggregated" if runs_layout else args.output_dir / "reports"
+    aggregated_reports = aggregated_root / "reports" if runs_layout else aggregated_root
+    aggregated_summary_dir = aggregated_reports / "summary"
+    aggregated_formulas_dir = aggregated_reports / "formulas"
+    aggregated_metrics_dir = aggregated_root / "metrics"
+    aggregated_plots_dir = aggregated_root / "plots"
+    seeds_root.mkdir(parents=True, exist_ok=True)
+    aggregated_summary_dir.mkdir(parents=True, exist_ok=True)
+    aggregated_formulas_dir.mkdir(parents=True, exist_ok=True)
+    aggregated_metrics_dir.mkdir(parents=True, exist_ok=True)
+    aggregated_plots_dir.mkdir(parents=True, exist_ok=True)
     summary_paths: List[Path] = []
     for seed in seeds:
-        seed_dir = args.output_dir / "reports" / f"seed_{seed}"
+        seed_dir = seeds_root / f"seed_{seed}"
         seed_args = argparse.Namespace(**vars(args))
         seed_args.random_state = seed
         seed_args.output_dir = seed_dir
+        seed_all(seed)
         summary_paths.append(run_pipeline(seed_args))
 
     if len(seeds) > 1:
-        combined_dir = args.output_dir / "summary"
+        combined_dir = aggregated_summary_dir
         combined_dir.mkdir(parents=True, exist_ok=True)
         combined_path = combined_dir / "functional_group_summary_all_seeds.csv"
         frames: List[pd.DataFrame] = []
@@ -1074,24 +1204,20 @@ def main() -> None:
             if "formula" in combined_df.columns:
                 formulas = combined_df.groupby(keys, dropna=False)["formula"].first().reset_index()
                 agg_mean = agg_mean.merge(formulas, on=keys, how="left")
-            # Persist mean-over-seeds summary as canonical for metrics.
-            canonical_summary = args.output_dir / "reports" / "summary" / "functional_group_summary.csv"
+            canonical_summary = aggregated_summary_dir / "functional_group_summary.csv"
             canonical_summary.parent.mkdir(parents=True, exist_ok=True)
             agg_mean.to_csv(canonical_summary, index=False)
             LOGGER.info("Wrote mean-over-seeds summary to %s", canonical_summary)
 
-            # Also expose a single-seed summary (first seed) for trajectory-dependent plots.
-            seed_summary_path = args.output_dir / "reports" / "summary" / "functional_group_summary_seed.csv"
+            seed_summary_path = aggregated_summary_dir / "functional_group_summary_seed.csv"
             pd.read_csv(summary_paths[0]).to_csv(seed_summary_path, index=False)
             LOGGER.info("Saved first-seed summary to %s", seed_summary_path)
 
-            # Combine formula reports across seeds into canonical paths
-            formulas_dir = args.output_dir / "reports" / "formulas"
-            formulas_dir.mkdir(parents=True, exist_ok=True)
+            formulas_dir = aggregated_formulas_dir
             for mode in ("snapshot", "per_minute"):
                 combined_formula_lines: List[str] = []
                 for seed in seeds:
-                    seed_file = args.output_dir / "reports" / f"seed_{seed}" / "formulas" / f"all_{mode}.txt"
+                    seed_file = seeds_root / f"seed_{seed}" / "formulas" / f"all_{mode}.txt"
                     if seed_file.exists():
                         combined_formula_lines.append(f"# seed={seed}\\n")
                         combined_formula_lines.extend(seed_file.read_text().splitlines())
@@ -1102,22 +1228,60 @@ def main() -> None:
                     LOGGER.info("Wrote combined formula report to %s", out_formula)
                 else:
                     LOGGER.warning("No formula files found to combine for mode %s", mode)
+        plot_args = [
+            sys.executable,
+            "-m",
+            "experimental.sr_pipeline.plot_metrics_summary",
+            "--summary",
+            str(canonical_summary),
+            "--output-dir",
+            str(aggregated_plots_dir),
+            "--group-definitions-csv",
+            str(args.group_definitions_csv),
+            "--integration-metrics-dir",
+            str(aggregated_metrics_dir),
+            "--snapshot-dataset",
+            str(args.dataset),
+            "--measured-timepoints",
+            *[str(t) for t in args.measured_timepoints],
+        ]
+        if args.per_minute_dataset is not None:
+            plot_args.extend(["--per-minute-dataset", str(args.per_minute_dataset)])
+        _run_module(plot_args, "aggregated metrics summary plots")
     else:
-        # Single seed: ensure canonical files point to the seed outputs
         seed_summary = summary_paths[0]
-        canonical_summary = args.output_dir / "reports" / "summary" / "functional_group_summary.csv"
+        canonical_summary = aggregated_summary_dir / "functional_group_summary.csv"
         canonical_summary.parent.mkdir(parents=True, exist_ok=True)
         pd.read_csv(seed_summary).to_csv(canonical_summary, index=False)
-        seed_summary_path = args.output_dir / "reports" / "summary" / "functional_group_summary_seed.csv"
+        seed_summary_path = aggregated_summary_dir / "functional_group_summary_seed.csv"
         pd.read_csv(seed_summary).to_csv(seed_summary_path, index=False)
-        formulas_dir = args.output_dir / "reports" / "formulas"
-        formulas_dir.mkdir(parents=True, exist_ok=True)
+        formulas_dir = aggregated_formulas_dir
         for mode in ("snapshot", "per_minute"):
-            seed_formula = args.output_dir / "reports" / f"seed_{seeds[0]}" / "formulas" / f"all_{mode}.txt"
+            seed_formula = seeds_root / f"seed_{seeds[0]}" / "formulas" / f"all_{mode}.txt"
             if seed_formula.exists():
                 out_formula = formulas_dir / f"all_{mode}.txt"
                 out_formula.write_text(seed_formula.read_text())
                 LOGGER.info("Copied formula report to %s", out_formula)
+        plot_args = [
+            sys.executable,
+            "-m",
+            "experimental.sr_pipeline.plot_metrics_summary",
+            "--summary",
+            str(canonical_summary),
+            "--output-dir",
+            str(aggregated_plots_dir),
+            "--group-definitions-csv",
+            str(args.group_definitions_csv),
+            "--integration-metrics-dir",
+            str(aggregated_metrics_dir),
+            "--snapshot-dataset",
+            str(args.dataset),
+            "--measured-timepoints",
+            *[str(t) for t in args.measured_timepoints],
+        ]
+        if args.per_minute_dataset is not None:
+            plot_args.extend(["--per-minute-dataset", str(args.per_minute_dataset)])
+        _run_module(plot_args, "aggregated metrics summary plots")
 
 
 if __name__ == "__main__":

@@ -34,6 +34,27 @@ def binwise_r2(
     clamp_negative: bool = False,
 ) -> Optional[float]:
     """Mean per-bin R² (SSE/SST) with optional negative clamping."""
+    stats = binwise_r2_stats(
+        frame,
+        target_col,
+        pred_col,
+        measured_timepoints=measured_timepoints,
+        dataset_mode=dataset_mode,
+        clamp_negative=clamp_negative,
+    )
+    return stats["mean"] if stats is not None else None
+
+
+def binwise_r2_stats(
+    frame: pd.DataFrame,
+    target_col: str,
+    pred_col: str,
+    measured_timepoints: Sequence[float] | np.ndarray = (),
+    dataset_mode: str = "snapshot",
+    *,
+    clamp_negative: bool = False,
+) -> Optional[dict]:
+    """Per-bin R² stats: mean/median/count (equal weight per bin)."""
     if "GFP_bin" not in frame.columns:
         return None
     r2_vals: list[float] = []
@@ -50,4 +71,10 @@ def binwise_r2(
         if not np.isfinite(r2):
             continue
         r2_vals.append(max(0.0, r2) if clamp_negative else r2)
-    return float(np.mean(r2_vals)) if r2_vals else None
+    if not r2_vals:
+        return None
+    return {
+        "mean": float(np.mean(r2_vals)),
+        "median": float(np.median(r2_vals)),
+        "count": len(r2_vals),
+    }

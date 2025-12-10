@@ -34,7 +34,7 @@ experimental:
   - 1
   - 3
   force_rebin: false
-  sr_output_dir: data/experimental/functional_groups/outputs
+  sr_output_dir: data/experimental/runs
   feature_modes:
   - gfp
   - all

@@ -114,11 +114,18 @@ exp_group_definitions_csv = experimental_cfg.get(
 
 functional_group_base_dir = exp_processed_dir
 
-exp_sr_output_dir_cfg = experimental_cfg.get("sr_output_dir")
-if exp_sr_output_dir_cfg:
-    exp_sr_output_dir = exp_sr_output_dir_cfg.rstrip("/")
+exp_runs_root_cfg = experimental_cfg.get("runs_root") or experimental_cfg.get("sr_output_dir")
+if exp_runs_root_cfg:
+    exp_runs_root = exp_runs_root_cfg.rstrip("/")
 else:
-    exp_sr_output_dir = f"{functional_group_base_dir}/outputs"
+    exp_runs_root = "data/experimental/runs"
+exp_sr_output_dir = exp_runs_root
+exp_runs_aggregated = f"{exp_runs_root}/aggregated"
+exp_runs_seeds = f"{exp_runs_root}/seeds"
+exp_reports_root = f"{exp_runs_aggregated}/reports"
+exp_metrics_root = f"{exp_runs_aggregated}/metrics"
+exp_trajectories_root = f"{exp_runs_aggregated}/trajectories"
+exp_plots_root = f"{exp_runs_aggregated}/plots"
 
 # Pipeline now supports only 'all' feature mode
 exp_feature_modes = ["all"]
@@ -175,7 +182,7 @@ exp_tradeoff_include_uncapped = bool(experimental_cfg.get("tradeoff_include_unca
 exp_tradeoff_run_pysr = bool(experimental_cfg.get("tradeoff_run_pysr", True))
 exp_tradeoff_output_root = experimental_cfg.get(
     "tradeoff_output_root",
-    f"{exp_sr_output_dir}/tradeoff_runs",
+    f"{exp_runs_root}/tradeoff_runs",
 )
 exp_tradeoff_skip_existing = bool(experimental_cfg.get("tradeoff_skip_existing", True))
 exp_tradeoff_uncapped_max = int(experimental_cfg.get("tradeoff_uncapped_max", 1_000_000))
@@ -208,18 +215,18 @@ functional_group_time_series_csv = f"{functional_group_output_root}/functional_g
 functional_group_feature_matrix_csv = f"{functional_group_output_root}/functional_groups_feature_matrix.csv"
 functional_group_fit_snapshot_csv = f"{functional_group_output_root}/functional_groups_fit_snapshot.csv"
 functional_group_per_minute_csv = f"{functional_group_output_root}/functional_groups_per_minute_fit.csv"
-reports_summary_output = f"{exp_sr_output_dir}/reports/summary/functional_group_summary.csv"
-reports_summary_seed_output = f"{exp_sr_output_dir}/reports/summary/functional_group_summary_seed.csv"
+reports_summary_output = f"{exp_reports_root}/summary/functional_group_summary.csv"
+reports_summary_seed_output = f"{exp_reports_root}/summary/functional_group_summary_seed.csv"
 # Per-minute outputs still live under a subdir for plots convenience
 functional_group_formula_files = [
-    f"{exp_sr_output_dir}/reports/formulas/{mode}_{suffix}.txt"
+    f"{exp_reports_root}/formulas/{mode}_{suffix}.txt"
     for mode in exp_feature_modes
     for suffix in ("snapshot", "per_minute")
 ]
 functional_group_summary_output = reports_summary_output
 functional_group_summary_seed_output = reports_summary_seed_output
 
-plots_root = f"{exp_sr_output_dir}/plots"
+plots_root = exp_plots_root
 plots_overlays_dir = f"{plots_root}/overlays"
 plots_metrics_dir = f"{plots_root}/metrics"
 plots_metrics_scatter_dir = f"{plots_metrics_dir}/scatter"
@@ -229,23 +236,29 @@ plots_metrics_boxes_dir = f"{plots_metrics_dir}/boxes"
 
 # Overlay plot outputs (explicit per dataset mode)
 overlay_snapshot_plot = f"{plots_overlays_dir}/marker_overlay_snapshot.png"
-overlay_snapshot_metrics = f"{exp_sr_output_dir}/reports/metrics/marker_overlay_metrics_snapshot.csv"
+overlay_snapshot_metrics = f"{exp_metrics_root}/marker_overlay_metrics_snapshot.csv"
 overlay_snapshot_plot_svg = f"{plots_overlays_dir}/marker_overlay_snapshot.svg"
 overlay_per_minute_plot = f"{plots_overlays_dir}/marker_overlay_per_minute.png"
-overlay_per_minute_metrics = f"{exp_sr_output_dir}/reports/metrics/marker_overlay_metrics_per_minute.csv"
+overlay_per_minute_metrics = f"{exp_metrics_root}/marker_overlay_metrics_per_minute.csv"
 overlay_per_minute_plot_svg = f"{plots_overlays_dir}/marker_overlay_per_minute.svg"
 overlay_snapshot_linreg_plot = f"{plots_overlays_dir}/marker_overlay_linear_regression_snapshot.png"
 overlay_snapshot_linreg_plot_svg = f"{plots_overlays_dir}/marker_overlay_linear_regression_snapshot.svg"
-overlay_snapshot_linreg_metrics = f"{exp_sr_output_dir}/reports/metrics/marker_overlay_metrics_linear_regression_snapshot.csv"
+overlay_snapshot_linreg_metrics = f"{exp_metrics_root}/marker_overlay_metrics_linear_regression_snapshot.csv"
 overlay_per_minute_linreg_plot = f"{plots_overlays_dir}/marker_overlay_linear_regression_per_minute.png"
 overlay_per_minute_linreg_plot_svg = f"{plots_overlays_dir}/marker_overlay_linear_regression_per_minute.svg"
-overlay_per_minute_linreg_metrics = f"{exp_sr_output_dir}/reports/metrics/marker_overlay_metrics_linear_regression_per_minute.csv"
-integration_snapshot_metrics = f"{exp_sr_output_dir}/reports/metrics/marker_integration_metrics_snapshot.csv"
-integration_per_minute_metrics = f"{exp_sr_output_dir}/reports/metrics/marker_integration_metrics_per_minute.csv"
-integration_snapshot_traj = f"{exp_sr_output_dir}/reports/metrics/marker_integration_trajectories_snapshot.csv"
-integration_per_minute_traj = f"{exp_sr_output_dir}/reports/metrics/marker_integration_trajectories_per_minute.csv"
+overlay_per_minute_linreg_metrics = f"{exp_metrics_root}/marker_overlay_metrics_linear_regression_per_minute.csv"
+integration_snapshot_metrics = f"{exp_metrics_root}/marker_integration_metrics_snapshot.csv"
+integration_per_minute_metrics = f"{exp_metrics_root}/marker_integration_metrics_per_minute.csv"
+integration_snapshot_traj = f"{exp_trajectories_root}/marker_integration_trajectories_snapshot.csv"
+integration_per_minute_traj = f"{exp_trajectories_root}/marker_integration_trajectories_per_minute.csv"
+predicted_snapshot_traj = f"{exp_trajectories_root}/predicted_trajectories_snapshot.csv"
+predicted_per_minute_traj = f"{exp_trajectories_root}/predicted_trajectories_per_minute.csv"
+integration_snapshot_metrics_all_seeds = f"{exp_metrics_root}/marker_integration_metrics_snapshot_all_seeds.csv"
+integration_per_minute_metrics_all_seeds = f"{exp_metrics_root}/marker_integration_metrics_per_minute_all_seeds.csv"
+integration_snapshot_metrics_all_seeds_mean = f"{exp_metrics_root}/marker_integration_metrics_snapshot_all_seeds_mean.csv"
+integration_per_minute_metrics_all_seeds_mean = f"{exp_metrics_root}/marker_integration_metrics_per_minute_all_seeds_mean.csv"
 
-select_k_dir = f"{plots_root}/select_k_sweep"
+select_k_dir = f"{exp_runs_root}/select_k"
 select_k_metrics = f"{select_k_dir}/select_k_metrics.csv"
 select_k_metrics_agg = f"{select_k_dir}/select_k_metrics_agg.csv"
 select_k_importance = f"{select_k_dir}/select_k_importance.csv"
@@ -562,90 +575,132 @@ if enzyme_model == "experimental":
             integration_per_minute=integration_per_minute_metrics,
             integration_snapshot_traj=integration_snapshot_traj,
             integration_per_minute_traj=integration_per_minute_traj,
-            predicted_snapshot=f"{exp_sr_output_dir}/reports/metrics/predicted_trajectories_snapshot.csv",
-            predicted_per_minute=f"{exp_sr_output_dir}/reports/metrics/predicted_trajectories_per_minute.csv"
+            predicted_snapshot=predicted_snapshot_traj,
+            predicted_per_minute=predicted_per_minute_traj,
         conda:
             "envs/pysr.yaml"
         params:
-            metrics_dir=f"{exp_sr_output_dir}/reports/metrics",
+            metrics_dir=exp_metrics_root,
+            seeds_dir=exp_runs_seeds,
             measured=" ".join(str(t) for t in exp_measured_timepoints),
+            trajectories_dir=exp_trajectories_root,
         shell:
             """
-            mkdir -p {params.metrics_dir}
-            reports_root="$(dirname {params.metrics_dir})"
-            seed_summaries=($(ls "$reports_root"/seed_*/summary/functional_group_summary.csv 2>/dev/null || true))
+            mkdir -p {params.metrics_dir} {params.trajectories_dir}
+            seed_summaries=($(ls {params.seeds_dir}/seed_*/summary/functional_group_summary.csv 2>/dev/null || true))
 
             rm -f {output.integration_snapshot} {output.integration_per_minute} \
-                  {output.integration_snapshot_traj} {output.integration_per_minute_traj}
+                  {output.integration_snapshot_traj} {output.integration_per_minute_traj} \
+                  {output.predicted_snapshot} {output.predicted_per_minute} \
+                  {integration_snapshot_metrics_all_seeds} {integration_per_minute_metrics_all_seeds} \
+                  {integration_snapshot_metrics_all_seeds_mean} {integration_per_minute_metrics_all_seeds_mean}
 
-            if [ "${#seed_summaries[@]}" -gt 0 ]; then
-                for summary_path in "${seed_summaries[@]}"; do
+            if [ "${{#seed_summaries[@]}}" -gt 0 ]; then
+                for summary_path in "${{seed_summaries[@]}}"; do
                     seed_id="$(basename "$(dirname "$(dirname "$summary_path")")" | sed 's/seed_//')"
+                    seed_metrics_dir="{params.seeds_dir}/seed_${{seed_id}}/metrics"
+                    mkdir -p "$seed_metrics_dir"
+                    seed_snapshot="$seed_metrics_dir/marker_integration_metrics_snapshot.csv"
+                    seed_per_minute="$seed_metrics_dir/marker_integration_metrics_per_minute.csv"
+                    seed_snapshot_traj="$seed_metrics_dir/marker_integration_trajectories_snapshot.csv"
+                    seed_per_minute_traj="$seed_metrics_dir/marker_integration_trajectories_per_minute.csv"
                     python src/experimental/sr_pipeline/compute_marker_integration.py \
                         --dataset {input.snapshot} \
                         --summary "$summary_path" \
-                        --sr-trajectories "$reports_root/seed_${seed_id}/metrics/predicted_trajectories_snapshot.csv" \
+                        --sr-trajectories "{params.seeds_dir}/seed_${{seed_id}}/metrics/predicted_trajectories_snapshot.csv" \
                         --dataset-mode snapshot \
-                        --output {output.integration_snapshot}.tmp \
-                        --trajectories-output {output.integration_snapshot_traj}.tmp \
-                        --aggregate-output {output.integration_snapshot}.agg_all.csv \
+                        --output "$seed_snapshot" \
+                        --trajectories-output "$seed_snapshot_traj" \
+                        --aggregate-output {integration_snapshot_metrics_all_seeds} \
                         --measured-timepoints {params.measured} \
                         --seed "$seed_id"
-                    if [ ! -f {output.integration_snapshot} ]; then
-                        mv {output.integration_snapshot}.tmp {output.integration_snapshot}
-                        mv {output.integration_snapshot_traj}.tmp {output.integration_snapshot_traj}
-                    else
-                        tail -n +2 {output.integration_snapshot}.tmp >> {output.integration_snapshot}
-                        tail -n +2 {output.integration_snapshot_traj}.tmp >> {output.integration_snapshot_traj}
-                        rm -f {output.integration_snapshot}.tmp {output.integration_snapshot_traj}.tmp
-                    fi
 
                     python src/experimental/sr_pipeline/compute_marker_integration.py \
                         --dataset {input.per_minute} \
                         --summary "$summary_path" \
-                        --sr-trajectories "$reports_root/seed_${seed_id}/metrics/predicted_trajectories_per_minute.csv" \
+                        --sr-trajectories "{params.seeds_dir}/seed_${{seed_id}}/metrics/predicted_trajectories_per_minute.csv" \
                         --dataset-mode per_minute \
-                        --output {output.integration_per_minute}.tmp \
-                        --trajectories-output {output.integration_per_minute_traj}.tmp \
-                        --aggregate-output {output.integration_per_minute}.agg_all.csv \
+                        --output "$seed_per_minute" \
+                        --trajectories-output "$seed_per_minute_traj" \
+                        --aggregate-output {integration_per_minute_metrics_all_seeds} \
                         --measured-timepoints {params.measured} \
                         --seed "$seed_id"
-                    if [ ! -f {output.integration_per_minute} ]; then
-                        mv {output.integration_per_minute}.tmp {output.integration_per_minute}
-                        mv {output.integration_per_minute_traj}.tmp {output.integration_per_minute_traj}
-                    else
-                        tail -n +2 {output.integration_per_minute}.tmp >> {output.integration_per_minute}
-                        tail -n +2 {output.integration_per_minute_traj}.tmp >> {output.integration_per_minute_traj}
-                        rm -f {output.integration_per_minute}.tmp {output.integration_per_minute_traj}.tmp
-                    fi
                 done
+
+                # Aggregate integration trajectories across seeds
+                for mode in snapshot per_minute; do
+                    out_file="{params.trajectories_dir}/marker_integration_trajectories_${{mode}}.csv"
+                    rm -f "$out_file"
+                    for summary_path in "${{seed_summaries[@]}}"; do
+                        seed_id="$(basename "$(dirname "$(dirname "$summary_path")")" | sed 's/seed_//')"
+                        src_file="{params.seeds_dir}/seed_${{seed_id}}/metrics/marker_integration_trajectories_${{mode}}.csv"
+                        if [ -f "$src_file" ]; then
+                            if [ ! -f "$out_file" ]; then
+                                cp "$src_file" "$out_file"
+                            else
+                                tail -n +2 "$src_file" >> "$out_file"
+                            fi
+                        fi
+                    done
+                done
+
             else
+                # Single-seed fallback: write seed metrics/trajectories into a seed_single directory
+                seed_id="single"
+                seed_metrics_dir="{params.seeds_dir}/seed_${{seed_id}}/metrics"
+                mkdir -p "$seed_metrics_dir"
                 python src/experimental/sr_pipeline/compute_marker_integration.py \
                     --dataset {input.snapshot} \
                     --summary {input.summary_seed} \
-                    --sr-trajectories {output.predicted_snapshot} \
+                    --sr-trajectories "$seed_metrics_dir/predicted_trajectories_snapshot.csv" \
                     --dataset-mode snapshot \
-                    --output {output.integration_snapshot} \
-                    --trajectories-output {output.integration_snapshot_traj} \
+                    --output "$seed_metrics_dir/marker_integration_metrics_snapshot.csv" \
+                    --trajectories-output "$seed_metrics_dir/marker_integration_trajectories_snapshot.csv" \
+                    --aggregate-output {integration_snapshot_metrics_all_seeds} \
                     --measured-timepoints {params.measured}
                 python src/experimental/sr_pipeline/compute_marker_integration.py \
                     --dataset {input.per_minute} \
                     --summary {input.summary_seed} \
-                    --sr-trajectories {output.predicted_per_minute} \
+                    --sr-trajectories "$seed_metrics_dir/predicted_trajectories_per_minute.csv" \
                     --dataset-mode per_minute \
-                    --output {output.integration_per_minute} \
-                    --trajectories-output {output.integration_per_minute_traj} \
+                    --output "$seed_metrics_dir/marker_integration_metrics_per_minute.csv" \
+                    --trajectories-output "$seed_metrics_dir/marker_integration_trajectories_per_minute.csv" \
+                    --aggregate-output {integration_per_minute_metrics_all_seeds} \
                     --measured-timepoints {params.measured}
+
+                cp "$seed_metrics_dir/marker_integration_trajectories_snapshot.csv" {output.integration_snapshot_traj}
+                cp "$seed_metrics_dir/marker_integration_trajectories_per_minute.csv" {output.integration_per_minute_traj}
+                if [ -f "$seed_metrics_dir/predicted_trajectories_snapshot.csv" ]; then
+                    cp "$seed_metrics_dir/predicted_trajectories_snapshot.csv" {output.predicted_snapshot}
+                fi
+                if [ -f "$seed_metrics_dir/predicted_trajectories_per_minute.csv" ]; then
+                    cp "$seed_metrics_dir/predicted_trajectories_per_minute.csv" {output.predicted_per_minute}
+                fi
+            fi
+
+            # Ensure trajectory outputs are present for Snakemake
+            touch {output.integration_snapshot_traj} {output.integration_per_minute_traj}
+
+            # Copy mean/all-seed aggregates to canonical output locations
+            if [ -f {integration_snapshot_metrics_all_seeds_mean} ]; then
+                cp {integration_snapshot_metrics_all_seeds_mean} {output.integration_snapshot}
+            elif [ -f {integration_snapshot_metrics_all_seeds} ]; then
+                cp {integration_snapshot_metrics_all_seeds} {output.integration_snapshot}
+            fi
+            if [ -f {integration_per_minute_metrics_all_seeds_mean} ]; then
+                cp {integration_per_minute_metrics_all_seeds_mean} {output.integration_per_minute}
+            elif [ -f {integration_per_minute_metrics_all_seeds} ]; then
+                cp {integration_per_minute_metrics_all_seeds} {output.integration_per_minute}
             fi
 
             # Aggregate predicted trajectories across seeds for phase mapping/plots
             rm -f {output.predicted_snapshot} {output.predicted_per_minute}
-            if [ "${#seed_summaries[@]}" -gt 0 ]; then
-                for summary_path in "${seed_summaries[@]}"; do
+            if [ "${{#seed_summaries[@]}}" -gt 0 ]; then
+                for summary_path in "${{seed_summaries[@]}}"; do
                     seed_dir="$(dirname "$summary_path")/../metrics"
                     for mode in snapshot per_minute; do
-                        src_file="$seed_dir/predicted_trajectories_${mode}.csv"
-                        dest_file="{params.metrics_dir}/predicted_trajectories_${mode}.csv"
+                        src_file="$seed_dir/predicted_trajectories_${{mode}}.csv"
+                        dest_file="{params.trajectories_dir}/predicted_trajectories_${{mode}}.csv"
                         if [ -f "$src_file" ]; then
                             if [ ! -f "$dest_file" ]; then
                                 cp "$src_file" "$dest_file"
@@ -669,18 +724,6 @@ if enzyme_model == "experimental":
             integration_snapshot_traj=integration_snapshot_traj,
             integration_per_minute_traj=integration_per_minute_traj
         output:
-            overlay_snapshot=overlay_snapshot_plot,
-            overlay_snapshot_svg=overlay_snapshot_plot_svg,
-            metrics_snapshot=overlay_snapshot_metrics,
-            overlay_per_minute=overlay_per_minute_plot,
-            overlay_per_minute_svg=overlay_per_minute_plot_svg,
-            metrics_per_minute=overlay_per_minute_metrics,
-            overlay_snapshot_linreg=overlay_snapshot_linreg_plot,
-            overlay_snapshot_linreg_svg=overlay_snapshot_linreg_plot_svg,
-            metrics_snapshot_linreg=overlay_snapshot_linreg_metrics,
-            overlay_per_minute_linreg=overlay_per_minute_linreg_plot,
-            overlay_per_minute_linreg_svg=overlay_per_minute_linreg_plot_svg,
-            metrics_per_minute_linreg=overlay_per_minute_linreg_metrics,
             metrics_models_r2=metrics_models_r2,
             metrics_models_r2_svg=metrics_models_r2_svg,
             metrics_models_relmae=metrics_models_relmae,
@@ -712,71 +755,137 @@ if enzyme_model == "experimental":
         conda:
             "envs/pysr.yaml"
         params:
-            overlays_dir=plots_overlays_dir,
+            overlays_dir=exp_runs_seeds,
             metrics_plots_dir=plots_metrics_dir,
             measured=" ".join(str(t) for t in exp_measured_timepoints),
-            metrics_dir=f"{exp_sr_output_dir}/reports/metrics",
+            metrics_dir=exp_metrics_root,
+            seeds_dir=exp_runs_seeds,
         shell:
             """
             mkdir -p {params.overlays_dir} {params.metrics_plots_dir} {params.metrics_dir}
+            seed_summaries=($(ls {params.seeds_dir}/seed_*/summary/functional_group_summary.csv 2>/dev/null || true))
 
-            # Snapshot plots
-            python src/experimental/sr_pipeline/plot_marker_overlays.py \
-                --dataset {input.snapshot} \
-                --summary {input.summary_seed} \
-                --summary-seed {input.summary_seed} \
-                --output-dir {params.overlays_dir} \
-                --dataset-mode snapshot \
-                --filter-dataset-mode snapshot \
-                --measured-timepoints {params.measured} \
-                --fig-base marker_overlay_snapshot \
-                --metrics-csv marker_overlay_metrics_snapshot.csv \
-                --metrics-output-dir {params.metrics_dir} \
-                --integration-trajectories {input.integration_snapshot_traj} \
-                --integration-metrics {input.integration_snapshot}
-            python src/experimental/sr_pipeline/plot_marker_overlays.py \
-                --dataset {input.snapshot} \
-                --summary {input.summary_seed} \
-                --summary-seed {input.summary_seed} \
-                --output-dir {params.overlays_dir} \
-                --dataset-mode snapshot \
-                --filter-dataset-mode snapshot \
-                --measured-timepoints {params.measured} \
-                --fig-base marker_overlay_linear_regression_snapshot \
-                --metrics-csv marker_overlay_metrics_linear_regression_snapshot.csv \
-                --metrics-output-dir {params.metrics_dir} \
-                --integration-trajectories {input.integration_snapshot_traj} \
-                --integration-metrics {input.integration_snapshot} \
-                --model "Linear Regression"
+            if [ "${{#seed_summaries[@]}}" -gt 0 ]; then
+                # Per-seed overlays only
+                for summary_path in "${{seed_summaries[@]}}"; do
+                    seed_id="$(basename "$(dirname "$(dirname "$summary_path")")" | sed 's/seed_//')"
+                    seed_metrics_dir="{params.seeds_dir}/seed_${{seed_id}}/metrics"
+                    seed_overlay_dir="{params.overlays_dir}/seed_${{seed_id}}"
+                    mkdir -p "$seed_overlay_dir" "$seed_metrics_dir"
 
-            # Per-minute plots
-            python src/experimental/sr_pipeline/plot_marker_overlays.py \
-                --dataset {input.per_minute} \
-                --summary {input.summary_seed} \
-                --summary-seed {input.summary_seed} \
-                --output-dir {params.overlays_dir} \
-                --dataset-mode per_minute \
-                --filter-dataset-mode per_minute \
-                --measured-timepoints {params.measured} \
-                --fig-base marker_overlay_per_minute \
-                --metrics-csv marker_overlay_metrics_per_minute.csv \
-                --metrics-output-dir {params.metrics_dir} \
-                --integration-trajectories {input.integration_per_minute_traj} \
-                --integration-metrics {input.integration_per_minute}
-            python src/experimental/sr_pipeline/plot_marker_overlays.py \
-                --dataset {input.per_minute} \
-                --summary {input.summary_seed} \
-                --summary-seed {input.summary_seed} \
-                --output-dir {params.overlays_dir} \
-                --dataset-mode per_minute \
-                --filter-dataset-mode per_minute \
-                --measured-timepoints {params.measured} \
-                --fig-base marker_overlay_linear_regression_per_minute \
-                --metrics-csv marker_overlay_metrics_linear_regression_per_minute.csv \
-                --metrics-output-dir {params.metrics_dir} \
-                --integration-trajectories {input.integration_per_minute_traj} \
-                --integration-metrics {input.integration_per_minute} \
-                --model "Linear Regression"
+                    python src/experimental/sr_pipeline/plot_marker_overlays.py \
+                        --dataset {input.snapshot} \
+                        --summary "$summary_path" \
+                        --summary-seed "$summary_path" \
+                        --output-dir "$seed_overlay_dir" \
+                        --dataset-mode snapshot \
+                        --filter-dataset-mode snapshot \
+                        --measured-timepoints {params.measured} \
+                        --fig-base marker_overlay_snapshot \
+                        --metrics-csv marker_overlay_metrics_snapshot.csv \
+                        --metrics-output-dir "$seed_metrics_dir" \
+                        --integration-trajectories "$seed_metrics_dir/marker_integration_trajectories_snapshot.csv" \
+                        --integration-metrics "$seed_metrics_dir/marker_integration_metrics_snapshot.csv"
+                    python src/experimental/sr_pipeline/plot_marker_overlays.py \
+                        --dataset {input.snapshot} \
+                        --summary "$summary_path" \
+                        --summary-seed "$summary_path" \
+                        --output-dir "$seed_overlay_dir" \
+                        --dataset-mode snapshot \
+                        --filter-dataset-mode snapshot \
+                        --measured-timepoints {params.measured} \
+                        --fig-base marker_overlay_linear_regression_snapshot \
+                        --metrics-csv marker_overlay_metrics_linear_regression_snapshot.csv \
+                        --metrics-output-dir "$seed_metrics_dir" \
+                        --integration-trajectories "$seed_metrics_dir/marker_integration_trajectories_snapshot.csv" \
+                        --integration-metrics "$seed_metrics_dir/marker_integration_metrics_snapshot.csv" \
+                        --model "Linear Regression"
+
+                    python src/experimental/sr_pipeline/plot_marker_overlays.py \
+                        --dataset {input.per_minute} \
+                        --summary "$summary_path" \
+                        --summary-seed "$summary_path" \
+                        --output-dir "$seed_overlay_dir" \
+                        --dataset-mode per_minute \
+                        --filter-dataset-mode per_minute \
+                        --measured-timepoints {params.measured} \
+                        --fig-base marker_overlay_per_minute \
+                        --metrics-csv marker_overlay_metrics_per_minute.csv \
+                        --metrics-output-dir "$seed_metrics_dir" \
+                        --integration-trajectories "$seed_metrics_dir/marker_integration_trajectories_per_minute.csv" \
+                        --integration-metrics "$seed_metrics_dir/marker_integration_metrics_per_minute.csv"
+                    python src/experimental/sr_pipeline/plot_marker_overlays.py \
+                        --dataset {input.per_minute} \
+                        --summary "$summary_path" \
+                        --summary-seed "$summary_path" \
+                        --output-dir "$seed_overlay_dir" \
+                        --dataset-mode per_minute \
+                        --filter-dataset-mode per_minute \
+                        --measured-timepoints {params.measured} \
+                        --fig-base marker_overlay_linear_regression_per_minute \
+                        --metrics-csv marker_overlay_metrics_linear_regression_per_minute.csv \
+                        --metrics-output-dir "$seed_metrics_dir" \
+                        --integration-trajectories "$seed_metrics_dir/marker_integration_trajectories_per_minute.csv" \
+                        --integration-metrics "$seed_metrics_dir/marker_integration_metrics_per_minute.csv" \
+                        --model "Linear Regression"
+                done
+            else
+                # Single-seed case: render overlays once
+                python src/experimental/sr_pipeline/plot_marker_overlays.py \
+                    --dataset {input.snapshot} \
+                    --summary {input.summary_seed} \
+                    --summary-seed {input.summary_seed} \
+                    --output-dir {params.overlays_dir} \
+                    --dataset-mode snapshot \
+                    --filter-dataset-mode snapshot \
+                    --measured-timepoints {params.measured} \
+                    --fig-base marker_overlay_snapshot \
+                    --metrics-csv marker_overlay_metrics_snapshot.csv \
+                    --metrics-output-dir {params.metrics_dir} \
+                    --integration-trajectories {input.integration_snapshot_traj} \
+                    --integration-metrics {input.integration_snapshot}
+                python src/experimental/sr_pipeline/plot_marker_overlays.py \
+                    --dataset {input.snapshot} \
+                    --summary {input.summary_seed} \
+                    --summary-seed {input.summary_seed} \
+                    --output-dir {params.overlays_dir} \
+                    --dataset-mode snapshot \
+                    --filter-dataset-mode snapshot \
+                    --measured-timepoints {params.measured} \
+                    --fig-base marker_overlay_linear_regression_snapshot \
+                    --metrics-csv marker_overlay_metrics_linear_regression_snapshot.csv \
+                    --metrics-output-dir {params.metrics_dir} \
+                    --integration-trajectories {input.integration_snapshot_traj} \
+                    --integration-metrics {input.integration_snapshot} \
+                    --model "Linear Regression"
+                python src/experimental/sr_pipeline/plot_marker_overlays.py \
+                    --dataset {input.per_minute} \
+                    --summary {input.summary_seed} \
+                    --summary-seed {input.summary_seed} \
+                    --output-dir {params.overlays_dir} \
+                    --dataset-mode per_minute \
+                    --filter-dataset-mode per_minute \
+                    --measured-timepoints {params.measured} \
+                    --fig-base marker_overlay_per_minute \
+                    --metrics-csv marker_overlay_metrics_per_minute.csv \
+                    --metrics-output-dir {params.metrics_dir} \
+                    --integration-trajectories {input.integration_per_minute_traj} \
+                    --integration-metrics {input.integration_per_minute}
+                python src/experimental/sr_pipeline/plot_marker_overlays.py \
+                    --dataset {input.per_minute} \
+                    --summary {input.summary_seed} \
+                    --summary-seed {input.summary_seed} \
+                    --output-dir {params.overlays_dir} \
+                    --dataset-mode per_minute \
+                    --filter-dataset-mode per_minute \
+                    --measured-timepoints {params.measured} \
+                    --fig-base marker_overlay_linear_regression_per_minute \
+                    --metrics-csv marker_overlay_metrics_linear_regression_per_minute.csv \
+                    --metrics-output-dir {params.metrics_dir} \
+                    --integration-trajectories {input.integration_per_minute_traj} \
+                    --integration-metrics {input.integration_per_minute} \
+                    --model "Linear Regression"
+            fi
 
             # Metrics scatter/KDE (all rows, both models)
             python src/experimental/sr_pipeline/plot_metrics_summary.py \
