@@ -37,6 +37,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from experimental.sr_pipeline.run_functional_groups import (  # type: ignore
     EXCLUDE_COLUMNS,
     choose_bin_split,
+    REL_MAE_EPS,
     sanitize_feature_names,
 )
 from experimental.sr_pipeline.metrics import coefficient_of_determination  # type: ignore
@@ -69,7 +70,7 @@ ODE_DERIV_PERCENTILES = (0.01, 0.99)
 ODE_DERIV_MARGIN_FRAC = 0.25
 
 # Small epsilon for sanitising PySR formulas (avoid singularities)
-PY_SR_SAFE_DIVISION_EPS = 1e-3
+PY_SR_SAFE_DIVISION_EPS = 1e-1
 
 
 # -----------------------------------------------------------------------------
@@ -339,6 +340,8 @@ def integrate_single_marker(
     traj_records: List[Dict[str, object]] = []
     bins = sorted(sub["GFP_bin"].dropna().unique().tolist())
     integ_r2_vals: List[float] = []
+    integ_rel_mae_vals: List[float] = []
+    dt_rel_mae_vals: List[float] = []
     dt_r2_vals: List[float] = []
     integrated_bins = 0
 
@@ -392,6 +395,16 @@ def integrate_single_marker(
             except Exception:
                 pass
 
+        rel_dt_mask = meas_mask & np.isfinite(dt_pred) & np.isfinite(obs_dt)
+        if np.any(rel_dt_mask):
+            try:
+                denom = np.maximum(np.abs(obs_dt[rel_dt_mask]), REL_MAE_EPS)
+                rel_mae = float(np.mean(np.abs(dt_pred[rel_dt_mask] - obs_dt[rel_dt_mask]) / denom))
+                if np.isfinite(rel_mae):
+                    dt_rel_mae_vals.append(rel_mae)
+            except Exception:
+                pass
+
         # integrated R² vs observed p-ERK
         if (
             meas_mask.sum() > 1
@@ -403,6 +416,16 @@ def integrate_single_marker(
                 if np.isfinite(r2):
                     integ_r2_vals.append(float(r2))
                     integrated_bins += 1
+            except Exception:
+                pass
+
+        rel_mask = meas_mask & np.isfinite(integ) & np.isfinite(obs_pe)
+        if np.any(rel_mask):
+            try:
+                denom = np.maximum(np.abs(obs_pe[rel_mask]), REL_MAE_EPS)
+                rel_mae = float(np.mean(np.abs(integ[rel_mask] - obs_pe[rel_mask]) / denom))
+                if np.isfinite(rel_mae):
+                    integ_rel_mae_vals.append(rel_mae)
             except Exception:
                 pass
 
@@ -424,19 +447,31 @@ def integrate_single_marker(
 
     dt_r2_vals = [float(v) for v in dt_r2_vals if np.isfinite(v)]
     integ_r2_vals = [float(v) for v in integ_r2_vals if np.isfinite(v)]
+    integ_rel_mae_vals = [float(v) for v in integ_rel_mae_vals if np.isfinite(v)]
+    dt_rel_mae_vals = [float(v) for v in dt_rel_mae_vals if np.isfinite(v)]
     dt_r2_mean_bins = float(np.mean(dt_r2_vals)) if dt_r2_vals else np.nan
     dt_r2_median_bins = float(np.median(dt_r2_vals)) if dt_r2_vals else np.nan
+    dt_rel_mae_mean_bins = float(np.mean(dt_rel_mae_vals)) if dt_rel_mae_vals else np.nan
+    dt_rel_mae_median_bins = float(np.median(dt_rel_mae_vals)) if dt_rel_mae_vals else np.nan
     # Legacy column keeps the clamped mean for backward compatibility
     dt_r2_mean = max(0.0, dt_r2_mean_bins) if np.isfinite(dt_r2_mean_bins) else np.nan
     integ_r2_median = float(np.median(integ_r2_vals)) if integ_r2_vals else np.nan
     if np.isfinite(integ_r2_median):
         integ_r2_median = max(0.0, integ_r2_median)
+    integ_rel_mae_mean_bins = float(np.mean(integ_rel_mae_vals)) if integ_rel_mae_vals else np.nan
+    integ_rel_mae_median_bins = float(np.median(integ_rel_mae_vals)) if integ_rel_mae_vals else np.nan
     metrics = {
         "dt_r2": dt_r2_mean,
         "dt_r2_mean_bins": dt_r2_mean_bins,
         "dt_r2_median_bins": dt_r2_median_bins,
         "dt_r2_valid_bins": len(dt_r2_vals),
+        "dt_rel_mae_mean_bins": dt_rel_mae_mean_bins,
+        "dt_rel_mae_median_bins": dt_rel_mae_median_bins,
+        "dt_rel_mae_valid_bins": len(dt_rel_mae_vals),
         "integ_r2_median": integ_r2_median,
+        "integ_rel_mae_mean_bins": integ_rel_mae_mean_bins,
+        "integ_rel_mae_median_bins": integ_rel_mae_median_bins,
+        "integ_rel_mae_valid_bins": len(integ_rel_mae_vals),
         "bins": len(bins),
         "integrated_bins": integrated_bins,
     }
@@ -543,13 +578,18 @@ def integrate_marker_ode(
     traj_records: List[Dict[str, object]] = []
     bins = sorted(sub["GFP_bin"].dropna().unique().tolist())
     if not bins:
+        # Treat missing bins as a failed ODE run (R2 = 0)
         return {
-            "ode_integ_r2_median": np.nan,
+            "ode_integ_r2_median": 0.0,
+            "ode_integ_rel_mae_mean_bins": np.nan,
+            "ode_integ_rel_mae_median_bins": np.nan,
+            "ode_integ_rel_mae_valid_bins": 0,
             "ode_bins": 0,
             "ode_integrated_bins": 0,
         }, []
 
     integ_r2_vals: List[float] = []
+    integ_rel_mae_vals: List[float] = []
     integrated_bins = 0
     used_solvers: set = set()
 
@@ -565,7 +605,10 @@ def integrate_marker_ode(
     mask0 = np.isfinite(t0) & np.isfinite(g0[target_col].to_numpy(dtype=float))
     if mask0.sum() < 2:
         return {
-            "ode_integ_r2_median": np.nan,
+            "ode_integ_r2_median": 0.0,
+            "ode_integ_rel_mae_mean_bins": np.nan,
+            "ode_integ_rel_mae_median_bins": np.nan,
+            "ode_integ_rel_mae_valid_bins": 0,
             "ode_bins": len(bins),
             "ode_integrated_bins": 0,
         }, []
@@ -617,9 +660,12 @@ def integrate_marker_ode(
 
         # Ensure time grid matches the canonical grid; if not, skip ODE for this bin
         if t.shape != t_grid_np.shape or not np.allclose(t, t_grid_np):
+            canon_str = np.array2string(t_grid_np, precision=3, separator=",")
+            obs_str = np.array2string(t, precision=3, separator=",")
             print(
                 f"[compute_marker_integration] {log_label or ''} bin {b}: "
-                "time grid differs from canonical; skipping ODE integration for this bin."
+                "time grid differs from canonical; skipping ODE integration for this bin. "
+                f"canonical={canon_str} observed={obs_str}"
             )
             continue
 
@@ -681,6 +727,16 @@ def integrate_marker_ode(
             except Exception:
                 pass
 
+        rel_mask = meas_mask & np.isfinite(integ) & np.isfinite(obs_pe)
+        if np.any(rel_mask):
+            try:
+                denom = np.maximum(np.abs(obs_pe[rel_mask]), REL_MAE_EPS)
+                rel_mae = float(np.mean(np.abs(integ[rel_mask] - obs_pe[rel_mask]) / denom))
+                if np.isfinite(rel_mae):
+                    integ_rel_mae_vals.append(rel_mae)
+            except Exception:
+                pass
+
         if include_trajectories:
             # Recompute dt along trajectory (using JAX formula) for logging
             dt_preds: List[float] = []
@@ -715,11 +771,16 @@ def integrate_marker_ode(
                     }
                 )
 
-    ode_r2_median = float(np.median(integ_r2_vals)) if integ_r2_vals else np.nan
+    ode_r2_median = float(np.median(integ_r2_vals)) if integ_r2_vals else 0.0
     if np.isfinite(ode_r2_median):
         ode_r2_median = max(0.0, ode_r2_median)
+    ode_rel_mae_mean_bins = float(np.mean(integ_rel_mae_vals)) if integ_rel_mae_vals else np.nan
+    ode_rel_mae_median_bins = float(np.median(integ_rel_mae_vals)) if integ_rel_mae_vals else np.nan
     metrics = {
         "ode_integ_r2_median": ode_r2_median,
+        "ode_integ_rel_mae_mean_bins": ode_rel_mae_mean_bins,
+        "ode_integ_rel_mae_median_bins": ode_rel_mae_median_bins,
+        "ode_integ_rel_mae_valid_bins": len(integ_rel_mae_vals),
         "ode_bins": len(bins),
         "ode_integrated_bins": integrated_bins,
     }
@@ -885,7 +946,10 @@ def main() -> None:
                     f"ODE integration failed, skipping ODE metrics: {exc}"
                 )
                 ode_metrics, ode_trajs = {
-                    "ode_integ_r2_median": np.nan,
+                    "ode_integ_r2_median": 0.0,
+                    "ode_integ_rel_mae_mean_bins": np.nan,
+                    "ode_integ_rel_mae_median_bins": np.nan,
+                    "ode_integ_rel_mae_valid_bins": 0,
                     "ode_bins": 0,
                     "ode_integrated_bins": 0,
                 }, []
@@ -906,11 +970,23 @@ def main() -> None:
             "seed": args.seed,
             "formula": formula,
             "dt_r2_train": metrics_train.get("dt_r2"),
+            "dt_rel_mae_mean_bins_train": metrics_train.get("dt_rel_mae_mean_bins"),
+            "dt_rel_mae_median_bins_train": metrics_train.get("dt_rel_mae_median_bins"),
+            "dt_rel_mae_valid_bins_train": metrics_train.get("dt_rel_mae_valid_bins"),
             "integ_r2_median_train": metrics_train.get("integ_r2_median"),
+            "integ_rel_mae_mean_bins_train": metrics_train.get("integ_rel_mae_mean_bins"),
+            "integ_rel_mae_median_bins_train": metrics_train.get("integ_rel_mae_median_bins"),
+            "integ_rel_mae_valid_bins_train": metrics_train.get("integ_rel_mae_valid_bins"),
             "ode_integ_r2_median_train": ode_train.get("ode_integ_r2_median"),
+            "ode_integ_rel_mae_mean_bins_train": ode_train.get("ode_integ_rel_mae_mean_bins"),
+            "ode_integ_rel_mae_median_bins_train": ode_train.get("ode_integ_rel_mae_median_bins"),
+            "ode_integ_rel_mae_valid_bins_train": ode_train.get("ode_integ_rel_mae_valid_bins"),
         }
         metrics_row.update(metrics_test)
         metrics_row["ode_integ_r2_median"] = ode_test.get("ode_integ_r2_median")
+        metrics_row["ode_integ_rel_mae_mean_bins"] = ode_test.get("ode_integ_rel_mae_mean_bins")
+        metrics_row["ode_integ_rel_mae_median_bins"] = ode_test.get("ode_integ_rel_mae_median_bins")
+        metrics_row["ode_integ_rel_mae_valid_bins"] = ode_test.get("ode_integ_rel_mae_valid_bins")
         metrics.append(metrics_row)
 
         # Merge trajectories with phase labels

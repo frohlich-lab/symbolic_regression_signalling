@@ -89,7 +89,7 @@ def main():
     parser.add_argument('--hall_of_fame', nargs='+', required=True, help='Paths to the hall of fame files.')
     parser.add_argument('--save', nargs='+', required=True, help='Paths to save the best formulas.')
     parser.add_argument('--features', required=True, help='Comma-separated feature names.')
-    parser.add_argument('--methods', nargs='+', required=True, help='List of symbolic regression methods (pysindy, aifeynman, dso, kan, pysr).')
+    parser.add_argument('--methods', nargs='+', required=True, help='List of symbolic regression methods (pysindy, aifeynman, dso, kan, pysr, odeformer).')
 
     args = parser.parse_args()
 
@@ -101,7 +101,8 @@ def main():
         'aifeynman': lambda file, features: extract_best_formula_from_txt(file, features, "Formula:", "Error:", start_index=1),
         'dso': lambda file, features: extract_best_formula_from_csv(file, features, 'Equation', 'Score', start_index=1, underscore=False),
         'kan': lambda file, features: extract_best_formula_from_txt(file, features, "Formula:", "Loss:", start_index=1),
-        'pysr': lambda file, features: extract_best_formula_from_csv(file, features, 'Equation', 'Score', delimiter=',', underscore=False)
+        'pysr': lambda file, features: extract_best_formula_from_csv(file, features, 'Equation', 'Score', delimiter=',', underscore=False),
+        'odeformer': lambda file, features: extract_best_formula_from_csv(file, features, 'Equation', 'Score', start_index=0, underscore=False),
     }
 
     for method, hall_of_fame_path, save_path in zip(args.methods, args.hall_of_fame, args.save):

@@ -40,6 +40,7 @@ METHOD_SCRIPTS: Dict[str, Path] = {
     "dso": SRC_ROOT / "sr_models" / "dso_model.py",
     "kan": SRC_ROOT / "sr_models" / "kan_model.py",
     "aifeynman": SRC_ROOT / "sr_models" / "aifeynman_model.py",
+    "odeformer": SRC_ROOT / "sr_models" / "odeformer_model.py",
 }
 
 DEFAULT_SEARCH_SPACE: Dict[str, Dict[str, Iterable]] = {
@@ -73,6 +74,10 @@ DEFAULT_SEARCH_SPACE: Dict[str, Dict[str, Iterable]] = {
         "polyfit_degree": [2, 3],
         "brute_force": [True, False],
     },
+    "odeformer": {
+        "beam_size": [32, 50],
+        "beam_temperature": [0.1, 0.2],
+    },
 }
 
 METHOD_OUTPUT_SUFFIX = {
@@ -81,6 +86,7 @@ METHOD_OUTPUT_SUFFIX = {
     "pysindy": "best_formula.txt",
     "kan": "kan_progress.txt",
     "aifeynman": "aifeynman_solution.txt",
+    "odeformer": "odeformer_predictions.csv",
 }
 
 CONDA_ENVIRONMENTS: Dict[str, Optional[str]] = {
@@ -91,6 +97,7 @@ CONDA_ENVIRONMENTS: Dict[str, Optional[str]] = {
     "dso": None,
     "kan": None,
     "aifeynman": None,
+    "odeformer": None,
 }
 
 METHOD_SEED_FLAGS = {
@@ -99,6 +106,7 @@ METHOD_SEED_FLAGS = {
     "dso": "--seed",
     "kan": "--seed",
     "aifeynman": "--seed",
+    "odeformer": "--seed",
 }
 
 MethodConfig = Dict[str, Iterable]
@@ -315,6 +323,29 @@ def parse_best_result(method: str, temp_file: Path) -> Tuple[Optional[str], Opti
                     except (IndexError, ValueError):
                         loss = None
             return formula, loss if loss is not None else math.nan
+
+        if method == "odeformer":
+            df = pd.read_csv(temp_file)
+            if df.empty:
+                return None, math.nan
+            equation_column = "Equation" if "Equation" in df.columns else df.columns[0]
+            score_column = None
+            for candidate in ("Score", "score", "Loss", "loss"):
+                if candidate in df.columns:
+                    score_column = candidate
+                    break
+            best_row = df.iloc[0]
+            formula = str(best_row[equation_column])
+            if score_column:
+                try:
+                    raw_score = float(best_row[score_column])
+                    # Convert to a minimisation objective (higher score => lower loss).
+                    loss = -raw_score
+                except Exception:
+                    loss = 0.0
+            else:
+                loss = 0.0
+            return formula, loss
 
     except Exception:
         return None, math.nan

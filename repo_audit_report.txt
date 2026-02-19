@@ -1,0 +1,436 @@
+Repo Map, Entrypoints, and Configuration
+
+Repo Map & Execution Entrypoints
+1. Orchestration: `Snakefile` (Snakemake). HPC wrapper: `run_job.sh` runs `snakemake --printshellcmds --cores=all --use-conda --rerun-incomplete`.
+2. Synthetic enzyme benchmarks (generation + SR + plots) entrypoints used by Snakemake:
+1. `src/synthetic/generate_data.py` CLI: `python src/synthetic/generate_data.py <model_name> <static|dynamic|static_traj|static_traj_substrate|static_traj_product> [--static-perturb=...] [--static-perturb-count=...] [--static-perturb-range=...]` (rule `generate_data_model` in `Snakefile`).
+2. `src/preprocessing.py` merges raw train/val/test into processed splits (rule `preprocessing_model` in `Snakefile`).
+3. SR method wrappers: `src/sr_models/pysr_model.py`, `src/sr_models/aifeynman_model.py`, `src/sr_models/dso_model.py`, `src/sr_models/kan_model.py`, `src/sr_models/pysindy_model.py` (called via `src/sr_sweep/agent.py` and Snakemake rules `pysr`, `aifeynman`, `dso`, `kan`, `pysindy`).
+4. Model selection (best formula): `src/get_best_formula.py` (rule `get_best_formula` in `Snakefile`).
+5. SR evaluation/plotting: `src/plot_methods.py`, `src/integrate_and_plot_methods.py`, `src/plot_sr_timepoint_lineplot.py`, `src/pan_enzyme_model_plots.py`.
+3. Degradation experiments (noise/size/deviation/kinetic limits/tQSSA shift):
+1. `src/noise_regimes.py`.
+2. `src/dataset_size_regimes.py`.
+3. `src/mm_deviation_regimes.py`.
+4. `src/kinetic_regimes.py`.
+5. `src/timepoint_regimes.py`.
+6. tQSSA feature shift logic: `src/regime_variants.py`.
+4. Experimental ERK SR pipeline:
+1. Data prep: `src/experimental/data_prep/functional_groups_inputs.py` (builds processed fit/feature matrices).
+2. Fit sanity plots: `src/experimental/data_prep/fit_sanity_plots.py`.
+3. SR runs: `src/experimental/sr_pipeline/run_functional_groups.py`.
+4. Integration/self-consistency eval: `src/experimental/sr_pipeline/compute_marker_integration.py`.
+5. Plots/summary: `src/experimental/sr_pipeline/plot_metrics_summary.py`, `src/experimental/sr_pipeline/plot_marker_overlays.py`, `src/experimental/sr_pipeline/plot_pysr_vs_selectk.py`, `src/experimental/sr_pipeline/plot_pysr_vs_neural_ode.py`, `src/experimental/sr_pipeline/summarize_functional_groups.py`.
+5. Neural ODE baseline training/eval (experimental): `src/experimental/sr_pipeline/neural_ode_baseline_per_minute.py` (full + matched inputs), plus `src/experimental/sr_pipeline/plot_pysr_vs_neural_ode.py` for comparisons.
+6. SR sweeps: `src/sr_sweep/agent.py` orchestrates per-method hyperparameter sweeps with YAML/JSON search spaces.
+
+Config System (YAML/JSON/argparse/Snakemake)
+1. Global YAML config: `config.yaml` (loaded by `Snakefile`). Key defaults:
+1. `data_type: dynamic`, `enzyme_model: experimental`, `enable_sr_sweeps: false`.
+2. `models: [pysr]` (for Snakemake SR comparisons).
+3. `output_extension` mapping (e.g., pysr->csv, dso->txt).
+4. `features` strings (e.g., dynamic: `P_u,k_off,k_D,k_cat,tK,k_inact,kcat_cg`).
+5. `target_feature: kcat_cg`, `timeout_duration: 1800`.
+6. `discovery_scales` JSON string for method scales.
+7. `dataset_sizes` (pysr: 3000, nn: 10000, others as listed).
+8. Experimental block: raw CSV path, processed dir, output prefix, gfp_bins, min_points, extra_times, sr_output_dir, feature_modes, gfp_columns, models, run_per_minute_sr, per_minute_max_time.
+2. Sweeps:
+1. `sweeps/sr_default_search.yaml` (method-specific hyperparameter grids).
+2. `sweeps/wandb_michaelis.yaml` (W&B sweep setup for method selection).
+3. JSON configs:
+1. `src/sr_models/dso_model.py` writes `data/dso/dso_config.json` dynamically.
+2. `tuning_runs/optuna_trials.json` (logged trial outputs).
+4. Argparse per-script across `src/*.py` and `src/experimental/**/*.py` (see script headers for CLI usage).
+5. Snakemake: `Snakefile` maps config keys to rules and CLI calls.
+6. SR sweep grids (from `sweeps/sr_default_search.yaml`, used by Snakemake):
+1. PySR: `n_iterations` [150, 250, 350], `population_size` [27, 40, 60], `max_size` [24, 28, 30], `parsimony` [0.0, 0.01, 0.1].
+2. PySINDy: `alpha` [0.0, 0.01, 0.05, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0], `threshold` [0.01, 0.05, 0.1, 0.2].
+3. DSO: `n_iterations` [300, 600, 1000], `n_samples` [128, 256], `learning_rate` [0.0003, 0.0005, 0.001].
+4. KAN: `n_iterations` [4, 6, 8], `steps` [500, 750, 1000], `threshold` [0.005, 0.01, 0.02], `hidden_width` ['4,6,4,1', '5,7,5,1', '6,8,6,1', '8,10,8,1'].
+5. AI-Feynman: `bf_try_time` [30, 60, 120], `nn_epochs` [1000, 3000, 4000], `polyfit_degree` [3, 4].
+7. SR sweep default search space (fallback in `src/sr_sweep/agent.py` when no search-space file is supplied):
+1. PySR: `n_iterations` [300, 450], `population_size` [40, 80], `max_size` [14, 20], `parsimony` [1.0, 0.3, 0.05].
+2. PySINDy: `alpha` [1e2, 1e3, 5e3], `threshold` [1e-2, 1e-3, 1e-4], `finite_difference_order` [1, 2].
+3. DSO: `n_iterations` [80, 160], `n_samples` [96, 192], `learning_rate` [3e-4, 6e-4], `entropy_weight` [0.02, 0.05].
+4. KAN: `n_iterations` [2, 4], `steps` [80, 160], `threshold` [0.003, 0.008], `hidden_width` ["4,6,4,1", "5,7,5,1"], `grid` [32, 48].
+5. AI-Feynman: `bf_try_time` [15, 30], `nn_epochs` [20, 40], `polyfit_degree` [2, 3], `brute_force` [True, False].
+6. ODEFormer: `beam_size` [32, 50], `beam_temperature` [0.1, 0.2].
+8. Sweep outcomes present in this workspace:
+1. [MISSING] SR method sweeps: no `best_config.json` files found under `data/*/sr_comparison/sweeps/*/best_config.json` (sweeps likely not run or outputs not committed).
+2. NN Optuna sweeps:
+1. `tuning_runs/optuna_trials.json` best params: activation SiLU, batch_size 256, dropout_rate 0.3, early_stopping_patience 70, gradient_clip_norm 4.0, hidden_layers {dropout: 0.1, layers: [256, 128]}, learning_rate 6.533982776597072e-04, optimizer RMSprop, scheduler CosineAnnealingLR, weight_decay 1.3520544729384474e-04.
+2. `data/three_step_enzyme/dynamic/nn_hparams/best_params.json` best params: activation SiLU, batch_size 512, dropout_rate 0.2, early_stopping_patience 70, gradient_clip_norm 2.5, hidden_layers {dropout: 0.2, layers: [1024, 512, 256, 128]}, learning_rate 0.025808603597869226, optimizer AdamW, scheduler CosineAnnealingLR, weight_decay 9.111442949800081e-07.
+3. Neural ODE sweep outputs (pre-change objective):
+1. `data/experimental/runs/neural_ode/full/neural_ode_sweep.csv`: best row by mean_val_ode_r2 = 0.5818892569374181 with hidden_dim 45, hidden_layers 3, dropout 0.11159322669277028, lr 0.0004138512720686658, weight_decay 0.00018535531479897335 (markers=10, seeds=1).
+2. `data/experimental/runs/neural_ode/matched/neural_ode_sweep.csv`: best row by mean_val_ode_r2 = 0.3429487695989434 with hidden_dim 62, hidden_layers 4, dropout 0.19036798694884552, lr 0.0015564305555902278, weight_decay 0.00010184782541750475 (markers=10, seeds=1).
+3. Additional sweep CSVs exist under `data/experimental/runs_no_gfp/` and `data/experimental/runs_random/` (not summarized here).
+4. Note: after recent changes, sweeps will be ranked by mean validation dt MSE and will write `neural_ode_best_params.json`; existing CSVs were produced before this change.
+
+Seeds and Reproducibility
+1. Global seeding utility: `src/utils/seeding.py` (`seed_everything` seeds Python, NumPy, and Torch; `resolve_seed` defaults to 42).
+2. Synthetic data generation seeding:
+1. `src/synthetic/generate_data.py` calls `seed_everything(0)` once.
+2. Static trajectory modes use deterministic per-sample seeds: `DATASET_SEED_BASE = {train:10000,val:20000,test:30000}`, then `seed_val = base_seed + retry` (uses `np.random.seed` and `random.seed`).
+3. Experimental pipeline seeds:
+1. `src/experimental/sr_pipeline/seeding.py` defines `canonicalize_seeds` (base seed + 2 extra runs by default) and `seed_all` (delegates to `seed_everything`).
+2. `run_functional_groups.py`, `compute_marker_integration.py`, and baselines use `random_state` arguments and call `seed_all`.
+4. SR sweeps: `src/sr_sweep/agent.py` uses its own `--seed` for search sampling and per-method `--seed` flags passed to subprocesses.
+5. Per-library seeds in SR wrappers:
+1. AI-Feynman: `seed_everything` in `src/sr_models/aifeynman_model.py` seeds `random` + `numpy`.
+2. DSO: `seed_everything` in `src/sr_models/dso_model.py` seeds `random`, `numpy`, and `tensorflow` (`tf.random.set_seed`).
+3. KAN: `seed_everything` in `src/sr_models/kan_model.py` seeds `random`, `numpy`, and `torch` (plus CUDA if available).
+4. PySR: `src/sr_models/pysr_model.py` uses `random.seed` + `np.random.seed` plus `PySRRegressor(random_state=...)` (and deterministic serial settings in regime scripts).
+
+Train/Val/Test Splits (trajectory vs timepoint; storage)
+1. Synthetic raw splits: `src/synthetic/generate_data.py` generates separate `train/val/test` CSVs (by trajectory/sample), each sample includes multiple timepoints (dynamic logspace grid) or static conditions.
+2. Synthetic processed splits: `src/preprocessing.py` merges raw splits and re-splits into 80/20 train/test by `condition_id` when available (deterministic RNG 42), otherwise row-wise sampling. Outputs: `data_merged.csv`, `data_train.csv`, `data_test.csv`.
+3. Degradation scripts (noise/size/deviation/kinetic/timepoint): each script samples rows and uses `train_test_split(..., random_state=seed)` on pooled timepoints (not trajectory-aware). Splits are persisted under each regime's `processed/` directory (e.g., `dataset_size_regimes` writes `train.csv`/`test.csv` per regime and variant).
+4. NN baseline (synthetic): `src/nn_model.py` uses RNG shuffle to create train/val/test fractions (default 10%/10%/80%), scales features via `StandardScaler` fit on train, and returns scaled splits.
+5. Experimental SR pipeline: `run_functional_groups.py` splits by GFP bins (not rows) using `choose_bin_split` (default test size 0.2, RNG `random_state`), so train/test are disjoint in GFP bins. Per-minute sampling is applied before splitting (see Part D).
+
+--------------------------------------------------------
+Part A - Synthetic enzyme kinetics (PySB/AMICI)
+
+B. PySB model definitions (per mechanism)
+
+Two-step enzyme (reversible binding + irreversible catalysis)
+1. Files: `src/synthetic/base_models/two_step_enzyme/base_model.py` (static) and `src/synthetic/base_models/two_step_enzyme/dynamic_model.py` (dynamic).
+2. Monomers:
+1. `P` with sites `phospho` (states `u`/`p`) and `k`.
+2. `K` with site `p`.
+3. Parameters/initials:
+1. `K0`, `uP0`, `pP0` (initial conditions).
+2. `koff_substrate`, `kD_substrate`, `kcat` (binding/catalysis).
+3. Dynamic-only: `krev`, `kinact`.
+4. Expressions:
+1. `kon = koff_substrate * kD_substrate`.
+2. Dynamic: `kact = kinact * K0`.
+5. Rules:
+1. `step1`: `P_u + K | P_u:K` (reversible; rates `kon`, `koff_substrate`).
+2. `step2`: base model: `ES -> P_u + K` (rate `kcat`); dynamic model: `ES -> P_p + K` (rate `kcat`).
+3. Dynamic-only `reverse`: `P_p -> P_u` (rate `krev`).
+4. Dynamic-only `activation`: `None -> K` (rate `kact`), `inactivation`: `K -> None` (rate `kinact`, `delete_molecules=True`).
+6. Observables/expressions:
+1. Base: `es_o` and `Expression('kcat_cg', es_o)`.
+2. Dynamic: `Observable('P_p')`, `Observable('tK')`, `Expression('kcat_cg', es_o)`.
+3. Dynamic-only delay probes: `dP` and `dK` monomers with rules `delayedPon/Off`, `delayedKon/Off`; `Observable('P_p_d')`, `Expression('P_u_d', p0+u0-P_p_d)`, `Observable('K_d')`.
+7. Withheld from SR inputs (synthetic benchmarks): SR features are taken from `config.yaml` (`features.dynamic`) and exclude `P_p`, `P_p_d`, `P_u_d`, `K_d` (see `config.yaml` and Snakemake usage).
+
+Three-step enzyme (product binding / inhibition)
+1. Files: `src/synthetic/base_models/three_step_enzyme/base_model.py` and `src/synthetic/base_models/three_step_enzyme/dynamic_model.py`.
+2. Monomers:
+1. Base: `S` (substrate), `P` (product), `K` (enzyme).
+2. Dynamic: `P` with `phospho` state, `K`.
+3. Parameters/initials:
+1. `K0`, `uP0` (substrate), `pP0` (product; default 3.0 in base model).
+2. `koff_substrate`, `kD_substrate`, `koff_product`, `kcat`.
+3. Dynamic-only: `krev`, `kinact`.
+4. Expressions:
+1. `kon = koff_substrate * kD_substrate`.
+2. `kon_product = koff_product * kD_substrate`.
+3. Dynamic: `kact = kinact * K0`.
+5. Rules:
+1. `step1`: substrate binding `S + K | S:K` (or `P_u + K | P_u:K` in dynamic).
+2. `step2`: base `ES -> S + K`; dynamic `ES -> P_p:K` (rate `kcat`).
+3. `step3`: product binding `P:K | P + K` (reversible; `koff_product`, `kon_product`).
+4. Dynamic-only `reverse`: `P_p -> P_u` (rate `krev`).
+5. Dynamic-only activation/inactivation (as in two-step).
+6. Observables/expressions:
+1. Base: `Expression('kcat_cg', es_o)` only.
+2. Dynamic: `Observable('P_p')`, `Observable('tK')`, `Expression('kcat_cg', es_o)`.
+
+Three-step dimeric enzyme (dimerisation + product binding)
+1. Files: `src/synthetic/base_models/three_step_enzyme_dimer/base_model.py` and `src/synthetic/base_models/three_step_enzyme_dimer/dynamic_model.py`.
+2. Monomers:
+1. Base: `S`, `P`, `K` with sites `p` and `d` (dimerization site).
+2. Dynamic: `P` with `phospho` state, `K` with `p` and `d`.
+3. Parameters/initials:
+1. `K0`, `uP0`, `pP0`.
+2. `kon_dim`, `koff_dim` (dimerisation).
+3. `koff_substrate`, `kD_substrate`, `koff_product`, `kcat`.
+4. Dynamic-only: `krev`, `kinact`.
+4. Expressions:
+1. `kon = koff_substrate * kD_substrate`.
+2. `kon_product = koff_product * kD_substrate`.
+3. Dynamic: `kact = kinact * K0`.
+5. Rules:
+1. `dimerisation`: `K(d=None)+K(d=None) | K(d=1)%K(d=1)` (rates `kon_dim`, `koff_dim`).
+2. `step1`: substrate binding to `K` (not explicitly restricted to dimer).
+3. `step2`: catalytic step on dimer-bound ES (rate `kcat`).
+4. `step3`: product binding `P:K | P + K` (reversible).
+5. Dynamic-only `reverse`, activation/inactivation as in other dynamic models.
+6. Observables/expressions:
+1. Base: `Expression('kcat_cg', es_o)` only.
+2. Dynamic: `Observable('P_p')`, `Observable('tK')`, `Expression('kcat_cg', es_o)`.
+7. [INFERRED] "Non-dimerised enzyme concentration" is not explicitly named in code; the monomeric enzyme corresponds to `K(d=None)` species in `three_step_enzyme_dimer` (see dimerisation rule in `base_model.py` and `dynamic_model.py`).
+
+C. Closed vs open system implementation
+1. No explicit "open/closed" switch exists; instead, "static/base_model" vs "dynamic_model" differ in added rules.
+2. Dynamic models add enzyme activation/inactivation (`None -> K` and `K -> None`) with `kact = kinact * K0` and `kinact` to maintain a setpoint-like pool around `K0` (see `dynamic_model.py` files).
+3. Dynamic models add a reverse reaction `P_p -> P_u` (rate `krev`).
+4. No explicit substrate/product inflow or degradation rules are coded beyond the reverse reaction; no additional source/sink terms appear in PySB models.
+
+D. PySB -> SBML -> AMICI pipeline
+1. Export/compile: `src/synthetic/generate_data_utils.py:compile_model` uses `amici.pysb_import.pysb2amici` with `observables=model_spec['observables']`, `constant_parameters` (static: non-`*0` params; dynamic: `*0` plus `kinact`, `krev`), `compute_conservation_laws=True`, output dir `.../amici_models/...`.
+2. AMICI import: `amici.import_model_module(model_name, model_dir)`, then `getModel()` and `getSolver()`.
+3. [INFERRED] Solver/integrator: AMICI default solver (CVODES unless overridden by AMICI defaults). No explicit solver type in code.
+4. Tolerances: `TOL=1e-12`; absolute + relative tolerances set to `1e-12`; steady-state relative tolerance `1e-8`, absolute steady-state tol `0.0`; `setNewtonStepSteadyStateCheck(True)`.
+5. Parameter scales: parameters are set to ln scale unless name starts with `phi_` or `ddG_` (those are `none`). Sampling bounds in log space: `lbs = lb*ln(10)`, `ubs = ub*ln(10)`, with special-case 0..1 for `phi_`.
+6. Time grid:
+1. Static simulations: `edata_base.setTimepoints([np.inf])`.
+2. Dynamic simulations: `tmin=0.1`, `tmax=10.0`, timepoints `[0, logspace(tmin,tmax, N_T), inf]` with `N_T=20`; `find_good_time_interval` adjusts `tmin/tmax` to ensure pre-equilibration and steady state.
+7. Failure handling: simulations are re-sampled if AMICI returns non-success or NaNs; `find_good_time_interval` loops until pre/post steady-state match within `rtol=1e-2`.
+8. [MISSING] Positivity enforcement: no explicit positivity constraints; instead, negative/NaN states are filtered (`np.isfinite` checks; `np.log` must be finite).
+9. [MISSING] Units: no explicit units encoded in PySB or AMICI code.
+
+E. Synthetic dataset generation protocol
+1. Sample counts and timepoints: `src/synthetic/data_conf.py` sets `N_SAMPLES` = `{train: 2**16, val: 2**14, test: 2**14}`, `N_T=20`.
+2. Parameter sampling:
+1. Static model: for each condition, parameters are drawn uniformly in log space between `PAR_LB=-5` and `PAR_UB=3` (converted to ln space, then exp). Fixed parameters are also sampled uniformly between `lbs/ubs` derived from the same bounds.
+2. Dynamic model: fixed parameters sampled as above; `kinact` is resampled relative to `krev` to avoid extreme timescale separation; `K0` is re-sampled around pre-equilibrium within a log range factor of 100.
+3. Constant vs sampled parameters: `compile_model` treats non-`*0` parameters as constant in `base_model` (kinetic rates fixed across conditions), while `dynamic_model` fixes `*0` parameters plus `kinact` and `krev` across conditions (see `src/synthetic/generate_data_utils.py`).
+3. Static trajectory variants: `static_traj_*` modes optionally perturb `uP0` and/or `pP0` by multiplicative factors across `static_perturb_count` (default 22) spanning `perturb_range` (default 100x).
+4. "Sample" definition: in `generate_data.py`, each trajectory corresponds to one `amici.ExpData` with multiple timepoints; output CSVs are flattened by timepoint.
+5. Filtering: any failed AMICI run or NaN/non-finite states are discarded and re-sampled; `np.log(rdata['x'])` must be finite.
+6. Feature scaling: output CSVs are stored in log space for states, observables, and fixed parameters (see `generate_data.py` rescale). Targets are stored in log space as well.
+7. Train/val/test splits: raw splits are generated by separate loops for each dataset; `src/preprocessing.py` merges and re-splits 80/20 by `condition_id` (if present) or row-wise (RNG seed 42).
+8. "2,400 samples" is not an explicit target in synthetic generation; the only explicit size scaling is in `dataset_size_regimes.py` (percent multipliers applied to a base size, and plot marker sizes mapped linearly between 600 and 2400 for visualization only).
+
+F. Target construction (dP/dt)
+1. Target is `kcat_cg` (not an explicit numerical derivative). It is defined as the ES complex observable (`Expression('kcat_cg', Observable('es_o', es))`) in each PySB base/dynamic model.
+2. No code computes `dP/dt` via AMICI derivatives, fluxes, or numerical differentiation for synthetic benchmarks; `kcat_cg` is used directly as the regression target.
+3. Nuance (as you noted): in standard mass-action, catalytic flux dP/dt is `kcat * [ES]`, so the modeled `kcat_cg` corresponds to `[ES]` and can be viewed as dP/dt * (1/kcat). This relationship is implied by the PySB rules but not computed explicitly in code.
+3. No explicit target clipping in dataset generation; log-space evaluations later use `EPS` (e.g., `1e-20`) for stability in metrics.
+
+--------------------------------------------------------
+Part B - Symbolic regression benchmarking (synthetic)
+
+G. Methods compared (AI-Feynman / PySR / DSO / KAN)
+1. AI-Feynman (`src/sr_models/aifeynman_model.py`)
+1. Operators: `OPERATORS = '+*-D~ILEA'`.
+2. Search budget defaults: `BF_TRY_TIME=30s`, `POLYFIT_DEGREE=4`, `NN_EPOCHS=40`, `TEST_PERCENTAGE=20`.
+3. Inputs: selected dataset columns; inputs are exponentiated back to linear while target remains in log space.
+4. Output: solution file copied to temp file (`solution_mystery.txt`).
+5. [MISSING] Versions: conda env `envs/aifeynman.yaml` (no explicit AI-Feynman version pin). Commit/hash not pinned in repo.
+2. PySR (`src/sr_models/pysr_model.py` + `src/constants.py`)
+1. Base config (`PYSR_CONFIG`): `niterations=350`, `population_size=30`, `populations=15`, `binary_operators=[+,*,/,-]`, `unary_operators=[exp,log,sqrt]`, `maxsize=20`, `parsimony=1`, `batching=True`, `annealing=True`, `elementwise_loss=my_loss(x,y)=(log(max(x,1e-25))-log(max(y,1e-25)))^2`, `random_state=42`.
+2. Variant overrides: `sQSSA` uses only binary ops; `tQSSA` uses binary ops + `sqrt` and (in some scripts) `maxsize=35`.
+3. Determinism enforced in regime scripts: `deterministic=True`, `parallelism='serial'`, `procs=0`.
+4. Inputs: selected columns from dataset; data is exponentiated to linear; tQSSA variant modifies `P_u` (see Part C/N).
+5. Version pin: `envs/pysr.yaml` (no specific PySR version). Commit/hash not pinned.
+3. DSO (`src/sr_models/dso_model.py`)
+1. Function set: `['add','sub','mul','div','sin','cos','exp','log','poly']`.
+2. Defaults: `n_iterations=100`, `batch_size=128`, `learning_rate=5e-4`, `entropy_weight=0.03`, `entropy_gamma=0.7`, `poly_regressor='dso_least_squares'`.
+3. Config file generated at `data/dso/dso_config.json`.
+4. Inputs: dataset columns; inputs exponentiated to linear; target kept log; rows with NaN/inf dropped.
+5. Version pin: `envs/dso.yaml` pins `tensorflow==1.14.0`, `numpy==1.19.5`, `numba==0.53.1`, `absl-py==0.15.0`.
+4. KAN (`src/sr_models/kan_model.py`)
+1. Defaults: `N_ITERATIONS=3`, `WIDTH=[5,7,5,1]` (first entry replaced with input dim), `GRID=40`, `K=3`, `THRESHOLD=0.01`, `STEPS=150`, `LAMB=0.001`, `LAMB_ENTROPY=1.0`, `LIBRARY=['x','x^2','x^3','exp','log','abs']`.
+2. Training split: 80/20 random split using `torch.utils.data.random_split` (seeded by `seed_everything`).
+3. Outputs: formulas saved per iteration to temp file (with loss).
+4. Version pin: `envs/kan.yaml` installs `pykan` (no version pin).
+
+H. PySR exact configuration (Table 1 reference in code)
+1. Baseline PySR hyperparameters for synthetic benchmarks are in `src/constants.py` (`PYSR_CONFIG` above).
+2. Additional defaults from scripts (when run via Snakemake): `dataset_size_regimes.py`, `noise_regimes.py`, `mm_deviation_regimes.py`, `kinetic_regimes.py`, `timepoint_regimes.py` all call `PYSR_CONFIG` plus `pysr_operator_config(variant)` and enforce serial deterministic runs.
+3. Experimental ERK PySR uses a separate config in `src/experimental/sr_pipeline/run_functional_groups.py` (defaults: `max_iterations=700`, `population_size=30`, `populations=30`, `max_size=20`, `parsimony=0.8`, `binary_operators=(+, -, *, /)`, `unary_operators=()`; deterministic serial). It injects a custom Julia loss to enforce p-ERK and GFP dependence and slope constraints.
+
+I. Metrics
+1. Log-space MAE (`log_mae`) defined in `src/regime_variants.py`: `mean(|ln(max(pred,eps)) - ln(max(true,eps))|)` with `eps=1e-20`.
+2. Relative MAE (`relative_mae`) in `src/regime_variants.py`: `mean(|pred-true| / max(|true|, eps)) * 100` with `eps=1e-20` (percent scaling).
+3. "Median test loss" computation: per-sample error arrays are computed first, then median is taken over samples (per seed). `aggregate_seed_error_statistics` collects per-seed error distributions and per-seed medians; plots can use either pooled errors or seed medians.
+
+--------------------------------------------------------
+Part C - Synthetic degradation experiments
+
+J. Noise degradation (`src/noise_regimes.py`)
+1. Noise applied to target column only (last column of dataset). Features remain unchanged.
+2. Noise model: log-space Gaussian noise. For positive targets: `log(y) + N(0, std_multiplier * std(log(y)))`, then exponentiate.
+3. Noise levels (std_multiplier): `1e-2` (low), `1e-1` (medium), `1.0` (high); "very_low_noise" uses unmodified data.
+4. Seeds: `seed_everything(resolve_seed(seed))` at run start; `np.random.normal` used for noise.
+
+K. Dataset size degradation (`src/dataset_size_regimes.py`)
+1. Baseline dataset size for PySR: `--pysr-base-size` (default 3000; Snakemake uses `config.dataset_sizes.pysr`).
+2. Regimes: 10%, 50%, 100%, 200% (`SIZE_GROUPS` multipliers 0.10, 0.50, 1.0, 2.0).
+3. Subsampling: row-wise `data.sample(n=desired_n, random_state=seed, replace=desired_n>len(data))` (point-level, not trajectory-level).
+4. 200% regime: uses `replace=True` if needed (bootstrap-style over rows).
+5. Train/test split: `train_test_split(test_size~=0.2, random_state=seed)` on sampled rows.
+
+L. Deviation-from-Michaelis-Menten regimes (`src/mm_deviation_regimes.py`)
+1. MM baseline is not fit; it is computed directly from features via `sqssa_only` in `src/mm_models.py`.
+2. Deviation score: `abs(log(mm_pred) - log(target))` with `EPS=1e-20`.
+3. Bins: `low <0.01`, `medium 0.01-0.1`, `large 0.1-1.0`, `very_large >=1.0` (log-error thresholds).
+4. SR is trained per bin on rows filtered by the above thresholds.
+
+M. Kinetic limits subsets (E/S and S/Km) (`src/kinetic_regimes.py`)
+1. Computed ratios:
+1. `P_u / tK` (substrate over enzyme proxy).
+2. `K_M / P_u` where `K_M = (k_off + k_cat + k_inact) / (k_D * k_off)`.
+2. Thresholds: `REGIME_THRESHOLD = 1000.0`.
+1. `P_u/tK >= 1000` and `P_u/tK <= 0.001` (low/high).
+2. `K_M/P_u >= 1000` and `K_M/P_u <= 0.001`.
+3. Subsets are formed by filtering rows by these thresholds (point-level).
+
+N. tQSSA observable shift (`src/regime_variants.py`)
+1. "Total substrate" is implemented by replacing `P_u` with `P_u + kcat_cg` for tQSSA runs (`augment_for_variant`). This is a column overwrite, not an additional feature.
+2. No per-mechanism adjustments are present; the same shift is applied across datasets.
+3. Analytic tQSSA baseline is implemented in `src/mm_models.py` (`tqssa_prediction`). It uses `s_hat = P_u + target` and returns `0.5 * (sum_term - sqrt(sum_term^2 - 4 * e_total * s_hat))` where `sum_term = e_total + s_hat + K_M`.
+
+O. Baselines for robustness comparisons
+1. Michaelis-Menten baseline: `src/mm_models.py` with sQSSA and tQSSA predictions (requires columns `P_u, k_off, k_D, k_cat, tK` plus optional `k_inact`).
+2. Neural MLP baseline (synthetic): `src/nn_model.py`.
+1. Architecture: MLP with hidden layers `[256, 128]`, SiLU activations, BatchNorm + Dropout(0.3), output dim 1.
+2. Optimizer: RMSprop, LR `6.53e-4`, weight decay `1.35e-4`, cosine annealing scheduler.
+3. Training: early stopping (patience 70), epochs 600, batch size 256, gradient clip 4.0.
+4. Scaling: `StandardScaler` on inputs (fit on train). Target remains in log space (dataset is already log).
+3. NN baseline in degradation scripts: `dataset_size_regimes.py`, `noise_regimes.py`, `mm_deviation_regimes.py`, `kinetic_regimes.py`, `timepoint_regimes.py` call `nn_model.train_model` and `evaluate_model` with the same splits used for SR in those scripts.
+4. NN hyperparameters and "selected" settings:
+1. Synthetic NN (fixed/tuned defaults in code, not auto-selected):
+1. Architecture: hidden layers `[256, 128]`, activation `SiLU`, BatchNorm + Dropout `0.3`.
+2. Optimizer: RMSprop, `lr=6.533982776597072e-04`, weight decay `1.3520544729384474e-04`.
+3. Scheduler: CosineAnnealingLR.
+4. Training: `epochs=600`, `batch_size=256`, early stopping patience `70`, `min_delta=1e-4`, gradient clip `4.0`.
+5. These are the "selected" hyperparameters used by default; no hyperparameter search is wired for this baseline in repo code.
+2. Experimental Neural ODE baseline (`src/experimental/sr_pipeline/neural_ode_baseline_per_minute.py`):
+1. Default/full-input run uses: `hidden_dim=64`, `hidden_layers=2`, ReLU, `dropout=0.0`, Adam `lr=1e-3`, weight decay `1e-4`, `epochs=500`, `batch_size=64`, early stopping `patience=30`, `min_delta=1e-4`.
+2. "Matched input count" selection: if `--pysr-metrics` is provided, it computes `k_pysr` per marker (number of unique symbols in the PySR formula) and selects K features per marker via `SelectKBest(f_regression)` (minimum K=2). p-ERK is always included when present. Otherwise, all features are used.
+3. Optional hyperparameter sweep: `--sweep-output` triggers a Latin-hypercube style sweep over hidden_dim, hidden_layers, dropout, lr, weight_decay; if not used, the defaults above are the selected settings.
+
+--------------------------------------------------------
+Part D - Experimental ERK signalling (Lun et al. 2019)
+
+P. Dataset acquisition & preprocessing
+1. Raw data path: `data/experimental/raw/lun_2019.csv` (set via `config.yaml` and `Snakefile`).
+2. Preprocessing script: `src/experimental/data_prep/functional_groups_inputs.py`.
+3. Markers (from `lun_2019.csv`, 40 total):
+1. Controls (8): `FLAG-GFP1`, `FLAG-GFP2`, `FLAG-GFP3`, `FLAG-GFP4`, `untransfected1`, `untransfected2`, `untransfected3`, `untransfected4`.
+2. Overexpressed markers (32): `ABL1`, `AKT3`, `ALPK2`, `ARAF`, `DUSP10 (P2)`, `DUSP16`, `DUSP4`, `DUSP7`, `DYRK2`, `DYRK3`, `EGFR`, `ERBB2`, `FGFR1`, `MAP2K2`, `MAP4K2`, `MAPK1`, `MAPK3`, `MAST2`, `MET`, `MST1R`, `PIK3R1`, `PIP5K3`, `PRKACA`, `PTPN2 (P1)`, `PTPN5`, `PTPN7`, `RPS6KA1`, `RPS6KA3`, `RPS6KA6`, `TBK1`, `TEC`, `TYRO3`.
+4. Timepoints: taken from the `timepoint` column in raw data; preprocessing computes `raw_timepoints = sorted(unique(timepoint))`.
+5. Replicates: averaged by `groupby(['marker','GFP_bin','timepoint'])` on numeric columns (means).
+6. GFP perturbation intensity: uses column `GFP` directly; binned by per-marker quantiles into `GFP_bin`.
+7. Inputs used for SR feature matrix (exact 8 signalling inputs in `build_filtered`): `GFP`, `p-ERK1-2`, `p-MEK1-2`, `p-RAF`, `p-p90RSK`, `p-MAPKAPK2`, `p-PDK1`, `p-MKK3-6`.
+8. Additional derived columns: fit values and derivatives for proteins (e.g., `p-ERK1-2_fit`, `p-ERK1-2_dt`, min/max/avg/range), plus model/r2 metadata (`*_fit_model`, `*_fit_r2`).
+9. Missing values handling: bins with fewer than `min_points` (default 5) valid timepoints are skipped for fitting; bins with p-ERK1-2 fit R^2 < `min_r2` (default 0.95) are excluded.
+10. [MISSING] Scaling: no explicit scaling for PySR inputs; linear regression uses `StandardScaler` in `run_functional_groups.py`.
+
+Q. GFP discretization and densification
+1. Binning: `assign_gfp_bins` uses per-marker `pd.qcut` into `gfp_bins` quantiles (default 50). If existing `GFP_bin` is present and `--force-rebin` is not set, bins are reused.
+2. Dense family of trajectories:
+1. `extra_fit`: adds additional timepoints (`extra_times`, default 1 and 3 minutes) by evaluating fitted curves.
+2. `dense_fit`: generates per-minute trajectories (time grid 1-minute resolution from min to max time) by evaluating fitted curves and derivatives.
+3. GFP values at extra/dense timepoints are filled with per-bin mean GFP (`fill_extra_gfp_means`).
+
+R. Derivative target creation for p-ERK
+1. Parametric fit forms (both implemented in `functional_groups_inputs.py`):
+1. Rise-and-fall: `B + A*(1 - exp(-t/tau_T)) * exp(-t/tau_S)`.
+2. Difference of logistics with tail: `B + A1*s1 - A2*s2 + m*t`, where `s1=1/(1+exp(-(t-t1)k))` and `s2=1/(1+exp(-(t-t2)k))`.
+2. Fitting procedure:
+1. Joint fit across all GFP bins per marker/protein with smoothness penalty `lam` between neighboring bins (`_joint_residuals`).
+2. Optimizer: `scipy.optimize.least_squares`, method `trf`, Huber loss, `max_nfev=1000`.
+3. Model selection: choose highest global R^2; if tie within `1e-3`, choose lowest AICc.
+3. Derivatives: analytic derivatives computed from the chosen parametric form; stored as `p-ERK1-2_dt` and `p-MEK1-2_dt`.
+4. Filtering: per-bin fits skipped if p-ERK1-2 R^2 is below `min_r2` (default 0.95).
+
+S. SR formulation for ERK
+1. Target: `p-ERK1-2_dt` (derivative) for SR and linear regression baselines (`run_functional_groups.py`).
+2. Input feature set: all columns except `EXCLUDE_COLUMNS = {p-ERK1-2_dt, p-MEK1-2_dt, marker, timepoint, GFP_bin}` (so p-ERK1-2 and GFP are included by default).
+3. PySR operator set & hyperparameters: defaults in `run_functional_groups.py` (niterations=700, population_size=30, populations=30, maxsize=20, parsimony=0.8, binary operators + - * /, unary operators empty, batching/annealing enabled, deterministic serial).
+4. Custom PySR loss (Julia code embedded in `run_functional_groups.py`):
+1. Penalizes missing p-ERK or GFP symbols with `MISSING_PENALTY=1000`.
+2. Penalizes near-zero dependence on p-ERK/GFP (`DEP_TOL=1e-4`, `REDUNDANT_PENALTY=1000`) using finite-difference sensitivity.
+3. Penalizes positive slope in roughly-linear p-ERK direction (`WRONGSIGN_P_LINEAR=1000`).
+4. Penalizes negative slope in roughly-linear 1/p-ERK direction (`WRONGSIGN_INV_LINEAR=1000`).
+5. Linearity detection uses finite-difference eps `EPS_REL=1e-3` and `LIN_TOL_REL=1e-3`.
+
+T. Numerical integration for self-consistency evaluation
+1. Feature-driven integration: `compute_marker_integration.py` uses simple forward Euler on predicted dt at observed timepoints per GFP bin; initial condition is observed p-ERK at first timepoint.
+2. ODE-style integration: uses diffrax `Kvaerno5` with `ODE_ATOL=1e-6`, `ODE_RTOL=1e-4`, `ODE_DTMAX=1.0`, `ODE_DT0` based on smallest dt, `max_steps=200000` (see `compute_marker_integration.py`).
+3. Exogenous inputs: non-state features are treated as time-dependent signals interpolated with `jax.numpy.interp` at each solver step; p-ERK is injected from the current state.
+4. GFP handling: GFP is part of the exogenous feature set; within each GFP bin it is interpolated from the bin's time series (constant per bin if measured that way).
+5. Failure handling: bins are skipped when time grids do not match the canonical grid or if solver fails/returns non-finite outputs.
+6. Evaluation metrics: R^2 (SSE/SST) and relative MAE computed per GFP bin; for per-minute datasets, evaluation can be restricted to measured timepoints.
+
+U. Model performance criteria and aggregation
+1. Bin-wise R^2: `binwise_r2` / `binwise_r2_stats` in `src/experimental/sr_pipeline/metrics.py` compute mean/median R^2 across bins (equal weight per bin).
+2. [MISSING] "Predictive model emerged" threshold is not explicitly encoded, but plotting scripts (e.g., `plot_pysr_vs_neural_ode.py`, `plot_pysr_vs_selectk.py`, `plot_metrics_summary.py`) use an R^2 threshold of 0.6 for annotations and quadrant counts.
+3. Variable counts: number of selected variables for PySR is computed by counting unique symbols in formulas (`_pysr_effective_k` in `neural_ode_baseline_per_minute.py`).
+
+V. Linear regression baseline (matched inputs)
+1. Baseline in `run_functional_groups.py`: `StandardScaler` + `LinearRegression` on the same feature set as SR; predicts derivative (`p-ERK1-2_dt`) and is evaluated with the same GFP-bin split and integration metrics.
+2. Matched-input linear baseline: `src/experimental/sr_pipeline/select_k_linreg_per_minute.py`.
+1. Uses `SelectKBest(f_regression)` to choose K features per marker (K swept). p-ERK is always included when present.
+2. Fits constrained linear regression via `scipy.optimize.lsq_linear`, enforcing non-positive p-ERK coefficient.
+3. Evaluation matches SR: dt R^2 and integrated R^2 using the same `compute_marker_integration` functions and GFP-bin splits.
+
+W. Neural ODE baseline
+1. Full-input model (`neural_ode_baseline_per_minute.py`):
+1. Architecture: MLP with `hidden_layers` (default 2) of width `hidden_dim` (default 64), ReLU activations, optional dropout (default 0).
+2. Training objective: MSE on derivative target (`p-ERK1-2_dt`).
+3. Optimizer: Adam; default `lr=1e-3`, weight decay `1e-4`.
+4. Early stopping: patience 30, min_delta 1e-4; batch size 64; max epochs 500.
+5. Splits: GFP-bin train/val/test (test_size=0.2, val_size=0.2) with RNG `random_state`.
+2. Matched-input model:
+1. If `--pysr-metrics` is provided, the script extracts `k_pysr` (#symbols) and selects `k` features via `SelectKBest(f_regression)` to match PySR complexity (minimum k=2).
+2. Otherwise uses full feature set.
+3. Evaluation uses the same integration metrics as SR (feature-driven Euler and ODE-style diffrax integration).
+3. Sweep hyperparameter search (experimental Neural ODE):
+1. Search space (Latin-hypercube, 60 samples): hidden_dim 32–192, hidden_layers 1–4, dropout 0.0–0.4, lr 2e-4–2e-3 (log), weight_decay 1e-5–1e-3 (log).
+2. Sweep scope: default marker limit 10, seed count 1 (from CLI defaults).
+3. Selection metric: mean validation dt MSE (`mean_val_dt_mse`); best row is selected by minimum value.
+4. Best hyperparameters are now saved to `neural_ode_best_params.json` alongside the sweep CSV.
+5. When a sweep is run (and not `--sweep-only`), the best sweep hyperparameters are used for the main run.
+
+--------------------------------------------------------
+Part E - Reporting of discovered equations (Table/Fig outputs)
+
+1. Best-equation extraction: `src/get_best_formula.py` selects the top formula from each method's hall-of-fame file.
+1. For CSV hall-of-fame files: picks best by lowest `loss` or highest `Score` depending on column (PySR uses highest `score`).
+2. No explicit sympy simplification or constant rounding is applied beyond string replacement of `x_i` variable names.
+2. Plotting scripts used in Snakemake outputs:
+1. `src/plot_methods.py` produces log-MAE vs complexity scatter (`data/*/sr_comparison/plots/results_plot.png`).
+2. `src/integrate_and_plot_methods.py` integrates ODEs from formulas and plots integrated log-MAE (`integrated_results_plot.png`).
+3. `src/plot_sr_timepoint_lineplot.py` generates log-MAE vs timepoint plots.
+4. `src/pan_enzyme_model_plots.py` aggregates formulas and makes cross-model bar/scatter plots (`data/panmodel_plots/*`).
+3. [MISSING] "Michaelis-Menten-like" classification is not explicitly implemented in code; no pattern matcher found.
+4. Reported numbers and figures are linked to Snakemake rule outputs in `Snakefile` (see rule outputs for exact file paths).
+
+--------------------------------------------------------
+Part F - Environment capture
+
+1. Conda env files:
+1. `envs/base.yaml` (PySB/AMICI/data-processing; installs jax/diffrax via pip).
+2. `envs/pysr.yaml` (PySR + plotting stack; no version pins).
+3. `envs/dso.yaml` (TensorFlow 1.14, numpy 1.19.5, etc).
+4. `envs/kan.yaml` (pykan).
+5. `envs/pysindy.yaml` (scikit-learn 1.5.2, scipy<1.11; pysindy commented).
+6. `envs/aifeynman.yaml`.
+7. `envs/nn.yaml`.
+8. `envs/odeformer.yaml` (if present in envs).
+2. Requirements: `simulation_requirements.txt` pins AMICI/PySB/PETab/etc.
+3. No Docker/Singularity definitions found in repo.
+4. Exact commands for figures/tables are encoded in `Snakefile` rules (e.g., `integrate_and_plot_results`, `plot_methods`, `dataset_size_regimes`, `experimental_*` rules).
+
+Notes on Missing/Implicit Items
+1. [MISSING] No explicit units are encoded in PySB or AMICI models.
+2. [MISSING] No explicit dP/dt target computation exists for synthetic benchmarks; `kcat_cg` is used as the target.
+3. [MISSING] No explicit Michaelis-Menten-like classification or equation simplification pipeline was found.
+4. [MISSING] Method versions are mostly not pinned (except in some conda envs like DSO); commit hashes are not stored.
+
+Reproducibility Checklist (Objective Items + How to Generate If Missing)
+Automation: `python scripts/repro_snapshot.py --deep` now generates `repro_snapshot.json` + `repro_snapshot.txt` with software versions, env file hashes, Snakefile rules (best-effort), logs, dataset sizes (CSV row counts), and pattern hits for `rmae`, `r2`, `seed`, `figure/table`, and `snakemake`. Use this snapshot to populate items 1, 2 (rule-level commands), 4, and 7; manual follow-up is still needed for exact runtime commands and metrics provenance.
+1. Exact software versions. [MISSING in repo; only partially pinned in env YAMLs].
+How to generate: for each conda env, run `conda list --explicit` (or `pip freeze`) and capture `python -c "import pkg; print(pkg.__version__)"` for PySR/SymPy/PySB/AMICI/JAX/Diffrax/Optuna/scikit-learn/PyTorch/TensorFlow/pykan/AI-Feynman. For Julia, run `julia -e 'using Pkg; Pkg.status(); versioninfo()'` inside the PySR environment.
+2. Exact commands used to generate each main figure/table. [MISSING unless Snakemake logs preserved].
+How to generate: run `snakemake -n --printshellcmds <target>` (with the same `config.yaml`) and archive the emitted command lines; or re-run with `--printshellcmds` and save the stdout/stderr logs (e.g., Slurm `*.out`/`*.err`).
+3. Where each reported number came from (e.g., Table 1 median test loss).
+How to generate: for each figure/table, identify its producing script in `Snakefile` (e.g., `plot_methods.py`, `integrate_and_plot_methods.py`, `pan_enzyme_model_plots.py`, `plot_metrics_summary.py`) and record the exact output file paths; then trace the exact metric function used in those scripts (`regime_variants.metric_*`, `mm_models`, `pan_enzyme_model_plots`) and record the aggregation step (mean/median over seeds/samples).
+4. Exact dataset sizes actually used per experiment. [MISSING unless outputs are counted].
+How to generate: count rows in the persisted splits or samples that each script writes (e.g., `data/*/processed/data_train.csv`, `data/*/dataset_size_regimes/**/processed/model_sample*.csv`, `data/*/mm_deviation_regimes/**/processed/train*.csv`); log the row counts used for PySR/NN/DSO/KAN/AI-Feynman inputs.
+5. Model definitions as actually executed (open vs closed). [PARTIAL].
+How to generate: snapshot `src/synthetic/base_models/**/base_model.py` (static/closed) and `dynamic_model.py` (dynamic/open) and record the exact file hashes used in the run; cite these in Methods. (No explicit runtime switch exists beyond choosing static vs dynamic model in `generate_data.py`.)
+6. Neural ODE baseline config used for reported comparisons. [MISSING unless sweep-best JSON exists].
+How to generate: after running the sweep, use the saved `neural_ode_best_params.json` (now written) and archive it alongside the metrics CSVs. Record whether the run used default hyperparams or sweep-best (post-change: sweep-best is used when sweep is run and not `--sweep-only`).
+7. Random seeds (exact lists) per experiment. [PARTIAL].
+How to generate: record CLI flags from Snakemake rules (e.g., `--seed`, `--num-seeds`, `--seeds 42 43 44`) and archive logs. For synthetic regimes, inspect persisted outputs if they record `seed_values` or re-run with explicit seed lists and log them.
+8. Runtime + resource usage logs. [MISSING unless logs archived].
+How to generate: capture Snakemake logs with `--printshellcmds` and timing (Slurm `*.out`/`*.err`), and record GPU usage via `nvidia-smi` (or `torch.cuda.is_available()` in logs). The repo contains `output_int.log`/`output_plot.log` from `strace` for two plotting steps only.

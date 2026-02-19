@@ -268,6 +268,59 @@ select_k_boxplot_integ = f"{select_k_dir}/boxplot_integ_r2.png"
 select_k_boxplot_ode = f"{select_k_dir}/boxplot_ode_r2.png"
 select_k_ribbon_coef = f"{select_k_dir}/ribbon_coef_importance.png"
 select_k_ribbon_variance = f"{select_k_dir}/ribbon_variance_importance.png"
+select_k_panel_a = f"{select_k_dir}/pysr_selectk_panel_a.png"
+select_k_panel_b = f"{select_k_dir}/pysr_selectk_panel_b.png"
+select_k_panel_a_box = f"{select_k_dir}/pysr_selectk_panel_a_box.png"
+select_k_panel_a_dt = f"{select_k_dir}/pysr_selectk_panel_a_dt.png"
+select_k_panel_b_dt = f"{select_k_dir}/pysr_selectk_panel_b_dt.png"
+select_k_panel_a_box_dt = f"{select_k_dir}/pysr_selectk_panel_a_box_dt.png"
+select_k_panel_a_linreg_bar = f"{select_k_dir}/pysr_selectk_panel_a_linreg_bar.png"
+select_k_panel_a_relmae = f"{select_k_dir}/pysr_selectk_panel_a_relmae.png"
+select_k_panel_b_relmae = f"{select_k_dir}/pysr_selectk_panel_b_relmae.png"
+select_k_panel_a_box_relmae = f"{select_k_dir}/pysr_selectk_panel_a_relmae_box.png"
+select_k_panel_a_relmae_dt = f"{select_k_dir}/pysr_selectk_panel_a_relmae_dt.png"
+select_k_panel_b_relmae_dt = f"{select_k_dir}/pysr_selectk_panel_b_relmae_dt.png"
+select_k_panel_a_box_relmae_dt = f"{select_k_dir}/pysr_selectk_panel_a_relmae_box_dt.png"
+select_k_panel_a_linreg_bar_relmae = f"{select_k_dir}/pysr_selectk_panel_a_linreg_bar_relmae.png"
+select_k_variability_dt = f"{select_k_dir}/pysr_selectk_variability_dt.png"
+select_k_variability_perk = f"{select_k_dir}/pysr_selectk_variability_perk.png"
+select_k_pysr_k_vs_r2 = f"{select_k_dir}/pysr_selectk_pysr_k_vs_r2.png"
+select_k_heatmap = f"{select_k_dir}/pysr_selectk_heatmap.png"
+select_k_trajectory_all_k = f"{select_k_dir}/pysr_selectk_trajectory_all_k.png"
+select_k_baseline_pysr_vs_linreg = f"{select_k_dir}/pysr_selectk_baseline_pysr_vs_linreg.png"
+select_k_trajectory_all_k = f"{select_k_dir}/pysr_selectk_trajectory_all_k.png"
+
+neural_ode_dir = f"{exp_runs_root}/neural_ode"
+neural_ode_full_dir = f"{neural_ode_dir}/full"
+neural_ode_matched_dir = f"{neural_ode_dir}/matched"
+
+neural_ode_metrics_full = f"{neural_ode_full_dir}/neural_ode_metrics.csv"
+neural_ode_metrics_agg_full = f"{neural_ode_full_dir}/neural_ode_metrics_agg.csv"
+neural_ode_boxplot_dt_full = f"{neural_ode_full_dir}/boxplot_dt_r2.png"
+neural_ode_boxplot_integ_full = f"{neural_ode_full_dir}/boxplot_integ_r2.png"
+neural_ode_boxplot_ode_full = f"{neural_ode_full_dir}/boxplot_ode_r2.png"
+neural_ode_panel_ode_full = f"{neural_ode_full_dir}/pysr_neuralode_panel_ode.png"
+neural_ode_panel_dt_full = f"{neural_ode_full_dir}/pysr_neuralode_panel_dt.png"
+neural_ode_panel_ode_relmae_full = f"{neural_ode_full_dir}/pysr_neuralode_panel_ode_relmae.png"
+neural_ode_panel_dt_relmae_full = f"{neural_ode_full_dir}/pysr_neuralode_panel_dt_relmae.png"
+neural_ode_baseline_full = f"{neural_ode_full_dir}/pysr_neuralode_baseline.png"
+neural_ode_pysr_k_vs_r2_full = f"{neural_ode_full_dir}/pysr_neuralode_pysr_k_vs_r2.png"
+neural_ode_sweep_full = f"{neural_ode_full_dir}/neural_ode_sweep.csv"
+neural_ode_quadrant_bar_full = f"{neural_ode_full_dir}/pysr_neuralode_quadrant_bar.png"
+
+neural_ode_metrics_matched = f"{neural_ode_matched_dir}/neural_ode_metrics.csv"
+neural_ode_metrics_agg_matched = f"{neural_ode_matched_dir}/neural_ode_metrics_agg.csv"
+neural_ode_boxplot_dt_matched = f"{neural_ode_matched_dir}/boxplot_dt_r2.png"
+neural_ode_boxplot_integ_matched = f"{neural_ode_matched_dir}/boxplot_integ_r2.png"
+neural_ode_boxplot_ode_matched = f"{neural_ode_matched_dir}/boxplot_ode_r2.png"
+neural_ode_panel_ode_matched = f"{neural_ode_matched_dir}/pysr_neuralode_panel_ode.png"
+neural_ode_panel_dt_matched = f"{neural_ode_matched_dir}/pysr_neuralode_panel_dt.png"
+neural_ode_panel_ode_relmae_matched = f"{neural_ode_matched_dir}/pysr_neuralode_panel_ode_relmae.png"
+neural_ode_panel_dt_relmae_matched = f"{neural_ode_matched_dir}/pysr_neuralode_panel_dt_relmae.png"
+neural_ode_baseline_matched = f"{neural_ode_matched_dir}/pysr_neuralode_baseline.png"
+neural_ode_pysr_k_vs_r2_matched = f"{neural_ode_matched_dir}/pysr_neuralode_pysr_k_vs_r2.png"
+neural_ode_sweep_matched = f"{neural_ode_matched_dir}/neural_ode_sweep.csv"
+neural_ode_quadrant_bar_matched = f"{neural_ode_matched_dir}/pysr_neuralode_quadrant_bar.png"
 
 # Metrics scatter outputs
 metrics_models_r2 = f"{plots_metrics_scatter_dir}/dt/metrics_models_scatter_r2.png"
@@ -418,6 +471,24 @@ if enzyme_model == "experimental":
         select_k_boxplot_ode,
         select_k_ribbon_coef,
         select_k_ribbon_variance,
+        select_k_panel_a_box,
+        select_k_panel_a,
+        select_k_panel_b,
+        select_k_panel_a_dt,
+        select_k_panel_b_dt,
+        select_k_panel_a_box_dt,
+        select_k_panel_a_linreg_bar,
+        select_k_panel_a_relmae,
+        select_k_panel_b_relmae,
+        select_k_panel_a_box_relmae,
+        select_k_panel_a_relmae_dt,
+        select_k_panel_b_relmae_dt,
+        select_k_panel_a_box_relmae_dt,
+        select_k_panel_a_linreg_bar_relmae,
+        select_k_variability_dt,
+        select_k_variability_perk,
+        select_k_pysr_k_vs_r2,
+        select_k_heatmap,
         metrics_models_r2,
         metrics_models_r2_svg,
         metrics_models_relmae,
@@ -561,6 +632,273 @@ if enzyme_model == "experimental":
                 --late-sample-window {params.late_window_start} {params.late_window_end} \
                 --late-sample-points {params.late_points} \
                 --seeds {params.seeds} \
+                --measured-timepoints {params.measured}
+            """
+
+    rule experimental_neural_ode_baseline:
+        input:
+            per_minute=functional_group_per_minute_csv
+        output:
+            metrics=neural_ode_metrics_full,
+            metrics_agg=neural_ode_metrics_agg_full,
+            boxplot_dt=neural_ode_boxplot_dt_full,
+            boxplot_integ=neural_ode_boxplot_integ_full,
+            boxplot_ode=neural_ode_boxplot_ode_full
+        conda:
+            "envs/pysr.yaml"
+        params:
+            out_dir=neural_ode_full_dir,
+            measured=" ".join(str(t) for t in exp_measured_timepoints),
+            max_time=exp_per_minute_max_time,
+            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
+            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
+            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
+            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
+            seeds="42 43 44",
+        shell:
+            """
+            mkdir -p {params.out_dir}
+            python src/experimental/sr_pipeline/neural_ode_baseline_per_minute.py \
+                --dataset {input.per_minute} \
+                --output-dir {params.out_dir} \
+                --per-minute-max-time {params.max_time} \
+                --per-minute-sampling-strategy {params.strategy} \
+                --late-sample-window {params.late_window_start} {params.late_window_end} \
+                --late-sample-points {params.late_points} \
+                --seeds {params.seeds} \
+                --measured-timepoints {params.measured} \
+                --sweep-output {neural_ode_sweep_full}
+            """
+
+    rule experimental_neural_ode_sweep:
+        input:
+            per_minute=functional_group_per_minute_csv
+        output:
+            sweep=neural_ode_sweep_full
+        conda:
+            "envs/pysr.yaml"
+        params:
+            out_dir=neural_ode_full_dir,
+            measured=" ".join(str(t) for t in exp_measured_timepoints),
+            max_time=exp_per_minute_max_time,
+            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
+            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
+            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
+            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
+            seeds="42 43 44",
+        shell:
+            """
+            mkdir -p {params.out_dir}
+            python src/experimental/sr_pipeline/neural_ode_baseline_per_minute.py \
+                --dataset {input.per_minute} \
+                --output-dir {params.out_dir} \
+                --per-minute-max-time {params.max_time} \
+                --per-minute-sampling-strategy {params.strategy} \
+                --late-sample-window {params.late_window_start} {params.late_window_end} \
+                --late-sample-points {params.late_points} \
+                --seeds {params.seeds} \
+                --measured-timepoints {params.measured} \
+                --sweep-output {output.sweep} \
+                --sweep-only
+            """
+
+    rule experimental_neural_ode_baseline_matched:
+        input:
+            per_minute=functional_group_per_minute_csv,
+            pysr=integration_per_minute_metrics
+        output:
+            metrics=neural_ode_metrics_matched,
+            metrics_agg=neural_ode_metrics_agg_matched,
+            boxplot_dt=neural_ode_boxplot_dt_matched,
+            boxplot_integ=neural_ode_boxplot_integ_matched,
+            boxplot_ode=neural_ode_boxplot_ode_matched
+        conda:
+            "envs/pysr.yaml"
+        params:
+            out_dir=neural_ode_matched_dir,
+            measured=" ".join(str(t) for t in exp_measured_timepoints),
+            max_time=exp_per_minute_max_time,
+            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
+            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
+            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
+            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
+            seeds="42 43 44",
+        shell:
+            """
+            mkdir -p {params.out_dir}
+            python src/experimental/sr_pipeline/neural_ode_baseline_per_minute.py \
+                --dataset {input.per_minute} \
+                --output-dir {params.out_dir} \
+                --per-minute-max-time {params.max_time} \
+                --per-minute-sampling-strategy {params.strategy} \
+                --late-sample-window {params.late_window_start} {params.late_window_end} \
+                --late-sample-points {params.late_points} \
+                --seeds {params.seeds} \
+                --measured-timepoints {params.measured} \
+                --sweep-output {neural_ode_sweep_matched} \
+                --pysr-metrics {input.pysr} \
+                --tag matched_k
+            """
+
+    rule experimental_neural_ode_sweep_matched:
+        input:
+            per_minute=functional_group_per_minute_csv,
+            pysr=integration_per_minute_metrics
+        output:
+            sweep=neural_ode_sweep_matched
+        conda:
+            "envs/pysr.yaml"
+        params:
+            out_dir=neural_ode_matched_dir,
+            measured=" ".join(str(t) for t in exp_measured_timepoints),
+            max_time=exp_per_minute_max_time,
+            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
+            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
+            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
+            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
+            seeds="42 43 44",
+        shell:
+            """
+            mkdir -p {params.out_dir}
+            python src/experimental/sr_pipeline/neural_ode_baseline_per_minute.py \
+                --dataset {input.per_minute} \
+                --output-dir {params.out_dir} \
+                --per-minute-max-time {params.max_time} \
+                --per-minute-sampling-strategy {params.strategy} \
+                --late-sample-window {params.late_window_start} {params.late_window_end} \
+                --late-sample-points {params.late_points} \
+                --seeds {params.seeds} \
+                --measured-timepoints {params.measured} \
+                --sweep-output {output.sweep} \
+                --pysr-metrics {input.pysr} \
+                --tag matched_k \
+                --sweep-only
+            """
+
+    rule experimental_neural_ode_all:
+        input:
+            neural_ode_metrics_agg_full,
+            neural_ode_metrics_agg_matched
+        run:
+            pass
+
+    rule experimental_plot_pysr_vs_selectk:
+        input:
+            selectk=select_k_metrics_agg,
+            pysr=integration_per_minute_metrics
+        output:
+            panel_a_box=select_k_panel_a_box,
+            panel_a=select_k_panel_a,
+            panel_b=select_k_panel_b,
+            panel_a_dt=select_k_panel_a_dt,
+            panel_b_dt=select_k_panel_b_dt,
+            panel_a_box_dt=select_k_panel_a_box_dt,
+            linreg_bar=select_k_panel_a_linreg_bar,
+            panel_a_relmae=select_k_panel_a_relmae,
+            panel_b_relmae=select_k_panel_b_relmae,
+            panel_a_box_relmae=select_k_panel_a_box_relmae,
+            panel_a_relmae_dt=select_k_panel_a_relmae_dt,
+            panel_b_relmae_dt=select_k_panel_b_relmae_dt,
+            panel_a_box_relmae_dt=select_k_panel_a_box_relmae_dt,
+            linreg_bar_relmae=select_k_panel_a_linreg_bar_relmae,
+            variability_dt=select_k_variability_dt,
+            variability_perk=select_k_variability_perk,
+            pysr_k_vs_r2=select_k_pysr_k_vs_r2,
+            trajectory_all_k=select_k_trajectory_all_k,
+            baseline=select_k_baseline_pysr_vs_linreg,
+            heatmap=select_k_heatmap
+        conda:
+            "envs/pysr.yaml"
+        params:
+            measured=" ".join(str(t) for t in exp_measured_timepoints)
+        shell:
+            """
+            python src/experimental/sr_pipeline/plot_pysr_vs_selectk.py \
+                --selectk-metrics {input.selectk} \
+                --pysr-metrics {input.pysr} \
+                --output-panel-a {output.panel_a} \
+                --output-panel-a-box {output.panel_a_box} \
+                --output-panel-b {output.panel_b} \
+                --output-panel-a-dt {output.panel_a_dt} \
+                --output-panel-a-dt-box {output.panel_a_box_dt} \
+                --output-panel-b-dt {output.panel_b_dt} \
+                --output-linreg-compare-bar {output.linreg_bar} \
+                --output-panel-a-relmae {output.panel_a_relmae} \
+                --output-panel-a-relmae-box {output.panel_a_box_relmae} \
+                --output-panel-b-relmae {output.panel_b_relmae} \
+                --output-panel-a-relmae-dt {output.panel_a_relmae_dt} \
+                --output-panel-a-relmae-dt-box {output.panel_a_box_relmae_dt} \
+                --output-panel-b-relmae-dt {output.panel_b_relmae_dt} \
+                --output-linreg-compare-bar-relmae {output.linreg_bar_relmae} \
+                --variability-dt-output {output.variability_dt} \
+                --variability-perk-output {output.variability_perk} \
+                --output-pysr-k-vs-r2 {output.pysr_k_vs_r2} \
+                --output-trajectory-all-k {output.trajectory_all_k} \
+                --output-baseline-pysr-vs-linreg {output.baseline} \
+                --trajectories {integration_per_minute_traj} \
+                --heatmap-output {output.heatmap} \
+                --measured-timepoints {params.measured}
+            """
+
+    rule experimental_plot_pysr_vs_neural_ode:
+        input:
+            baseline=neural_ode_metrics_agg_full,
+            pysr=integration_per_minute_metrics
+        output:
+            panel_ode=neural_ode_panel_ode_full,
+            panel_dt=neural_ode_panel_dt_full,
+            panel_ode_relmae=neural_ode_panel_ode_relmae_full,
+            panel_dt_relmae=neural_ode_panel_dt_relmae_full,
+            baseline=neural_ode_baseline_full,
+            pysr_k_vs_r2=neural_ode_pysr_k_vs_r2_full,
+            quadrant_bar=neural_ode_quadrant_bar_full
+        conda:
+            "envs/pysr.yaml"
+        params:
+            measured=" ".join(str(t) for t in exp_measured_timepoints)
+        shell:
+            """
+            python src/experimental/sr_pipeline/plot_pysr_vs_neural_ode.py \
+                --baseline-metrics {input.baseline} \
+                --pysr-metrics {input.pysr} \
+                --output-panel-ode {output.panel_ode} \
+                --output-panel-dt {output.panel_dt} \
+                --output-panel-ode-relmae {output.panel_ode_relmae} \
+                --output-panel-dt-relmae {output.panel_dt_relmae} \
+                --output-baseline {output.baseline} \
+                --output-pysr-k-vs-r2 {output.pysr_k_vs_r2} \
+                --output-quadrant-bar {output.quadrant_bar} \
+                --measured-timepoints {params.measured}
+            """
+
+    rule experimental_plot_pysr_vs_neural_ode_matched:
+        input:
+            baseline=neural_ode_metrics_agg_matched,
+            pysr=integration_per_minute_metrics
+        output:
+            panel_ode=neural_ode_panel_ode_matched,
+            panel_dt=neural_ode_panel_dt_matched,
+            panel_ode_relmae=neural_ode_panel_ode_relmae_matched,
+            panel_dt_relmae=neural_ode_panel_dt_relmae_matched,
+            baseline=neural_ode_baseline_matched,
+            pysr_k_vs_r2=neural_ode_pysr_k_vs_r2_matched,
+            quadrant_bar=neural_ode_quadrant_bar_matched
+        conda:
+            "envs/pysr.yaml"
+        params:
+            measured=" ".join(str(t) for t in exp_measured_timepoints)
+        shell:
+            """
+            python src/experimental/sr_pipeline/plot_pysr_vs_neural_ode.py \
+                --baseline-metrics {input.baseline} \
+                --pysr-metrics {input.pysr} \
+                --output-panel-ode {output.panel_ode} \
+                --output-panel-dt {output.panel_dt} \
+                --output-panel-ode-relmae {output.panel_ode_relmae} \
+                --output-panel-dt-relmae {output.panel_dt_relmae} \
+                --output-baseline {output.baseline} \
+                --output-pysr-k-vs-r2 {output.pysr_k_vs_r2} \
+                --output-quadrant-bar {output.quadrant_bar} \
                 --measured-timepoints {params.measured}
             """
 
@@ -711,6 +1049,14 @@ if enzyme_model == "experimental":
                     done
                 done
             fi
+
+            # Ensure predicted trajectory outputs exist even when snapshot predictions are absent.
+            if [ ! -f {output.predicted_snapshot} ]; then
+                touch {output.predicted_snapshot}
+            fi
+            if [ ! -f {output.predicted_per_minute} ]; then
+                touch {output.predicted_per_minute}
+            fi
             """
 
     rule experimental_plots:
@@ -751,7 +1097,13 @@ if enzyme_model == "experimental":
             feature_usage_png=feature_usage_plots_png,
             feature_usage_svg=feature_usage_plots_svg,
             feature_importance_png=feature_importance_plots_png,
-            feature_importance_svg=feature_importance_plots_svg
+            feature_importance_svg=feature_importance_plots_svg,
+            overlay_snapshot=overlay_snapshot_plot,
+            overlay_snapshot_svg=overlay_snapshot_plot_svg,
+            overlay_snapshot_metrics=overlay_snapshot_metrics,
+            overlay_per_minute=overlay_per_minute_plot,
+            overlay_per_minute_svg=overlay_per_minute_plot_svg,
+            overlay_per_minute_metrics=overlay_per_minute_metrics
         conda:
             "envs/pysr.yaml"
         params:
@@ -759,10 +1111,11 @@ if enzyme_model == "experimental":
             metrics_plots_dir=plots_metrics_dir,
             measured=" ".join(str(t) for t in exp_measured_timepoints),
             metrics_dir=exp_metrics_root,
+            trajectories_dir=exp_trajectories_root,
             seeds_dir=exp_runs_seeds,
         shell:
             """
-            mkdir -p {params.overlays_dir} {params.metrics_plots_dir} {params.metrics_dir}
+            mkdir -p {params.overlays_dir} {params.metrics_plots_dir} {params.metrics_dir} {params.trajectories_dir}
             seed_summaries=($(ls {params.seeds_dir}/seed_*/summary/functional_group_summary.csv 2>/dev/null || true))
 
             if [ "${{#seed_summaries[@]}}" -gt 0 ]; then
@@ -892,8 +1245,43 @@ if enzyme_model == "experimental":
                 --summary {input.summary_mean} \
                 --output-dir {params.metrics_plots_dir} \
                 --integration-metrics-dir {params.metrics_dir} \
+                --trajectories-dir {params.trajectories_dir} \
                 --snapshot-dataset {input.snapshot} \
                 --per-minute-dataset {input.per_minute}
+
+            # Copy one set of overlay plots/metrics into the aggregated outputs Snakemake expects.
+            mkdir -p "$(dirname {output.overlay_snapshot})" "$(dirname {output.overlay_snapshot_svg})" \
+                     "$(dirname {output.overlay_per_minute})" "$(dirname {output.overlay_per_minute_svg})" \
+                     "$(dirname {output.overlay_snapshot_metrics})" "$(dirname {output.overlay_per_minute_metrics})"
+            if [ "${{#seed_summaries[@]}}" -gt 0 ]; then
+                first_seed="$(basename "$(dirname "$(dirname "${{seed_summaries[0]}}")")" | sed 's/seed_//')"
+                src_overlay_dir="{params.overlays_dir}/seed_${{first_seed}}"
+                src_metrics_dir="{params.seeds_dir}/seed_${{first_seed}}/metrics"
+            else
+                src_overlay_dir="{params.overlays_dir}"
+                src_metrics_dir="{params.metrics_dir}"
+            fi
+            for mode in snapshot per_minute; do
+                png_out="{output.overlay_snapshot}" ; svg_out="{output.overlay_snapshot_svg}" ; csv_out="{output.overlay_snapshot_metrics}"
+                if [ "$mode" = "per_minute" ]; then
+                    png_out="{output.overlay_per_minute}" ; svg_out="{output.overlay_per_minute_svg}" ; csv_out="{output.overlay_per_minute_metrics}"
+                fi
+                if [ -f "$src_overlay_dir/marker_overlay_${{mode}}.png" ]; then
+                    cp "$src_overlay_dir/marker_overlay_${{mode}}.png" "$png_out"
+                else
+                    touch "$png_out"
+                fi
+                if [ -f "$src_overlay_dir/marker_overlay_${{mode}}.svg" ]; then
+                    cp "$src_overlay_dir/marker_overlay_${{mode}}.svg" "$svg_out"
+                else
+                    touch "$svg_out"
+                fi
+                if [ -f "$src_metrics_dir/marker_overlay_metrics_${{mode}}.csv" ]; then
+                    cp "$src_metrics_dir/marker_overlay_metrics_${{mode}}.csv" "$csv_out"
+                else
+                    touch "$csv_out"
+                fi
+            done
             """
 
 if run_pysr:
@@ -1200,8 +1588,9 @@ def symbolic_regression_rule(model, dataset, dataset_size, features, temp_file, 
     install_command = install_cmds.get(model, "")
     separator = ";" if install_command else ""
     variant_flag = f" --variant {variant}" if variant else ""
+    seed_flag = " --seed 42" if model == "pysr" else ""
     return f"""
-        {install_command}{separator} timeout {config["timeout_duration"]} python src/sr_models/{model}_model.py --dataset {dataset} --dataset_size {dataset_size} --features {features} --temp_file {temp_file}{variant_flag} || test -s {temp_file}
+        {install_command}{separator} timeout {config["timeout_duration"]} python src/sr_models/{model}_model.py --dataset {dataset} --dataset_size {dataset_size} --features {features} --temp_file {temp_file}{variant_flag}{seed_flag} || test -s {temp_file}
     """
 
 # Rules for symbolic regression for each model
@@ -1390,12 +1779,28 @@ rule kinetic_regimes:
     input:
         dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
     output:
+        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/results/pysr/all_pysr_formulas.txt",
+    conda:
+        "envs/pysr.yaml"
+    params:
+        dataset_size=config["dataset_sizes"]["pysr"],
+        features=features
+    shell:
+        """
+        echo "Running PySR on different kinetic regimes (no plots)."
+        python src/kinetic_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features} --no-plots
+        echo "PySR biochemical regime evaluation completed."
+        """
+
+rule kinetic_regime_plots:
+    input:
+        dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
+    output:
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/error_landscape.png",
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/feature_error_correlation_grid.png",
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/feature_error_correlation_overall.png",
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/model_error_correlation_grid.png",
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/model_error_correlation_overall.png",
-        f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/results/pysr/all_pysr_formulas.txt",
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae/log_mae_horizontal_boxplot.png",
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae/log_mae_horizontal_boxplot_no_outliers.png",
         f"data/{enzyme_model}/{data_type}/kinetic_regimes/shared/plots/log_mae/log_mae_vertical_boxplot.png",
@@ -1410,12 +1815,29 @@ rule kinetic_regimes:
         features=features
     shell:
         """
-        echo "Running PySR on different kinetic regimes."
-        python src/kinetic_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features}
-        echo "PySR biochemical regime evaluation completed."
+        echo "Running PySR on different kinetic regimes (plots-only target)."
+        python src/kinetic_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features} --plots-only
+        echo "PySR biochemical regime plotting completed."
         """
 
 rule noise_regimes_full:
+    input:
+        dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
+    output:
+        f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/results/pysr/all_pysr_formulas.txt",
+    conda:
+        "envs/pysr.yaml"
+    params:
+        dataset_size=config["dataset_sizes"]["pysr"],
+        features=features
+    shell:
+        """
+        echo "Running PySR on full-dataset noise regimes (no plots)."
+        python src/noise_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features} --no-plots
+        echo "PySR full noise regime evaluation completed."
+        """
+
+rule noise_regime_plots:
     input:
         dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
     output:
@@ -1424,7 +1846,6 @@ rule noise_regimes_full:
         f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/feature_error_correlation_overall.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/model_error_correlation_grid.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/model_error_correlation_overall.png",
-        f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/results/pysr/all_pysr_formulas.txt",
         f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae/log_mae_horizontal_boxplot.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae/log_mae_horizontal_boxplot_no_outliers.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae/log_mae_vertical_boxplot.png",
@@ -1432,6 +1853,8 @@ rule noise_regimes_full:
         f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae/log_mae_noise_regime_lineplot.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae/log_mae_noise_regime_lineplot_template.png",
         f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae/log_mae_error_distributions.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/log_mae/sqssa_vs_tqssa_baselines_log_mae.png",
+        f"data/{enzyme_model}/{data_type}/noise_regimes_full/shared/plots/relative_mae/sqssa_vs_tqssa_baselines_relative_mae.png",
     conda:
         "envs/pysr.yaml"
     params:
@@ -1439,12 +1862,29 @@ rule noise_regimes_full:
         features=features
     shell:
         """
-        echo "Running PySR on full-dataset noise regimes."
-        python src/noise_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features}
-        echo "PySR full noise regime evaluation completed."
+        echo "Running PySR on full-dataset noise regimes (plots-only target)."
+        python src/noise_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features} --plots-only
+        echo "PySR full noise regime plotting completed."
         """
 
 rule mm_deviation_regimes:
+    input:
+        dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
+    output:
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/results/pysr/all_pysr_formulas.txt",
+    conda:
+        "envs/pysr.yaml"
+    params:
+        dataset_size=config["dataset_sizes"]["pysr"],
+        features=features
+    shell:
+        """
+        echo "Running PySR on Michaelis-Menten deviation regimes (no plots)."
+        python src/mm_deviation_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features} --no-plots
+        echo "PySR MM deviation regime evaluation completed."
+        """
+
+rule mm_deviation_regime_plots:
     input:
         dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
     output:
@@ -1453,7 +1893,6 @@ rule mm_deviation_regimes:
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/feature_error_correlation_overall.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/model_error_correlation_grid.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/model_error_correlation_overall.png",
-        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/results/pysr/all_pysr_formulas.txt",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae/log_mae_horizontal_boxplot.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae/log_mae_horizontal_boxplot_no_outliers.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae/log_mae_vertical_boxplot.png",
@@ -1461,6 +1900,8 @@ rule mm_deviation_regimes:
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae/log_mae_deviation_lineplot.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae/log_mae_deviation_lineplot_template.png",
         f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae/log_mae_error_distributions.png",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/log_mae/sqssa_vs_tqssa_baselines_log_mae.png",
+        f"data/{enzyme_model}/{data_type}/mm_deviation_regimes/shared/plots/relative_mae/sqssa_vs_tqssa_baselines_relative_mae.png",
     conda:
         "envs/pysr.yaml"
     params:
@@ -1468,17 +1909,34 @@ rule mm_deviation_regimes:
         features=features
     shell:
         """
-        echo "Running PySR on Michaelis-Menten deviation regimes."
-        python src/mm_deviation_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features}
-        echo "PySR MM deviation regime evaluation completed."
+        echo "Running PySR on Michaelis-Menten deviation regimes (plots-only target)."
+        python src/mm_deviation_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features} --plots-only
+        echo "PySR MM deviation regime plotting completed."
         """
 
 rule dataset_size_regimes:
     input:
         dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
     output:
+        f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/results/pysr/all_pysr_formulas.txt"
+    conda:
+        "envs/pysr.yaml"
+    params:
+        features=features,
+        pysr_size=config["dataset_sizes"]["pysr"],
+        nn_size=config["dataset_sizes"].get("nn", 20000)
+    shell:
+        """
+        echo "Running dataset-size regime evaluation (no plots)."
+        python src/dataset_size_regimes.py --dataset {input.dataset} --features {params.features} --pysr-base-size {params.pysr_size} --nn-base-size {params.nn_size} --no-plots
+        echo "Dataset-size regime evaluation completed."
+        """
+
+rule dataset_size_regime_plots:
+    input:
+        dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
+    output:
         f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/error_landscape.png",
-        f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/results/pysr/all_pysr_formulas.txt",
         f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/feature_error_correlation_grid.png",
         f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/feature_error_correlation_overall.png",
         f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/model_error_correlation_grid.png",
@@ -1490,13 +1948,15 @@ rule dataset_size_regimes:
         f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/log_mae/log_mae_dataset_size_lineplot.png",
         f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/log_mae/log_mae_dataset_size_lineplot_template.png",
         f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/log_mae/log_mae_error_distributions.png",
+        f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/log_mae/sqssa_vs_tqssa_baselines_log_mae.png",
+        f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/relative_mae/sqssa_vs_tqssa_baselines_relative_mae.png",
         f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/relative_mae/relative_mae_horizontal_boxplot.png",
         f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/relative_mae/relative_mae_horizontal_boxplot_no_outliers.png",
         f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/relative_mae/relative_mae_vertical_boxplot.png",
         f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/relative_mae/relative_mae_vertical_boxplot_no_outliers.png",
         f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/relative_mae/relative_mae_dataset_size_lineplot.png",
         f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/relative_mae/relative_mae_dataset_size_lineplot_template.png",
-        f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/relative_mae/relative_mae_error_distributions.png"
+        f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/relative_mae/relative_mae_error_distributions.png",
     conda:
         "envs/pysr.yaml"
     params:
@@ -1505,14 +1965,31 @@ rule dataset_size_regimes:
         nn_size=config["dataset_sizes"].get("nn", 20000)
     shell:
         """
-        echo "Running dataset-size regime evaluation."
-        python src/dataset_size_regimes.py --dataset {input.dataset} --features {params.features} --pysr-base-size {params.pysr_size} --nn-base-size {params.nn_size}
-        echo "Dataset-size regime evaluation completed."
+        echo "Running dataset-size regime plotting."
+        python src/dataset_size_regimes.py --dataset {input.dataset} --features {params.features} --pysr-base-size {params.pysr_size} --nn-base-size {params.nn_size} --plots-only
+        echo "Dataset-size regime plotting completed."
         """
 
 if data_type == "dynamic":
 
     rule timepoint_regimes:
+        input:
+            dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
+        output:
+            f"data/{enzyme_model}/{data_type}/timepoint_regimes/shared/results/pysr/all_pysr_formulas.txt",
+        conda:
+            "envs/pysr.yaml"
+        params:
+            dataset_size=config["dataset_sizes"]["pysr"],
+            features=features
+        shell:
+            """
+            echo "Running PySR across timepoint groups (no plots)."
+            python src/timepoint_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features} --no-plots
+            echo "Timepoint benchmarking completed."
+            """
+
+    rule timepoint_regime_plots:
         input:
             dataset=f"data/{enzyme_model}/{data_type}/processed/data_merged.csv"
         output:
@@ -1528,7 +2005,6 @@ if data_type == "dynamic":
             f"data/{enzyme_model}/{data_type}/timepoint_regimes/shared/plots/feature_error_correlation_overall.png",
             f"data/{enzyme_model}/{data_type}/timepoint_regimes/shared/plots/model_error_correlation_grid.png",
             f"data/{enzyme_model}/{data_type}/timepoint_regimes/shared/plots/model_error_correlation_overall.png",
-            f"data/{enzyme_model}/{data_type}/timepoint_regimes/shared/results/pysr/all_pysr_formulas.txt",
         conda:
             "envs/pysr.yaml"
         params:
@@ -1536,11 +2012,10 @@ if data_type == "dynamic":
             features=features
         shell:
             """
-            echo "Running PySR across timepoint groups."
-            python src/timepoint_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features}
-            echo "Timepoint benchmarking completed."
+            echo "Running PySR across timepoint groups (plots-only target)."
+            python src/timepoint_regimes.py --dataset {input.dataset} --dataset_size {params.dataset_size} --features {params.features} --plots-only
+            echo "Timepoint regime plotting completed."
             """
-
 # New rule to perform grid search for the NN model
 rule nn_grid_search:
     output:
@@ -1551,18 +2026,21 @@ rule nn_grid_search:
         echo "Using previously determined NN hyperparameters." > {output.report}
         """
 
+PAN_PLOT_VARIANTS = ["sqssa", "tqssa"]
+
 rule pan_enzyme_model_plots:
     input:
-        formulas=formula_files,
-        root_dir="data",
-        dataset=f"data/{enzyme_model}/{data_type}/processed/data_test.csv"
+        root_dir="data"
     output:
-        "data/panmodel_plots/symbolic_model_r2_scores_bar.png",
-        "data/panmodel_plots/symbolic_model_r2_scores_scatter.png",
-        "data/panmodel_plots/all_symbolic_formulas.txt"
+        "data/panmodel_plots/{variant}/symbolic_model_r2_scores_bar.png",
+        "data/panmodel_plots/{variant}/symbolic_model_r2_scores_scatter.png",
+        "data/panmodel_plots/{variant}/symbolic_model_relmae_scores_box.png",
+        "data/panmodel_plots/{variant}/all_symbolic_formulas.txt"
     conda:
         "envs/base.yaml"
     params:
         discovery_scales="'" + config["discovery_scales"] + "'"
+    wildcard_constraints:
+        variant="|".join(PAN_PLOT_VARIANTS)
     shell:
-        "python src/pan_enzyme_model_plots.py --root-dir {input.root_dir} --dataset {input.dataset} --discovery-scales {params.discovery_scales}"
+        "python src/pan_enzyme_model_plots.py --root-dir {input.root_dir} --discovery-scales {params.discovery_scales} --variant {wildcards.variant}"

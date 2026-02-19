@@ -4,6 +4,7 @@ import os
 import argparse
 import warnings
 import logging
+import json
 from collections import OrderedDict
 from typing import Dict, List, Optional
 
@@ -19,8 +20,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, FunctionTransformer
 from sklearn.pipeline import Pipeline
 
-from nn_model import train_model, evaluate_model
-from constants import PYSR_CONFIG
+from nn_model import train_model, evaluate_model, load_model_checkpoint
+from constants import PYSR_CONFIG, pysr_operator_config
 from plot_style import apply_cell_systems_style
 from utils.seeding import resolve_seed, seed_everything
 
@@ -42,12 +43,16 @@ from regime_variants import (
     format_variant_split,
     format_model_metrics,
     model_display_name,
+    baseline_label,
+    baseline_labels,
     mm_variant_prediction,
     variant_suffix,
+    has_persisted_splits,
     regime_logger,
     aggregate_seed_error_statistics,
     clip_metric_values,
     metric_limits_with_margin,
+    variant_plot_context,
 )
 
 warnings.filterwarnings("ignore")
@@ -66,6 +71,23 @@ def _emit(message: str) -> None:
     LOGGER.info(message)
     print(message)
 
+
+def _dedupe_baseline_legend(ax: plt.Axes) -> None:
+    handles, labels = ax.get_legend_handles_labels()
+    if not handles:
+        return
+    seen = set()
+    unique_handles = []
+    unique_labels = []
+    for handle, label in zip(handles, labels):
+        base_label = baseline_label(label)
+        if base_label in seen:
+            continue
+        seen.add(base_label)
+        unique_handles.append(handle)
+        unique_labels.append(base_label)
+    ax.legend(unique_handles, unique_labels, frameon=False)
+
 SIZE_GROUPS = OrderedDict(
     {
         "size_10pct": {"label": "Dataset Size 10%", "multiplier": 0.10},
@@ -80,6 +102,25 @@ REGIME_ORDER = {key: idx for idx, key in enumerate(SIZE_GROUPS.keys())}
 
 TARGET_COLUMN = "kcat_cg"
 LOG_SCALE_FLOOR = 1e-3
+LOG_EPS = 1e-20
+
+
+def _warn_on_bad_values(values: np.ndarray, context: str) -> None:
+    arr = np.asarray(values, dtype=float)
+    nonfinite = np.count_nonzero(~np.isfinite(arr))
+    nonpositive = np.count_nonzero(arr <= 0)
+    if nonfinite or nonpositive:
+        _emit(
+            f"[warn] {context}: {nonfinite} non-finite, {nonpositive} non-positive values; "
+            f"clipping to {LOG_EPS} before log transform."
+        )
+
+
+def _safe_log_values(values: np.ndarray, context: str) -> np.ndarray:
+    arr = np.asarray(values, dtype=float)
+    _warn_on_bad_values(arr, context)
+    safe = np.nan_to_num(arr, nan=LOG_EPS, posinf=LOG_EPS, neginf=LOG_EPS)
+    return np.log(np.clip(safe, LOG_EPS, None))
 
 
 def _ordered_regimes(model_dict: Dict[str, Dict[str, object]]):
@@ -98,7 +139,16 @@ def load_dataset(path: str, features: Optional[str] = None) -> pd.DataFrame:
     return data.map(np.exp)
 
 
-def run_pysr(X, y, model_path, log_prefix: Optional[str] = None, config_override: Optional[Dict[str, object]] = None):
+def run_pysr(
+    X,
+    y,
+    model_path,
+    log_prefix: Optional[str] = None,
+    config_override: Optional[Dict[str, object]] = None,
+    *,
+    plots_only: bool = False,
+    seed: Optional[int] = None,
+):
     model_path = Path(model_path)
     run_dir = model_path.parent
     base_dir = run_dir.parent
@@ -119,6 +169,9 @@ def run_pysr(X, y, model_path, log_prefix: Optional[str] = None, config_override
     if load_target is None and any(run_dir.iterdir()):
         load_target = run_dir
 
+    if plots_only and load_target is None:
+        raise FileNotFoundError(f"No existing PySR artifacts found at {run_dir} for plots-only mode")
+
     if load_target is not None:
         _emit(f"{prefix} Loading existing model from {load_target}")
         return PySRRegressor.from_file(run_directory=str(run_dir))
@@ -127,6 +180,12 @@ def run_pysr(X, y, model_path, log_prefix: Optional[str] = None, config_override
     config = dict(PYSR_CONFIG)
     if config_override:
         config.update(config_override)
+    if seed is not None:
+        config["random_state"] = seed
+    # Enforce deterministic PySR runs (serial execution + fixed seed).
+    config["deterministic"] = True
+    config["parallelism"] = "serial"
+    config["procs"] = 0
     model = PySRRegressor(
         **config,
         output_directory=str(base_dir),
@@ -143,10 +202,63 @@ def run_pysr(X, y, model_path, log_prefix: Optional[str] = None, config_override
     return model
 
 
+def _cache_path(regime_dir: Path) -> Path:
+    return regime_dir / "processed" / "predictions_cache.json"
+
+
+def load_prediction_cache(regime_dir: Path) -> dict:
+    cache_file = _cache_path(regime_dir)
+    if not cache_file.exists():
+        return {}
+    try:
+        with cache_file.open("r") as handle:
+            raw = json.load(handle)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_prediction_cache(regime_dir: Path, cache: dict) -> None:
+    cache_file = _cache_path(regime_dir)
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    with cache_file.open("w") as handle:
+        json.dump(cache, handle)
+
+
+def _cache_path(regime_dir: Path) -> Path:
+    return regime_dir / "processed" / "predictions_cache.json"
+
+
+def load_prediction_cache(regime_dir: Path) -> dict:
+    cache_file = _cache_path(regime_dir)
+    if not cache_file.exists():
+        return {}
+    try:
+        with cache_file.open("r") as handle:
+            raw = json.load(handle)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_prediction_cache(regime_dir: Path, cache: dict) -> None:
+    cache_file = _cache_path(regime_dir)
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    with cache_file.open("w") as handle:
+        json.dump(cache, handle)
+
+
 def preprocess_data(X: np.ndarray):
+    X = np.asarray(X, dtype=float)
+    _warn_on_bad_values(X, "NN feature matrix")
+
+    def _safe_log(values: np.ndarray) -> np.ndarray:
+        safe = np.nan_to_num(values, nan=LOG_EPS, posinf=LOG_EPS, neginf=LOG_EPS)
+        return np.log(np.clip(safe, LOG_EPS, None))
+
     pipeline = Pipeline(
         [
-            ("log_transform", FunctionTransformer(np.log, validate=True)),
+            ("log_transform", FunctionTransformer(_safe_log, validate=False)),
             ("scaler", StandardScaler()),
         ]
     )
@@ -195,6 +307,7 @@ def _collect_error_distributions(
 
         for family, variant_key in MODEL_COMBINATIONS:
             display_name = model_display_name(family, variant_key)
+            display_label = baseline_label(display_name)
             variant_errors = aggregated_errors.get(variant_key)
             if variant_errors:
                 for metric_key in metric_keys():
@@ -295,9 +408,6 @@ def _apply_log_floor(stats):
 
 
 def _lineplot_limits(stats, spec):
-    if spec.floor is not None and spec.ceiling is not None:
-        lower, upper = metric_limits_with_margin(spec.key)
-        return lower, upper
     lowers, uppers, positives = [], [], []
     for model in MODEL_LINE_ORDER:
         lowers.extend([v for v in stats[model]["q1"] if np.isfinite(v)])
@@ -321,8 +431,11 @@ def _lineplot_limits(stats, spec):
     if spec.y_scale == "log":
         if positives and ymin <= 0:
             ymin = min(positives) * 0.8
-        floor = spec.floor or LOG_SCALE_FLOOR
-        ymin = max(ymin, floor)
+        floor = spec.floor if spec.floor is not None else LOG_SCALE_FLOOR
+        if floor is not None and ymin < floor:
+            ymin = floor
+        if spec.ceiling is not None:
+            ymax = min(ymax, spec.ceiling * 1.1)
         if ymax <= ymin:
             ymax = ymin * 1.5
     else:
@@ -347,11 +460,32 @@ def _plot_dataset_size_lineplot(
     plot_dir.mkdir(parents=True, exist_ok=True)
 
     regimes = _ordered_regimes(metric_distributions)
-    stats = _compute_line_stats(metric_distributions)
+    seed_stats = {model: {"median": [], "q1": [], "q3": [], "min": [], "max": []} for model in MODEL_LINE_ORDER}
+    for regime in regimes:
+        for model in MODEL_LINE_ORDER:
+            seed_values = np.asarray(seed_medians.get(regime, {}).get(model, []), dtype=float)
+            seed_values = seed_values[np.isfinite(seed_values)]
+            if seed_values.size:
+                seed_values = clip_metric_values(seed_values, metric_key)
+                seed_values = seed_values[np.isfinite(seed_values)]
+            if seed_values.size == 0:
+                seed_stats[model]["median"].append(np.nan)
+                seed_stats[model]["q1"].append(np.nan)
+                seed_stats[model]["q3"].append(np.nan)
+                seed_stats[model]["min"].append(np.nan)
+                seed_stats[model]["max"].append(np.nan)
+            else:
+                seed_stats[model]["median"].append(float(np.median(seed_values)))
+                seed_stats[model]["q1"].append(float(np.quantile(seed_values, 0.25)))
+                seed_stats[model]["q3"].append(float(np.quantile(seed_values, 0.75)))
+                seed_stats[model]["min"].append(float(np.min(seed_values)))
+                seed_stats[model]["max"].append(float(np.max(seed_values)))
+
+    stats = {model: {"median": [], "q1": [], "q3": []} for model in MODEL_LINE_ORDER}
     for model in MODEL_LINE_ORDER:
         for key in ("median", "q1", "q3"):
             stats_array = clip_metric_values(
-                np.asarray(stats[model][key], dtype=float),
+                np.asarray(seed_stats[model][key], dtype=float),
                 metric_key,
             )
             if spec.y_scale == "log":
@@ -373,56 +507,72 @@ def _plot_dataset_size_lineplot(
         else:
             x_labels.append(f"{mult * 100:.0f}%")
 
-    fig, ax = plt.subplots(figsize=(6.0, 4.0))
+    lineplot_figsize = (7.893, 5.913)  # Match noise_regimes_full lineplot pixel size at 300 dpi.
 
-    for model in MODEL_LINE_ORDER:
-        median = np.asarray(stats[model]["median"], dtype=float)
-        q1 = np.asarray(stats[model]["q1"], dtype=float)
-        q3 = np.asarray(stats[model]["q3"], dtype=float)
-        color = MODEL_COLOR_MAP[model]
-        if not template:
-            ax.plot(x, median, marker="o", label=model, color=color)
-            ax.fill_between(x, q1, q3, color=color, alpha=0.15)
-            for idx, regime in enumerate(regimes):
-                seed_values = np.asarray(
-                    seed_medians.get(regime, {}).get(model, []),
-                    dtype=float,
-                )
-                if seed_values.size == 0:
-                    continue
-                seed_values = seed_values[np.isfinite(seed_values)]
-                if seed_values.size == 0:
-                    continue
-                seed_values = clip_metric_values(seed_values, metric_key)
-                jitter = np.full(seed_values.shape, x[idx], dtype=float)
-                ax.scatter(
-                    jitter,
-                    seed_values,
+    def _render_lineplot(*, fixed_ylim: bool) -> None:
+        fig, ax = plt.subplots(figsize=lineplot_figsize)
+
+        for model in MODEL_LINE_ORDER:
+            median = np.asarray(stats[model]["median"], dtype=float)
+            min_vals = np.asarray(seed_stats[model]["min"], dtype=float)
+            max_vals = np.asarray(seed_stats[model]["max"], dtype=float)
+            color = MODEL_COLOR_MAP[model]
+            is_orange = model.startswith("PySR")
+            line_z = 4 if is_orange else 3
+            band_z = 2 if is_orange else 1
+            if not template:
+                ax.plot(
+                    x,
+                    median,
+                    marker="o",
+                    markersize=12,
+                    linewidth=3.0,
+                    label=baseline_label(model),
                     color=color,
-                    alpha=0.4,
-                    s=28,
-                    linewidths=0,
-                    zorder=4,
+                    zorder=line_z,
                 )
-        else:
-            ax.plot(x, median, color=color, linestyle="--", alpha=0.3)
+                if np.isfinite(min_vals).any() and np.isfinite(max_vals).any():
+                    ax.fill_between(x, min_vals, max_vals, color=color, alpha=0.15, zorder=band_z)
+            else:
+                ax.plot(x, median, color=color, linestyle="--", alpha=0.3, linewidth=3.0, zorder=line_z)
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(x_labels)
-    ax.set_xlabel("Dataset Size Regime")
-    ax.set_ylabel(spec.axis_label)
-    ax.set_yscale(spec.y_scale)
-    if ymin is not None and ymax is not None:
-        ax.set_ylim(ymin, ymax)
-    if not template:
-        ax.legend(frameon=False)
-    ax.grid(True, axis="y", linestyle="--", alpha=0.4)
+        label_fs = 22
+        tick_fs = 19
+        legend_fs = 21
+        legend_title_fs = 22
+        ax.set_xticks(x)
+        ax.set_xticklabels(x_labels, fontsize=tick_fs)
+        ax.set_xlabel("Dataset Size Regime", fontsize=label_fs)
+        ax.set_ylabel(spec.axis_label, fontsize=label_fs)
+        ax.set_yscale(spec.y_scale)
+        if fixed_ylim and spec.y_scale == "log":
+            lower, upper = 1e-2, 1e2
+            pad = 2.0
+            ax.set_ylim(lower / pad, upper * pad)
+        elif ymin is not None and ymax is not None:
+            if spec.y_scale == "log":
+                ax.set_ylim(ymin, ymax * 1.15)
+            else:
+                ax.set_ylim(ymin, ymax * 1.05)
+        if not template and not fixed_ylim:
+            _dedupe_baseline_legend(ax)
+            legend = ax.get_legend()
+            if legend is not None:
+                legend.set_title(legend.get_title().get_text(), prop={"size": legend_title_fs})
+                for text in legend.get_texts():
+                    text.set_fontsize(legend_fs)
+        ax.tick_params(axis="both", labelsize=tick_fs)
+        ax.grid(True, axis="y", linestyle="--", alpha=0.4)
 
-    suffix = "_template" if template else ""
-    plt.tight_layout()
-    filename = f"{spec.filename_prefix}_dataset_size_lineplot{suffix}.png"
-    plt.savefig(plot_dir / filename, dpi=300)
-    plt.close()
+        suffix = "_template" if template else ""
+        fixed_suffix = "_fixed_ylim" if fixed_ylim else ""
+        plt.tight_layout()
+        filename = f"{spec.filename_prefix}_dataset_size_lineplot{fixed_suffix}{suffix}.png"
+        plt.savefig(plot_dir / filename, dpi=300, bbox_inches=None, pad_inches=0.0)
+        plt.close()
+
+    _render_lineplot(fixed_ylim=False)
+    _render_lineplot(fixed_ylim=True)
 
 
 def plot_dataset_size_lineplots(
@@ -483,6 +633,7 @@ def _plot_error_distributions(metric_key, metric_distributions, output_dir):
             palette=palette,
             order=MODEL_LINE_ORDER,
         )
+        ax.set_xticklabels(baseline_labels(MODEL_LINE_ORDER))
         ax.set_title(_label_for_regime(regime))
         ax.set_xlabel("")
         if idx % ncols == 0:
@@ -499,7 +650,7 @@ def _plot_error_distributions(metric_key, metric_distributions, output_dir):
     for idx in range(len(regimes), len(axes)):
         fig.delaxes(axes[idx])
 
-    plt.suptitle(f"{spec.label} Error Distributions by Dataset Size", fontsize=16)
+    plt.suptitle(f"{spec.label} Error Distributions by Dataset Size", fontsize=32)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.savefig(metric_dir / f"{spec.filename_prefix}_error_distributions.png")
     plt.close()
@@ -540,6 +691,7 @@ def plot_model_subregimes(model_dict, output_dir):
         for col_idx, (family, variant_key) in enumerate(MODEL_COMBINATIONS):
             ax = axes[row_idx, col_idx] if n_rows > 1 else axes[col_idx]
             display_name = model_display_name(family, variant_key)
+            display_label = baseline_label(display_name)
             snapshot = collect_variant_predictions(regime_models, variant_key, evaluate_model)
             chosen = sampled.get((regime_name, variant_key))
             if snapshot is None or chosen is None or len(chosen) == 0:
@@ -567,17 +719,17 @@ def plot_model_subregimes(model_dict, output_dir):
                 alpha=0.4,
                 s=18,
                 color=MODEL_COLOR_MAP[display_name],
-                label=display_name,
+                label=display_label,
                 edgecolors="k",
                 linewidths=0.2,
             )
 
             if row_idx == len(regimes) - 1:
-                ax.set_xlabel("Groundtruth kcat_cg", fontsize=10)
+                ax.set_xlabel("Groundtruth kcat_cg", fontsize=20)
             if col_idx == 0:
-                ax.set_ylabel("Log-space MAE |ln(ŷ+ε) − ln(y+ε)| (ε=1e−20)", fontsize=10)
+                ax.set_ylabel("Log-space MAE |ln(ŷ+ε) − ln(y+ε)| (ε=1e−20)", fontsize=20)
             if row_idx == 0:
-                ax.set_title(display_name, fontsize=11)
+                ax.set_title(display_label, fontsize=22)
             if row_idx == 0 and col_idx == 0:
                 ax.legend(frameon=False, loc="upper left")
 
@@ -590,10 +742,10 @@ def plot_model_subregimes(model_dict, output_dir):
             rotation=90,
             va="center",
             ha="center",
-            fontsize=11,
+            fontsize=22,
         )
 
-    fig.suptitle("Model Error Landscape by Dataset Size", fontsize=16, y=1.02)
+    fig.suptitle("Model Error Landscape by Dataset Size", fontsize=32, y=1.02)
     plt.tight_layout(rect=[0.05, 0, 1, 0.98])
     shared_plot_dir = Path(output_dir) / "shared/plots"
     shared_plot_dir.mkdir(parents=True, exist_ok=True)
@@ -635,7 +787,7 @@ def plot_input_error_correlation(model_dict, output_dir):
         plt.close(fig)
         return
 
-    plt.suptitle("Feature-Error Correlations by Dataset Size", fontsize=16)
+    plt.suptitle("Feature-Error Correlations by Dataset Size", fontsize=32)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     shared_plot_dir = Path(output_dir) / "shared/plots"
     shared_plot_dir.mkdir(parents=True, exist_ok=True)
@@ -683,7 +835,7 @@ def plot_model_error_correlation(model_dict, output_dir):
         plt.close(fig)
         return
 
-    plt.suptitle("Model Error Correlations by Dataset Size", fontsize=16)
+    plt.suptitle("Model Error Correlations by Dataset Size", fontsize=32)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     shared_plot_dir = Path(output_dir) / "shared/plots"
     shared_plot_dir.mkdir(parents=True, exist_ok=True)
@@ -750,6 +902,8 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
 
         nn_label = model_display_name("nn", "sQSSA")
         mm_label = model_display_name("mm", "sQSSA")
+        nn_label_text = baseline_label(nn_label)
+        mm_label_text = baseline_label(mm_label)
         for plot_idx, sample_idx in enumerate(chosen_indices[: len(axs)]):
             fixed_sample = X.iloc[sample_idx].copy()
             original_pu = fixed_sample["P_u"]
@@ -774,8 +928,8 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
             y_mm = mm_variant_prediction(mm_input, "sQSSA")
 
             ax = axs[plot_idx]
-            ax.plot(pu_vals, y_nn, label=nn_label, color=MODEL_COLOR_MAP[nn_label])
-            ax.plot(pu_vals, y_mm, label=mm_label, color=MODEL_COLOR_MAP[mm_label], linestyle="--")
+            ax.plot(pu_vals, y_nn, label=nn_label_text, color=MODEL_COLOR_MAP[nn_label])
+            ax.plot(pu_vals, y_mm, label=mm_label_text, color=MODEL_COLOR_MAP[mm_label], linestyle="--")
             ax.scatter(
                 original_pu,
                 y_true[sample_idx],
@@ -791,7 +945,7 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
                 ax.set_ylabel("Output")
             ax.set_title(f"Sample {plot_idx + 1} | Log-MAE = {log_mae_vals[sample_idx]:.3f}")
 
-        fig.suptitle(f"NN vs MM — Response Curves — {_label_for_regime(regime)}", fontsize=16, y=1.05)
+        fig.suptitle(f"NN vs MM — Response Curves — {_label_for_regime(regime)}", fontsize=32, y=1.05)
         handles, labels = axs[0].get_legend_handles_labels()
         fig.legend(handles, labels, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 1.02))
         plt.tight_layout(rect=[0, 0, 1, 0.94])
@@ -844,7 +998,8 @@ def plot_horizontal_boxplots(model_dict, output_dir):
                     ax=ax,
                     showfliers=showfliers,
                 )
-                ax.set_title(_label_for_regime(regime), fontsize=14, weight="bold")
+                ax.set_yticklabels(baseline_labels(MODEL_LINE_ORDER))
+                ax.set_title(_label_for_regime(regime), fontsize=28, weight="bold")
                 ax.set_ylabel("")
                 if spec.y_scale == "log":
                     ax.set_xscale("log")
@@ -852,7 +1007,7 @@ def plot_horizontal_boxplots(model_dict, output_dir):
                         ax.set_xlim(lower_limit, upper_limit)
                 elif lower_limit is not None and upper_limit is not None:
                     ax.set_xlim(lower_limit, upper_limit)
-            axes[-1].set_xlabel(spec.axis_label, fontsize=12)
+            axes[-1].set_xlabel(spec.axis_label, fontsize=24)
             for ax in axes[:-1]:
                 ax.set_xlabel("")
             plt.tight_layout()
@@ -916,7 +1071,8 @@ def plot_vertical_boxplots(model_dict, output_dir):
                     ax=ax,
                     showfliers=showfliers,
                 )
-                ax.set_title(_label_for_regime(regime), fontsize=14, weight="bold")
+                ax.set_xticklabels(baseline_labels(MODEL_LINE_ORDER))
+                ax.set_title(_label_for_regime(regime), fontsize=28, weight="bold")
                 if spec.y_scale == "log":
                     ax.set_yscale("log")
                     if lower_limit is not None and upper_limit is not None:
@@ -927,7 +1083,7 @@ def plot_vertical_boxplots(model_dict, output_dir):
                 if ax != axes[0]:
                     ax.set_ylabel("")
                 else:
-                    ax.set_ylabel(spec.axis_label, fontsize=12)
+                    ax.set_ylabel(spec.axis_label, fontsize=24)
                 if lower_limit is not None and upper_limit is not None and spec.y_scale != "log":
                     ax.set_ylim(lower_limit, upper_limit)
                 elif global_min is not None and global_max is not None:
@@ -938,6 +1094,154 @@ def plot_vertical_boxplots(model_dict, output_dir):
 
         _render(True, "")
         _render(False, "_no_outliers")
+
+
+def plot_sqssa_vs_tqssa_baselines(
+    model_dict: Dict[str, Dict[str, object]],
+    output_dir: str,
+    metric_key: str = "log_mae",
+) -> None:
+    distributions, seed_medians = _collect_error_distributions(model_dict)
+    metric_dist = _metric_slice(distributions, metric_key)
+    seed_median_dist = _metric_slice(seed_medians, metric_key)
+    source_dist = seed_median_dist if seed_median_dist else metric_dist
+    if source_dist:
+        avg_dist: Dict[str, Dict[str, np.ndarray]] = OrderedDict()
+        for regime, model_map in source_dist.items():
+            avg_dist[regime] = {}
+            for model_name, values in model_map.items():
+                finite = np.asarray(values, dtype=float)
+                finite = finite[np.isfinite(finite)]
+                if finite.size == 0:
+                    avg_dist[regime][model_name] = np.asarray([])
+                    continue
+                avg_val = float(np.mean(finite))
+                avg_dist[regime][model_name] = np.asarray([avg_val])
+        metric_dist = avg_dist
+    if not metric_dist:
+        return
+
+    regimes = [regime for regime in _ordered_regimes(model_dict) if regime in metric_dist]
+    if not regimes:
+        return
+
+    spec = metric_spec(metric_key)
+    size_values = np.linspace(600, 2400, len(regimes))
+    size_map = {regime: float(size) for regime, size in zip(regimes, size_values)}
+
+    def _render_plot(*, fixed_ylim: bool) -> None:
+        fig, ax = plt.subplots(figsize=(13.0, 12.0))
+        all_x: List[float] = []
+        all_y: List[float] = []
+        for family, label in MODEL_FAMILIES.items():
+            xs: List[float] = []
+            ys: List[float] = []
+            sizes: List[float] = []
+            for regime in regimes:
+                model_map = metric_dist.get(regime, {})
+                s_name = model_display_name(family, "sQSSA")
+                t_name = model_display_name(family, "tQSSA")
+                s_errors = model_map.get(s_name)
+                t_errors = model_map.get(t_name)
+                if s_errors is None or t_errors is None:
+                    continue
+                s_vals = clip_metric_values(np.asarray(s_errors, dtype=float), metric_key)
+                t_vals = clip_metric_values(np.asarray(t_errors, dtype=float), metric_key)
+                s_vals = s_vals[np.isfinite(s_vals)]
+                t_vals = t_vals[np.isfinite(t_vals)]
+                if s_vals.size == 0 or t_vals.size == 0:
+                    continue
+                xs.append(float(np.mean(s_vals)))
+                ys.append(float(np.mean(t_vals)))
+                sizes.append(size_map[regime])
+            if not xs:
+                continue
+            all_x.extend(xs)
+            all_y.extend(ys)
+            color = MODEL_COLOR_MAP[model_display_name(family, "sQSSA")]
+            if len(xs) > 1:
+                ax.plot(xs, ys, color=color, linewidth=5.4, alpha=0.85, zorder=3)
+            ax.scatter(
+                xs,
+                ys,
+                s=sizes,
+                color=color,
+                edgecolor="white",
+                linewidth=3.0,
+                alpha=0.95,
+                label=label,
+                zorder=4,
+            )
+
+        ax.set_xlabel(f"sQSSA {spec.label} (mean)", fontsize=52)
+        ax.set_ylabel(f"tQSSA {spec.label} (mean)", fontsize=52)
+        ax.set_title("")
+        if spec.y_scale == "log":
+            ax.set_xscale("log")
+            ax.set_yscale("log")
+        if fixed_ylim and spec.y_scale == "log":
+            base_lower, base_upper = 1e-1, 1e2
+            pad = 2.0
+            lower = base_lower / pad
+            upper = base_upper * pad
+            ax.set_xlim(lower, upper)
+            ax.set_ylim(lower, upper)
+            ref_start = lower
+            ref_end = upper
+            ax.plot(
+                [ref_start, ref_end],
+                [ref_start, ref_end],
+                linestyle="--",
+                color="gray",
+                linewidth=3.9,
+                alpha=0.8,
+                zorder=1,
+            )
+        elif all_x and all_y:
+            finite_x = np.asarray(all_x, dtype=float)
+            finite_y = np.asarray(all_y, dtype=float)
+            finite_x = finite_x[np.isfinite(finite_x)]
+            finite_y = finite_y[np.isfinite(finite_y)]
+            if finite_x.size and finite_y.size:
+                min_val = float(min(finite_x.min(), finite_y.min()))
+                max_val = float(max(finite_x.max(), finite_y.max()))
+                lower = min_val
+                upper = max_val
+                if spec.y_scale == "log":
+                    pad_factor = 1.6
+                    lower = min_val / pad_factor
+                    upper = max_val * pad_factor
+                    if spec.floor is not None:
+                        lower = max(lower, spec.floor)
+                    if spec.ceiling is not None:
+                        upper = min(upper, spec.ceiling * 1.25)
+                    ax.set_xlim(lower, upper)
+                    ax.set_ylim(lower, upper)
+                ref_start = lower
+                ref_end = upper
+                ax.plot(
+                    [ref_start, ref_end],
+                    [ref_start, ref_end],
+                    linestyle="--",
+                    color="gray",
+                    linewidth=3.9,
+                    alpha=0.8,
+                    zorder=1,
+                )
+        ax.grid(True, which="both", linestyle="--", linewidth=1.5, alpha=0.35)
+        ax.tick_params(axis="both", labelsize=40)
+        if not fixed_ylim:
+            ax.legend(title="Baseline", frameon=False, fontsize=40, title_fontsize=44)
+        plot_dir = Path(output_dir) / "shared/plots" / spec.folder
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        plt.tight_layout()
+        fixed_suffix = "_fixed_ylim" if fixed_ylim else ""
+        filename = f"sqssa_vs_tqssa_baselines_{metric_key}{fixed_suffix}.png"
+        plt.savefig(plot_dir / filename, dpi=300)
+        plt.close(fig)
+
+    _render_plot(fixed_ylim=False)
+    _render_plot(fixed_ylim=True)
 
 
 def save_pysr_formulas(model_dict, features, output_dir):
@@ -970,6 +1274,7 @@ def _evaluate_models_single_seed(
     nn_base_size: int,
     *,
     persist_outputs: bool = True,
+    plots_only: bool = False,
 ) -> Dict[str, Dict[str, object]]:
     os.makedirs(output_dir, exist_ok=True)
     resolved_seed = seed_everything(resolve_seed(seed))
@@ -994,20 +1299,50 @@ def _evaluate_models_single_seed(
             multiplier = meta["multiplier"]
             desired_n = max(2, int(np.round(pysr_base_size * multiplier)))
             replace = desired_n > base_len
-            sample = (
-                data.sample(n=desired_n, random_state=seed, replace=replace)
-                .reset_index(drop=True)
-            )
 
             regime_dir = Path(output_dir) / regime_key
             (regime_dir / "processed").mkdir(parents=True, exist_ok=True)
             (regime_dir / "models/pysr").mkdir(parents=True, exist_ok=True)
             (regime_dir / "models/nn").mkdir(parents=True, exist_ok=True)
             (regime_dir / "plots").mkdir(parents=True, exist_ok=True)
+            variant_cache = load_prediction_cache(regime_dir)
 
-            full_path = regime_dir / "processed/full_dataset.csv"
-            if persist_outputs:
-                sample.to_csv(full_path, index=False)
+            if plots_only:
+                sample_path = regime_dir / "processed/model_sample.csv"
+                train_path = regime_dir / "processed/train.csv"
+                test_path = regime_dir / "processed/test.csv"
+                if not sample_path.exists() or not train_path.exists() or not test_path.exists():
+                    LOGGER.warning("Missing persisted splits for plots-only mode in %s", regime_dir)
+                    continue
+                sample = pd.read_csv(sample_path)
+                base_train = pd.read_csv(train_path)
+                base_test = pd.read_csv(test_path)
+                train_idx = test_idx = None
+            else:
+                sample = (
+                    data.sample(n=desired_n, random_state=seed, replace=replace)
+                    .reset_index(drop=True)
+                )
+
+                full_path = regime_dir / "processed/full_dataset.csv"
+                if persist_outputs:
+                    sample.to_csv(full_path, index=False)
+
+                test_size = max(1, int(np.ceil(len(sample) * 0.2)))
+                if len(sample) - test_size < 1:
+                    LOGGER.warning("Skipping %s: insufficient samples for train/test split", label)
+                    _emit(f"[{regime_key}] {label}: insufficient samples for train/test split")
+                    continue
+
+                indices = np.arange(len(sample))
+                train_idx, test_idx = train_test_split(indices, test_size=test_size, random_state=seed, shuffle=True)
+                base_train = sample.iloc[train_idx].reset_index(drop=True)
+                base_test = sample.iloc[test_idx].reset_index(drop=True)
+
+                if persist_outputs:
+                    sample.to_csv(regime_dir / "processed/model_sample.csv", index=False)
+                    base_train.to_csv(regime_dir / "processed/train.csv", index=False)
+                    base_test.to_csv(regime_dir / "processed/test.csv", index=False)
 
             _emit(
                 format_regime_message(
@@ -1019,21 +1354,6 @@ def _evaluate_models_single_seed(
                 )
             )
 
-            test_size = max(1, int(np.ceil(len(sample) * 0.2)))
-            if len(sample) - test_size < 1:
-                LOGGER.warning("Skipping %s: insufficient samples for train/test split", label)
-                _emit(f"[{regime_key}] {label}: insufficient samples for train/test split")
-                continue
-
-            indices = np.arange(len(sample))
-            train_idx, test_idx = train_test_split(indices, test_size=test_size, random_state=seed, shuffle=True)
-            base_train = sample.iloc[train_idx].reset_index(drop=True)
-            base_test = sample.iloc[test_idx].reset_index(drop=True)
-
-            if persist_outputs:
-                base_train.to_csv(regime_dir / "processed/train.csv", index=False)
-                base_test.to_csv(regime_dir / "processed/test.csv", index=False)
-
             regime_entry: Dict[str, object] = {
                 "data": sample,
                 "train_data": base_train,
@@ -1042,9 +1362,22 @@ def _evaluate_models_single_seed(
 
             for variant_key, display_variant in VARIANTS.items():
                 suffix = variant_suffix(variant_key)
-                variant_sample = augment_for_variant(sample, variant_key)
-                variant_train = variant_sample.iloc[train_idx].reset_index(drop=True)
-                variant_test = variant_sample.iloc[test_idx].reset_index(drop=True)
+                cached_variant = variant_cache.get(variant_key, {})
+
+                if plots_only:
+                    sample_path = regime_dir / f"processed/model_sample{suffix}.csv" if suffix else regime_dir / "processed/model_sample.csv"
+                    train_path = regime_dir / f"processed/train{suffix}.csv" if suffix else regime_dir / "processed/train.csv"
+                    test_path = regime_dir / f"processed/test{suffix}.csv" if suffix else regime_dir / "processed/test.csv"
+                    if not sample_path.exists() or not train_path.exists() or not test_path.exists():
+                        LOGGER.warning("Missing variant splits for plots-only mode: %s", sample_path)
+                        continue
+                    variant_sample = pd.read_csv(sample_path)
+                    variant_train = pd.read_csv(train_path)
+                    variant_test = pd.read_csv(test_path)
+                else:
+                    variant_sample = augment_for_variant(sample, variant_key)
+                    variant_train = variant_sample.iloc[train_idx].reset_index(drop=True)
+                    variant_test = variant_sample.iloc[test_idx].reset_index(drop=True)
 
                 if persist_outputs:
                     if suffix:
@@ -1073,15 +1406,54 @@ def _evaluate_models_single_seed(
                 pysr_dir = regime_dir / f"models/pysr{suffix}"
                 pysr_dir.mkdir(parents=True, exist_ok=True)
                 pysr_model_path = pysr_dir / "hall_of_fame.pkl"
-                config_override = {"maxsize": 35} if variant_key == "tQSSA" else None
-                pysr_model = run_pysr(
-                    X_train,
-                    y_train,
-                    str(pysr_model_path),
-                    log_prefix=f"[{regime_key}] [{display_variant}]",
-                    config_override=config_override,
-                )
-                pysr_pred = np.asarray(pysr_model.predict(X_test), dtype=float)
+                config_override = dict(pysr_operator_config(variant_key))
+                if variant_key == "tQSSA":
+                    config_override["maxsize"] = 35
+                if not config_override:
+                    config_override = None
+                if plots_only:
+                    cached_preds = cached_variant.get("predictions", {})
+                    cached_y_true = cached_variant.get("y_true")
+                    if cached_preds and cached_y_true is not None:
+                        pysr_model = None
+                        pysr_pred = np.asarray(
+                            cached_preds.get(model_display_name("pysr", variant_key), []),
+                            dtype=float,
+                        )
+                        y_test = np.asarray(cached_y_true, dtype=float)
+                    else:
+                        _emit(
+                            f"[{regime_key}] [{display_variant}] Cached predictions missing; loading PySR model to rebuild cache."
+                        )
+                        pysr_model = run_pysr(
+                            X_train,
+                            y_train,
+                            str(pysr_model_path),
+                            log_prefix=f"[{regime_key}] [{display_variant}]",
+                            config_override=config_override,
+                            plots_only=True,
+                            seed=resolved_seed,
+                        )
+                        pysr_pred = np.asarray(pysr_model.predict(X_test), dtype=float)
+                        cached_variant["y_true"] = y_test.tolist()
+                        preds = cached_variant.get("predictions", {})
+                        preds[model_display_name("pysr", variant_key)] = pysr_pred.tolist()
+                        cached_variant["predictions"] = preds
+                else:
+                    pysr_model = run_pysr(
+                        X_train,
+                        y_train,
+                        str(pysr_model_path),
+                        log_prefix=f"[{regime_key}] [{display_variant}]",
+                        config_override=config_override,
+                        plots_only=plots_only,
+                        seed=resolved_seed,
+                    )
+                    pysr_pred = np.asarray(pysr_model.predict(X_test), dtype=float)
+                    cached_variant["y_true"] = y_test.tolist()
+                    preds = cached_variant.get("predictions", {})
+                    preds[model_display_name("pysr", variant_key)] = pysr_pred.tolist()
+                    cached_variant["predictions"] = preds
                 pysr_metrics = metric_summary(pysr_pred, y_test)
                 variant_lines.append(
                     format_model_metrics(
@@ -1092,7 +1464,16 @@ def _evaluate_models_single_seed(
                     )
                 )
 
-                mm_pred = np.asarray(mm_variant_prediction(variant_test, variant_key), dtype=float)
+                mm_pred = None
+                if plots_only:
+                    cached_mm = cached_variant.get("predictions", {}).get(model_display_name("mm", variant_key))
+                    if cached_mm is not None:
+                        mm_pred = np.asarray(cached_mm, dtype=float)
+                if mm_pred is None:
+                    mm_pred = np.asarray(mm_variant_prediction(variant_test, variant_key), dtype=float)
+                    preds = cached_variant.get("predictions", {})
+                    preds[model_display_name("mm", variant_key)] = mm_pred.tolist()
+                    cached_variant["predictions"] = preds
                 mm_metrics = metric_summary(mm_pred, y_test)
                 variant_lines.append(
                     format_model_metrics(
@@ -1133,24 +1514,34 @@ def _evaluate_models_single_seed(
                 nn_X_train_pre, nn_pipeline = preprocess_data(nn_X_train.values)
                 nn_X_val_pre = nn_pipeline.transform(nn_X_val.values)
                 nn_train_pre = pd.DataFrame(
-                    np.column_stack([nn_X_train_pre, np.log(nn_y_train.values)]),
+                    np.column_stack([nn_X_train_pre, _safe_log_values(nn_y_train.values, "NN train targets")]),
                     columns=list(nn_features.columns) + [TARGET_COLUMN],
                 )
                 nn_val_pre = pd.DataFrame(
-                    np.column_stack([nn_X_val_pre, np.log(nn_y_val.values)]),
+                    np.column_stack([nn_X_val_pre, _safe_log_values(nn_y_val.values, "NN val targets")]),
                     columns=list(nn_features.columns) + [TARGET_COLUMN],
                 )
 
                 train_pre = pd.DataFrame(
-                    np.column_stack([nn_pipeline.transform(variant_train.iloc[:, :-1].values), np.log(y_train)]),
+                    np.column_stack(
+                        [
+                            nn_pipeline.transform(variant_train.iloc[:, :-1].values),
+                            _safe_log_values(y_train, "Variant train targets"),
+                        ]
+                    ),
                     columns=list(variant_train.columns),
                 )
                 test_pre = pd.DataFrame(
-                    np.column_stack([nn_pipeline.transform(variant_test.iloc[:, :-1].values), np.log(y_test)]),
+                    np.column_stack(
+                        [
+                            nn_pipeline.transform(variant_test.iloc[:, :-1].values),
+                            _safe_log_values(y_test, "Variant test targets"),
+                        ]
+                    ),
                     columns=list(variant_test.columns),
                 )
                 full_pre = pd.DataFrame(
-                    np.column_stack([nn_pipeline.transform(X_full), np.log(y_full)]),
+                    np.column_stack([nn_pipeline.transform(X_full), _safe_log_values(y_full, "Full targets")]),
                     columns=list(variant_sample.columns),
                 )
 
@@ -1166,9 +1557,49 @@ def _evaluate_models_single_seed(
                     emit_grouped(variant_lines)
                     continue
 
-                nn_model = train_model(train_split, val_split, str(nn_path), verbose=False, seed=seed)
-                _, nn_pred_tensor = evaluate_model(nn_model, test_pre)
-                nn_preds = nn_pred_tensor.detach().cpu().numpy().flatten()
+                if plots_only:
+                    cached_nn = cached_variant.get("predictions", {}).get(model_display_name("nn", variant_key))
+                    if cached_nn is not None:
+                        nn_model = None
+                        if nn_path.exists():
+                            nn_model = load_model_checkpoint(
+                                str(nn_path),
+                                input_dim=train_split.shape[1] - 1,
+                            )
+                        nn_preds = np.asarray(cached_nn, dtype=float)
+                    else:
+                        if not nn_path.exists():
+                            raise FileNotFoundError(
+                                f"Missing NN checkpoint for plots-only mode: {nn_path}"
+                            )
+                        _emit(
+                            f"[{regime_key}] [{display_variant}] Cached predictions missing; loading NN checkpoint to rebuild cache."
+                        )
+                        nn_model = load_model_checkpoint(
+                            str(nn_path),
+                            input_dim=train_split.shape[1] - 1,
+                        )
+                        _, nn_pred_tensor = evaluate_model(nn_model, test_pre)
+                        nn_preds = nn_pred_tensor.detach().cpu().numpy().flatten()
+                        preds = cached_variant.get("predictions", {})
+                        preds[model_display_name("nn", variant_key)] = nn_preds.tolist()
+                        cached_variant["predictions"] = preds
+                        cached_variant["y_true"] = y_test.tolist()
+                else:
+                    nn_model = train_model(
+                        train_split,
+                        val_split,
+                        str(nn_path),
+                        verbose=False,
+                        seed=seed,
+                        retrain=(not plots_only or not nn_path.exists()),
+                    )
+
+                    _, nn_pred_tensor = evaluate_model(nn_model, test_pre)
+                    nn_preds = nn_pred_tensor.detach().cpu().numpy().flatten()
+                    preds = cached_variant.get("predictions", {})
+                    preds[model_display_name("nn", variant_key)] = nn_preds.tolist()
+                    cached_variant["predictions"] = preds
                 nn_metrics = metric_summary(nn_preds, y_test)
                 variant_lines.append(
                     format_model_metrics(
@@ -1187,15 +1618,28 @@ def _evaluate_models_single_seed(
                 regime_entry[f"mm{suffix}"] = mm_pred
                 regime_entry[f"preprocessed{suffix}"] = full_pre.reset_index(drop=True)
                 regime_entry[f"test_preprocessed{suffix}"] = test_pre.reset_index(drop=True)
+                regime_entry[f"cached_predictions{suffix}"] = {
+                    k: np.asarray(v, dtype=float)
+                    for k, v in cached_variant.get("predictions", {}).items()
+                }
+                regime_entry[f"cached_y_true{suffix}"] = np.asarray(
+                    cached_variant.get("y_true", y_test.tolist()), dtype=float
+                )
 
                 if suffix == "":
                     regime_entry["pysr"] = pysr_model
                     regime_entry["nn"] = nn_model
                     regime_entry["mm"] = mm_pred
+                    regime_entry["cached_predictions"] = regime_entry[f"cached_predictions{suffix}"]
+                    regime_entry["cached_y_true"] = regime_entry[f"cached_y_true{suffix}"]
 
                 emit_grouped(variant_lines)
+                variant_cache[variant_key] = cached_variant
 
             model_dict[regime_key] = regime_entry
+
+            if persist_outputs:
+                save_prediction_cache(regime_dir, variant_cache)
 
         if not model_dict:
             LOGGER.warning("No dataset size regimes produced results; aborting")
@@ -1204,6 +1648,25 @@ def _evaluate_models_single_seed(
         return model_dict
     finally:
         CURRENT_SEED_TAG = previous_tag
+
+
+def _render_variant_plots(model_dict: Dict[str, Dict[str, object]], output_dir: str) -> None:
+    """Render per-variant plot bundles under output_dir/variants/<variant>."""
+    for variant_key in VARIANTS.keys():
+        variant_dir = Path(output_dir) / "variants" / variant_key.lower()
+        with variant_plot_context(variant_key):
+            plot_model_subregimes(model_dict, variant_dir)
+            plot_error_distributions(model_dict, variant_dir)
+            plot_input_error_correlation(model_dict, variant_dir)
+            plot_model_error_correlation(model_dict, variant_dir)
+            if variant_key == "sQSSA":
+                plot_nn_vs_mm_response_curves_linear(model_dict, variant_dir)
+            plot_horizontal_boxplots(model_dict, variant_dir)
+            plot_vertical_boxplots(model_dict, variant_dir)
+            error_distributions, seed_medians = _collect_error_distributions(model_dict)
+            plot_dataset_size_lineplots(error_distributions, seed_medians, variant_dir, template=False)
+            plot_dataset_size_lineplots(error_distributions, seed_medians, variant_dir, template=True)
+        _emit(f"[plots] Saved {variant_key} variant outputs to {variant_dir}")
 
 
 def evaluate_models(
@@ -1215,17 +1678,25 @@ def evaluate_models(
     nn_base_size: int,
     *,
     num_seeds: int = 3,
+    plots_only: bool = False,
+    render_plots: bool = True,
 ) -> None:
     seeds = [seed + offset for offset in range(max(1, num_seeds))]
     seed_model_dicts: List[Dict[str, Dict[str, object]]] = []
 
     for idx, run_seed in enumerate(seeds):
-        persist = idx == 0
+        # Always persist per-seed splits/predictions so plots-only can reuse them.
+        persist = True
         run_output_dir = (
             output_dir
-            if persist
+            if num_seeds <= 1
             else str(Path(output_dir) / "_multi_seed" / f"seed_{idx + 1}")
         )
+        if plots_only and not has_persisted_splits(Path(run_output_dir)):
+            _emit(
+                f"[multi-seed] skipping run {idx + 1}/{len(seeds)} | output_dir={run_output_dir} (missing persisted splits)"
+            )
+            continue
         _emit(
             f"[multi-seed] run {idx + 1}/{len(seeds)} | output_dir={run_output_dir}"
         )
@@ -1237,6 +1708,7 @@ def evaluate_models(
             pysr_base_size,
             nn_base_size,
             persist_outputs=persist,
+            plots_only=plots_only,
         )
         if model_dict:
             seed_model_dicts.append(model_dict)
@@ -1245,31 +1717,41 @@ def evaluate_models(
         LOGGER.warning("No dataset size regimes produced results; aborting")
         return
 
-    aggregated_errors, seed_medians_map = aggregate_seed_error_statistics(
-        seed_model_dicts,
-        evaluate_model,
-    )
-
     base_model_dict = seed_model_dicts[0]
-    for regime, models in base_model_dict.items():
-        models["aggregated_errors"] = aggregated_errors.get(regime, {})
-        models["aggregated_seed_medians"] = seed_medians_map.get(regime, {})
-        models["seed_values"] = seeds
+    # Save per-seed PySR formulas under output_dir/_multi_seed/seed_{i}
+    for idx, model_dict in enumerate(seed_model_dicts):
+        seed_dir = Path(output_dir) / "_multi_seed" / f"seed_{idx + 1}"
+        save_pysr_formulas(model_dict, features, str(seed_dir))
+    if render_plots:
+        aggregated_errors, seed_medians_map = aggregate_seed_error_statistics(
+            seed_model_dicts,
+            evaluate_model,
+        )
 
-    plot_model_subregimes(base_model_dict, output_dir)
-    plot_error_distributions(base_model_dict, output_dir)
-    plot_input_error_correlation(base_model_dict, output_dir)
-    plot_model_error_correlation(base_model_dict, output_dir)
-    plot_nn_vs_mm_response_curves_linear(base_model_dict, output_dir)
-    plot_horizontal_boxplots(base_model_dict, output_dir)
-    plot_vertical_boxplots(base_model_dict, output_dir)
-    error_distributions, seed_medians = _collect_error_distributions(base_model_dict)
-    plot_dataset_size_lineplots(error_distributions, seed_medians, output_dir, template=False)
-    plot_dataset_size_lineplots(error_distributions, seed_medians, output_dir, template=True)
+        for regime, models in base_model_dict.items():
+            models["aggregated_errors"] = aggregated_errors.get(regime, {})
+            models["aggregated_seed_medians"] = seed_medians_map.get(regime, {})
+            models["seed_values"] = seeds
+
+        plot_model_subregimes(base_model_dict, output_dir)
+        plot_error_distributions(base_model_dict, output_dir)
+        plot_input_error_correlation(base_model_dict, output_dir)
+        plot_model_error_correlation(base_model_dict, output_dir)
+        plot_nn_vs_mm_response_curves_linear(base_model_dict, output_dir)
+        plot_horizontal_boxplots(base_model_dict, output_dir)
+        plot_vertical_boxplots(base_model_dict, output_dir)
+        plot_sqssa_vs_tqssa_baselines(base_model_dict, output_dir)
+        error_distributions, seed_medians = _collect_error_distributions(base_model_dict)
+        plot_dataset_size_lineplots(error_distributions, seed_medians, output_dir, template=False)
+        plot_dataset_size_lineplots(error_distributions, seed_medians, output_dir, template=True)
+        plot_sqssa_vs_tqssa_baselines(base_model_dict, output_dir, metric_key="relative_mae")
+        _render_variant_plots(base_model_dict, output_dir)
+    # Keep existing shared output at output_dir for downstream rules
     save_pysr_formulas(base_model_dict, features, output_dir)
-    _emit(
-        f"Dataset-size regimes completed across {len(seeds)} seed runs. Outputs written to {output_dir}"
-    )
+    message = f"Dataset-size regimes completed across {len(seeds)} seed runs. Outputs written to {output_dir}"
+    if not render_plots:
+        message = f"{message} (plots disabled)"
+    _emit(message)
 
 
 def main():
@@ -1280,6 +1762,8 @@ def main():
     parser.add_argument("--pysr-base-size", type=int, default=3000, dest="pysr_base_size", help="Baseline sample count previously used for PySR training (e.g., 3000)")
     parser.add_argument("--nn-base-size", type=int, default=20000, dest="nn_base_size", help="Baseline pool size previously used for NN training (e.g., 20000)")
     parser.add_argument("--num-seeds", type=int, default=3, dest="num_seeds", help="Number of random seeds to evaluate per model (>=1)")
+    parser.add_argument("--plots-only", action="store_true", help="Do not train; load existing models and render plots only")
+    parser.add_argument("--no-plots", action="store_true", help="Skip plot generation during evaluation")
     args = parser.parse_args()
 
     seed = seed_everything(resolve_seed(args.seed))
@@ -1293,6 +1777,8 @@ def main():
         pysr_base_size=args.pysr_base_size,
         nn_base_size=args.nn_base_size,
         num_seeds=max(1, args.num_seeds),
+        plots_only=args.plots_only,
+        render_plots=not args.no_plots,
     )
 
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict
+from pathlib import Path
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Dict, Iterable, Optional, List, Tuple
 import re
@@ -59,12 +61,84 @@ MODEL_COLOR_MAP = {
 }
 
 
+def variant_model_combinations(variant_key: Optional[str] = None) -> List[Tuple[str, str]]:
+    if variant_key is None:
+        return list(MODEL_COMBINATIONS)
+    if variant_key not in VARIANTS:
+        raise ValueError(f"Unknown variant key '{variant_key}'")
+    return [(family, variant_key) for family in MODEL_FAMILIES]
+
+
+def variant_model_order(variant_key: Optional[str] = None) -> List[str]:
+    combos = variant_model_combinations(variant_key)
+    return [f"{MODEL_FAMILIES[family]} ({VARIANTS[variant]})" for family, variant in combos]
+
+
+def variant_color_map(variant_key: Optional[str] = None) -> Dict[str, str]:
+    combos = variant_model_combinations(variant_key)
+    return {
+        f"{MODEL_FAMILIES[family]} ({VARIANTS[variant]})": MODEL_COLORS[(family, variant)]
+        for family, variant in combos
+    }
+
+
+@contextmanager
+def variant_plot_context(variant_key: Optional[str]):
+    """Temporarily narrow plotting constants to a single variant (sQSSA/tQSSA)."""
+    if variant_key is None:
+        yield
+        return
+
+    new_line_order = variant_model_order(variant_key)
+    new_color_map = variant_color_map(variant_key)
+    new_combinations = variant_model_combinations(variant_key)
+
+    old_line_order = list(MODEL_LINE_ORDER)
+    old_color_map = dict(MODEL_COLOR_MAP)
+    old_combinations = list(MODEL_COMBINATIONS)
+
+    try:
+        MODEL_LINE_ORDER[:] = new_line_order
+        MODEL_COLOR_MAP.clear()
+        MODEL_COLOR_MAP.update(new_color_map)
+        MODEL_COMBINATIONS[:] = new_combinations
+        yield
+    finally:
+        MODEL_LINE_ORDER[:] = old_line_order
+        MODEL_COLOR_MAP.clear()
+        MODEL_COLOR_MAP.update(old_color_map)
+        MODEL_COMBINATIONS[:] = old_combinations
+
+
 def variant_suffix(variant_key: str) -> str:
     return "" if variant_key == "sQSSA" else f"_{variant_key}"
 
 
+def has_persisted_splits(output_dir: Path) -> bool:
+    if not output_dir.exists():
+        return False
+    processed_files = list(output_dir.rglob("processed/*.csv"))
+    if not processed_files:
+        return False
+    has_train = any("train" in path.stem for path in processed_files)
+    has_test = any("test" in path.stem for path in processed_files)
+    return has_train and has_test
+
+
 def model_display_name(family: str, variant_key: str) -> str:
     return f"{MODEL_FAMILIES[family]} ({VARIANTS[variant_key]})"
+
+
+def baseline_label(display_name: str) -> str:
+    for variant in VARIANTS.values():
+        suffix = f" ({variant})"
+        if display_name.endswith(suffix):
+            return display_name[: -len(suffix)]
+    return display_name
+
+
+def baseline_labels(models: Iterable[str]) -> List[str]:
+    return [baseline_label(name) for name in models]
 
 
 def regime_logger(name: str = "regime") -> logging.Logger:
@@ -328,6 +402,8 @@ def collect_variant_predictions(
     evaluate_fn,
 ):
     suffix = variant_suffix(variant_key)
+    cached_preds = models.get(f"cached_predictions{suffix}")
+    cached_y_true = models.get(f"cached_y_true{suffix}")
     eval_df = models.get(f'test_data{suffix}')
     if eval_df is None or eval_df.empty:
         eval_df = models.get(f'data{suffix}')
@@ -341,6 +417,19 @@ def collect_variant_predictions(
     y_true = eval_df.iloc[:, -1].values
 
     predictions: Dict[str, np.ndarray] = {}
+
+    if cached_preds is not None and cached_y_true is not None:
+        predictions.update({k: np.asarray(v) for k, v in cached_preds.items()})
+        y_true = np.asarray(cached_y_true)
+        if not predictions:
+            return None
+        return {
+            'data': eval_df,
+            'features': X,
+            'preprocessed': eval_pre,
+            'y_true': y_true,
+            'predictions': predictions,
+        }
 
     pysr_model = models.get(f"pysr{suffix}")
     if pysr_model is not None:
@@ -566,6 +655,7 @@ __all__ = [
     "MODEL_COLOR_MAP",
     "MODEL_COLORS",
     "variant_suffix",
+    "has_persisted_splits",
     "model_display_name",
     "augment_for_variant",
     "log_mae",

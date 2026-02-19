@@ -32,9 +32,8 @@ import pandas as pd
 import seaborn as sns
 import sympy as sp
 from sklearn.feature_selection import SelectKBest, f_regression
-from sklearn.linear_model import LinearRegression
-from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from scipy.optimize import lsq_linear
 
 from experimental.sr_pipeline.metrics import binwise_r2
 
@@ -49,11 +48,25 @@ from experimental.sr_pipeline.run_functional_groups import (
     EXCLUDE_COLUMNS,
     apply_per_minute_sampling,
     choose_bin_split,
+    sanitize_feature_names,
     _compute_regression_metrics,
 )
 from experimental.sr_pipeline.seeding import canonicalize_seeds, seed_all
 
 MEASURED_TIMEPOINTS = (0.0, 5.0, 10.0, 15.0, 30.0, 60.0)
+
+plt.rcParams.update(
+    {
+        "font.size": 15,
+        "axes.titlesize": 17,
+        "axes.labelsize": 16,
+        "xtick.labelsize": 14,
+        "ytick.labelsize": 14,
+        "legend.fontsize": 13,
+        "figure.dpi": 200,
+    }
+)
+sns.set_style("whitegrid")
 
 
 def parse_args() -> argparse.Namespace:
@@ -127,37 +140,85 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _extract_coefficients(
-    pipeline: Pipeline,
-    feature_names: Sequence[str],
-) -> Tuple[float, Dict[str, float], List[str]]:
-    scaler: Optional[StandardScaler] = pipeline.named_steps.get("scaler")
-    selector: SelectKBest = pipeline.named_steps["selector"]
-    reg: LinearRegression = pipeline.named_steps["regressor"]
-
-    support = selector.get_support()
-    selected = [name for name, keep in zip(feature_names, support) if keep]
-    if scaler is None:
-        coeffs = reg.coef_
-        intercept = reg.intercept_
-    else:
-        scale_all = np.asarray(scaler.scale_)
-        mean_all = np.asarray(scaler.mean_)
-        scale = scale_all[support]
-        mean = mean_all[support]
-        scale = np.where(scale == 0.0, 1.0, scale)
-        coeffs = reg.coef_ / scale
-        intercept = reg.intercept_ - np.sum((reg.coef_ * mean) / scale)
-
-    coef_map = dict(zip(selected, coeffs))
-    return float(intercept), coef_map, selected
-
-
 def _build_linear_expr(intercept: float, coef_map: Dict[str, float]) -> sp.Expr:
     expr = sp.Float(intercept)
     for name, coef in coef_map.items():
         expr += sp.Float(coef) * sp.Symbol(name)
     return expr
+
+
+def _fit_constrained_selectk(
+    X_train: pd.DataFrame,
+    y_train: np.ndarray,
+    X_test: pd.DataFrame,
+    feature_cols: Sequence[str],
+    k: int,
+    perk_name: str,
+) -> Tuple[np.ndarray, np.ndarray, float, Dict[str, float], List[str]]:
+    """
+    Fit SelectK + linear regression with constraint pERK coefficient <= 0.
+    Returns train/test preds, intercept (unscaled), coef map (unscaled), selected names.
+    """
+    scaler = StandardScaler()
+    Xtr_scaled = scaler.fit_transform(X_train)
+    Xte_scaled = scaler.transform(X_test)
+
+    # Always include pERK in the selected set when available.
+    perk_in_features = perk_name in feature_cols
+    if k >= len(feature_cols):
+        support = np.ones(len(feature_cols), dtype=bool)
+        selected_names = list(feature_cols)
+        Xtr_sel = Xtr_scaled
+        Xte_sel = Xte_scaled
+    else:
+        if perk_in_features:
+            base_features = [f for f in feature_cols if f != perk_name]
+            select_k = max(1, min(len(base_features), k - 1))
+            selector = SelectKBest(score_func=f_regression, k=select_k)
+            selector.fit(Xtr_scaled[:, [feature_cols.index(f) for f in base_features]], y_train)
+            base_support = selector.get_support()
+            base_selected = [f for f, keep in zip(base_features, base_support) if keep]
+            selected_names = [perk_name] + base_selected
+        else:
+            selector_k = max(1, k)
+            selector = SelectKBest(score_func=f_regression, k=selector_k)
+            selector.fit(Xtr_scaled, y_train)
+            support_mask = selector.get_support()
+            selected_names = [name for name, keep in zip(feature_cols, support_mask) if keep]
+
+        # Build support mask aligned to feature_cols
+        support = np.zeros(len(feature_cols), dtype=bool)
+        for name in selected_names:
+            idx = feature_cols.index(name)
+            support[idx] = True
+        indices = [i for i, keep in enumerate(support) if keep]
+        Xtr_sel = Xtr_scaled[:, indices]
+        Xte_sel = Xte_scaled[:, indices]
+
+    Xtr_aug = np.column_stack([Xtr_sel, np.ones(len(y_train))])
+    lb = np.full(Xtr_aug.shape[1], -np.inf)
+    ub = np.full(Xtr_aug.shape[1], np.inf)
+    if perk_name in selected_names:
+        perk_idx = selected_names.index(perk_name)
+        ub[perk_idx] = 0.0  # enforce non-positive pERK coefficient
+
+    res = lsq_linear(Xtr_aug, y_train, bounds=(lb, ub), lsmr_tol="auto", verbose=0)
+    coef_scaled = res.x[:-1]
+    intercept_scaled = float(res.x[-1])
+
+    preds_train = Xtr_sel @ coef_scaled + intercept_scaled
+    preds_test = Xte_sel @ coef_scaled + intercept_scaled if len(Xte_sel) > 0 else np.array([])
+
+    scale_all = np.asarray(scaler.scale_)
+    mean_all = np.asarray(scaler.mean_)
+    scale_sel = np.where(scale_all[support] == 0.0, 1.0, scale_all[support])
+    mean_sel = mean_all[support]
+
+    coef_unscaled = coef_scaled / scale_sel
+    intercept_unscaled = intercept_scaled - np.sum((coef_scaled * mean_sel) / scale_sel)
+    coef_map = dict(zip(selected_names, coef_unscaled))
+
+    return preds_train, preds_test, float(intercept_unscaled), coef_map, selected_names
 
 
 def _plot_boxplot(
@@ -177,6 +238,7 @@ def _plot_boxplot(
     plt.tight_layout()
     output.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output, dpi=200)
+    plt.savefig(output.with_suffix(".svg"))
     plt.close()
 
 
@@ -218,6 +280,7 @@ def _plot_ribbon(
     plt.tight_layout()
     output.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output, dpi=200)
+    plt.savefig(output.with_suffix(".svg"))
     plt.close()
 
 
@@ -227,6 +290,7 @@ def main() -> None:
     seeds = canonicalize_seeds(args.random_state, args.seeds)
 
     raw = pd.read_csv(args.dataset)
+    full_data, target_col = prepare_sr_dataset(raw)
     metrics_rows: List[Dict[str, object]] = []
     importance_rows: List[Dict[str, object]] = []
 
@@ -241,7 +305,9 @@ def main() -> None:
             late_points=args.late_sample_points,
             random_state=seed,
         )
-        data, target_col = prepare_sr_dataset(sampled)
+        data, target_col_sampled = prepare_sr_dataset(sampled)
+        # assert consistent target column naming
+        target_col = target_col_sampled
         data = data.dropna(subset=[target_col])
         feature_cols = [c for c in data.columns if c not in EXCLUDE_COLUMNS and c != target_col]
         if len(feature_cols) < 2:
@@ -303,26 +369,48 @@ def main() -> None:
             for k in k_values:
                 step_counter += 1
                 _progress(step_counter, marker, k)
-                selector_k = "all" if k >= len(feature_cols) else k
-                pipeline = Pipeline(
-                    [
-                        ("scaler", StandardScaler()),
-                        ("selector", SelectKBest(score_func=f_regression, k=selector_k)),
-                        ("regressor", LinearRegression()),
-                    ]
-                )
                 X_train = train_df[feature_cols].copy()
                 X_test = test_df[feature_cols].copy()
                 y_train = train_df[target_col].astype(float).to_numpy()
                 y_test = test_df[target_col].astype(float).to_numpy()
-                pipeline.fit(X_train, y_train)
-                preds_train = pipeline.predict(X_train)
-                preds_test = pipeline.predict(X_test)
+
+                perk_name = sanitize_feature_names(["p_ERK1_2"])[0]
+                preds_train, preds_test, intercept, coef_map, selected = _fit_constrained_selectk(
+                    X_train,
+                    y_train,
+                    X_test,
+                    feature_cols,
+                    k,
+                    perk_name,
+                )
+
+                # Build full-grid frames for integration (use full dataset, but keep train/test bin split)
+                full_marker = full_data[full_data["marker"] == marker].copy()
+                full_marker = full_marker.dropna(subset=[target_col, "GFP_bin", "timepoint"])
+                full_train = full_marker[full_marker["GFP_bin"].isin(train_bins)].copy()
+                full_test = full_marker[full_marker["GFP_bin"].isin(test_bins)].copy()
+
+                def _add_preds(df_full: pd.DataFrame) -> pd.DataFrame:
+                    if df_full.empty:
+                        return df_full
+                    df_full = df_full.copy()
+                    # ensure all selected features exist
+                    for feat in selected:
+                        if feat not in df_full.columns:
+                            df_full[feat] = 0.0
+                    vals = np.full(len(df_full), intercept, dtype=float)
+                    for feat, coef in coef_map.items():
+                        vals += coef * pd.to_numeric(df_full[feat], errors="coerce").to_numpy(dtype=float)
+                    df_full["__y_pred__"] = vals
+                    return df_full
 
                 train_with_pred = train_df.copy()
                 train_with_pred["__y_pred__"] = preds_train
                 test_with_pred = test_df.copy()
                 test_with_pred["__y_pred__"] = preds_test
+
+                full_train_with_pred = _add_preds(full_train)
+                full_test_with_pred = _add_preds(full_test)
 
                 dt_r2_train = _clamp_r2(
                     binwise_r2(
@@ -346,24 +434,23 @@ def main() -> None:
                 )
 
                 integ_train, _ = integrate_single_marker(
-                    train_with_pred,
+                    full_train_with_pred if not full_train_with_pred.empty else train_with_pred,
                     target_col,
                     args.measured_timepoints,
                     "per_minute",
                 )
                 integ_test, _ = integrate_single_marker(
-                    test_with_pred,
+                    full_test_with_pred if not full_test_with_pred.empty else test_with_pred,
                     target_col,
                     args.measured_timepoints,
                     "per_minute",
                 )
 
-                intercept, coef_map, selected = _extract_coefficients(pipeline, feature_cols)
                 expr = _build_linear_expr(intercept, coef_map)
                 try:
                     formula_fn_jax, symbols = make_formula_function(expr, backend="jax")
                     ode_train, _ = integrate_marker_ode(
-                        train_df.copy(),
+                        full_train_with_pred if not full_train_with_pred.empty else train_with_pred,
                         target_col,
                         args.measured_timepoints,
                         "per_minute",
@@ -376,7 +463,7 @@ def main() -> None:
                         log_label=f"{marker} train",
                     )
                     ode_test, _ = integrate_marker_ode(
-                        test_df.copy(),
+                        full_test_with_pred if not full_test_with_pred.empty else test_with_pred,
                         target_col,
                         args.measured_timepoints,
                         "per_minute",
@@ -389,7 +476,18 @@ def main() -> None:
                         log_label=f"{marker} test",
                     )
                 except Exception:
-                    ode_train, ode_test = {"ode_integ_r2_median": np.nan}, {"ode_integ_r2_median": np.nan}
+                    ode_train, ode_test = (
+                        {
+                            "ode_integ_r2_median": np.nan,
+                            "ode_integ_rel_mae_mean_bins": np.nan,
+                            "ode_integ_rel_mae_median_bins": np.nan,
+                        },
+                        {
+                            "ode_integ_r2_median": np.nan,
+                            "ode_integ_rel_mae_mean_bins": np.nan,
+                            "ode_integ_rel_mae_median_bins": np.nan,
+                        },
+                    )
 
                 metrics_rows.extend(
                     [
@@ -399,8 +497,14 @@ def main() -> None:
                             "seed": seed,
                             "split": "train",
                             "dt_r2": dt_r2_train,
+                            "dt_rel_mae_mean_bins": integ_train.get("dt_rel_mae_mean_bins"),
+                            "dt_rel_mae_median_bins": integ_train.get("dt_rel_mae_median_bins"),
                             "integ_r2_median": integ_train.get("integ_r2_median"),
+                            "integ_rel_mae_mean_bins": integ_train.get("integ_rel_mae_mean_bins"),
+                            "integ_rel_mae_median_bins": integ_train.get("integ_rel_mae_median_bins"),
                             "ode_integ_r2_median": ode_train.get("ode_integ_r2_median"),
+                            "ode_integ_rel_mae_mean_bins": ode_train.get("ode_integ_rel_mae_mean_bins"),
+                            "ode_integ_rel_mae_median_bins": ode_train.get("ode_integ_rel_mae_median_bins"),
                         },
                         {
                             "marker": marker,
@@ -408,8 +512,14 @@ def main() -> None:
                             "seed": seed,
                             "split": "test",
                             "dt_r2": dt_r2_test,
+                            "dt_rel_mae_mean_bins": integ_test.get("dt_rel_mae_mean_bins"),
+                            "dt_rel_mae_median_bins": integ_test.get("dt_rel_mae_median_bins"),
                             "integ_r2_median": integ_test.get("integ_r2_median"),
+                            "integ_rel_mae_mean_bins": integ_test.get("integ_rel_mae_mean_bins"),
+                            "integ_rel_mae_median_bins": integ_test.get("integ_rel_mae_median_bins"),
                             "ode_integ_r2_median": ode_test.get("ode_integ_r2_median"),
+                            "ode_integ_rel_mae_mean_bins": ode_test.get("ode_integ_rel_mae_mean_bins"),
+                            "ode_integ_rel_mae_median_bins": ode_test.get("ode_integ_rel_mae_median_bins"),
                         },
                     ]
                 )
@@ -461,8 +571,20 @@ def main() -> None:
     metrics_path = outdir / "select_k_metrics.csv"
     metrics_df.to_csv(metrics_path, index=False)
 
+    agg_cols = [
+        "dt_r2",
+        "dt_rel_mae_mean_bins",
+        "dt_rel_mae_median_bins",
+        "integ_r2_median",
+        "integ_rel_mae_mean_bins",
+        "integ_rel_mae_median_bins",
+        "ode_integ_r2_median",
+        "ode_integ_rel_mae_mean_bins",
+        "ode_integ_rel_mae_median_bins",
+    ]
+    agg_cols = [c for c in agg_cols if c in metrics_df.columns]
     agg_metrics = (
-        metrics_df.groupby(["marker", "k", "split"], dropna=False)[["dt_r2", "integ_r2_median", "ode_integ_r2_median"]]
+        metrics_df.groupby(["marker", "k", "split"], dropna=False)[agg_cols]
         .mean()
         .reset_index()
     )
@@ -491,11 +613,29 @@ def main() -> None:
                 "k": k,
                 "split": "overall",
                 "dt_r2": float(np.nanmean(grp["dt_r2"])) if not grp["dt_r2"].isna().all() else np.nan,
+                "dt_rel_mae_mean_bins": float(np.nanmean(grp["dt_rel_mae_mean_bins"]))
+                if "dt_rel_mae_mean_bins" in grp and not grp["dt_rel_mae_mean_bins"].isna().all()
+                else np.nan,
+                "dt_rel_mae_median_bins": float(np.nanmean(grp["dt_rel_mae_median_bins"]))
+                if "dt_rel_mae_median_bins" in grp and not grp["dt_rel_mae_median_bins"].isna().all()
+                else np.nan,
                 "integ_r2_median": float(np.nanmean(grp["integ_r2_median"]))
                 if not grp["integ_r2_median"].isna().all()
                 else np.nan,
+                "integ_rel_mae_mean_bins": float(np.nanmean(grp["integ_rel_mae_mean_bins"]))
+                if "integ_rel_mae_mean_bins" in grp and not grp["integ_rel_mae_mean_bins"].isna().all()
+                else np.nan,
+                "integ_rel_mae_median_bins": float(np.nanmean(grp["integ_rel_mae_median_bins"]))
+                if "integ_rel_mae_median_bins" in grp and not grp["integ_rel_mae_median_bins"].isna().all()
+                else np.nan,
                 "ode_integ_r2_median": float(np.nanmean(grp["ode_integ_r2_median"]))
                 if not grp["ode_integ_r2_median"].isna().all()
+                else np.nan,
+                "ode_integ_rel_mae_mean_bins": float(np.nanmean(grp["ode_integ_rel_mae_mean_bins"]))
+                if "ode_integ_rel_mae_mean_bins" in grp and not grp["ode_integ_rel_mae_mean_bins"].isna().all()
+                else np.nan,
+                "ode_integ_rel_mae_median_bins": float(np.nanmean(grp["ode_integ_rel_mae_median_bins"]))
+                if "ode_integ_rel_mae_median_bins" in grp and not grp["ode_integ_rel_mae_median_bins"].isna().all()
                 else np.nan,
             }
         )

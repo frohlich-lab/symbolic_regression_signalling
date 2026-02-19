@@ -23,7 +23,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from constants import PYSR_CONFIG
+from constants import PYSR_CONFIG, pysr_operator_config
 from regime_variants import VARIANTS, augment_for_variant
 
 TARGET_COLUMN = 'kcat_cg'
@@ -86,9 +86,14 @@ def find_best_formula(
             set_seed(seed)
         # Set up and train the PySR model
         model_config = dict(PYSR_CONFIG)
+        model_config.update(pysr_operator_config(variant))
         if override_config:
             model_config.update(override_config)
-        for forbidden_key in ("output_directory", "run_id", "random_state"):
+        # Enforce deterministic PySR runs (serial execution + fixed seed).
+        model_config["deterministic"] = True
+        model_config["parallelism"] = "serial"
+        model_config["procs"] = 0
+        for forbidden_key in ("output_directory", "run_id"):
             model_config.pop(forbidden_key, None)
         model = PySRRegressor(
             **model_config,

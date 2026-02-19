@@ -16,6 +16,7 @@ import os
 import re
 import argparse
 import warnings
+import json
 from pathlib import Path
 from collections import OrderedDict
 from typing import Any, Dict, Tuple, Optional, List
@@ -31,8 +32,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, FunctionTransformer
 from sklearn.pipeline import Pipeline
 
-from nn_model import train_model, evaluate_model
-from constants import PYSR_CONFIG
+from nn_model import train_model, evaluate_model, load_model_checkpoint
+from constants import PYSR_CONFIG, pysr_operator_config
 from plot_style import apply_cell_systems_style
 from utils.seeding import resolve_seed, seed_everything
 
@@ -62,7 +63,11 @@ from regime_variants import (
     format_variant_split,
     format_model_metrics,
     model_display_name,
+    baseline_label,
+    baseline_labels,
+    variant_plot_context,
     variant_suffix,
+    has_persisted_splits,
     regime_logger,
     aggregate_seed_error_statistics,
     clip_metric_values,
@@ -77,6 +82,25 @@ TIME_COLUMN = "time"
 TARGET_COLUMN = MM_TARGET_COLUMN
 EPS = MM_EPS
 LOG_SCALE_FLOOR = 1e-3
+LOG_EPS = 1e-20
+
+
+def _warn_on_bad_values(values: np.ndarray, context: str) -> None:
+    arr = np.asarray(values, dtype=float)
+    nonfinite = np.count_nonzero(~np.isfinite(arr))
+    nonpositive = np.count_nonzero(arr <= 0)
+    if nonfinite or nonpositive:
+        _emit(
+            f"[warn] {context}: {nonfinite} non-finite, {nonpositive} non-positive values; "
+            f"clipping to {LOG_EPS} before log transform."
+        )
+
+
+def _safe_log_values(values: np.ndarray, context: str) -> np.ndarray:
+    arr = np.asarray(values, dtype=float)
+    _warn_on_bad_values(arr, context)
+    safe = np.nan_to_num(arr, nan=LOG_EPS, posinf=LOG_EPS, neginf=LOG_EPS)
+    return np.log(np.clip(safe, LOG_EPS, None))
 NN_DATASET_CAP = 20000
 MAX_TIME_GROUPS = 4
 
@@ -94,6 +118,23 @@ def _emit(message: str) -> None:
             message = f"{prefix} {message}"
     LOGGER.info(message)
     print(message)
+
+
+def _dedupe_baseline_legend(ax: plt.Axes) -> None:
+    handles, labels = ax.get_legend_handles_labels()
+    if not handles:
+        return
+    seen = set()
+    unique_handles = []
+    unique_labels = []
+    for handle, label in zip(handles, labels):
+        base_label = baseline_label(label)
+        if base_label in seen:
+            continue
+        seen.add(base_label)
+        unique_handles.append(handle)
+        unique_labels.append(base_label)
+    ax.legend(unique_handles, unique_labels, frameon=False)
 
 # ── Helpers: formatting & grouping ─────────────────────────────────────────────
 def _format_number(value: float) -> str:
@@ -196,10 +237,19 @@ def load_dataset_with_time(path: str, features: Optional[str], time_column: str 
 
 # ── Preprocess ─────────────────────────────────────────────────────────────────
 def preprocess_data(X: np.ndarray):
-    pipeline = Pipeline([
-        ("log_transform", FunctionTransformer(np.log, validate=True)),
-        ("scaler", StandardScaler()),
-    ])
+    X = np.asarray(X, dtype=float)
+    _warn_on_bad_values(X, "NN feature matrix")
+
+    def _safe_log(values: np.ndarray) -> np.ndarray:
+        safe = np.nan_to_num(values, nan=LOG_EPS, posinf=LOG_EPS, neginf=LOG_EPS)
+        return np.log(np.clip(safe, LOG_EPS, None))
+
+    pipeline = Pipeline(
+        [
+            ("log_transform", FunctionTransformer(_safe_log, validate=False)),
+            ("scaler", StandardScaler()),
+        ]
+    )
     return pipeline.fit_transform(X), pipeline
 
 # ── PySR runner ────────────────────────────────────────────────────────────────
@@ -209,6 +259,9 @@ def run_pysr(
     model_path,
     log_prefix: Optional[str] = None,
     config_override: Optional[Dict[str, object]] = None,
+    *,
+    plots_only: bool = False,
+    seed: Optional[int] = None,
 ):
     model_path = Path(model_path)
     run_dir = model_path.parent
@@ -230,6 +283,9 @@ def run_pysr(
     if load_target is None and any(run_dir.iterdir()):
         load_target = run_dir
 
+    if plots_only and load_target is None:
+        raise FileNotFoundError(f"No existing PySR artifacts found at {run_dir} for plots-only mode")
+
     if load_target is not None:
         _emit(f"{prefix} Loading existing model from {load_target}")
         return PySRRegressor.from_file(run_directory=str(run_dir))
@@ -238,6 +294,12 @@ def run_pysr(
     config = dict(PYSR_CONFIG)
     if config_override:
         config.update(config_override)
+    if seed is not None:
+        config["random_state"] = seed
+    # Enforce deterministic PySR runs (serial execution + fixed seed).
+    config["deterministic"] = True
+    config["parallelism"] = "serial"
+    config["procs"] = 0
     model = PySRRegressor(
         **config,
         output_directory=str(base_dir),
@@ -252,6 +314,29 @@ def run_pysr(
         except Exception:
             pass
     return model
+
+
+def _cache_path(regime_dir: Path) -> Path:
+    return regime_dir / "processed" / "predictions_cache.json"
+
+
+def load_prediction_cache(regime_dir: Path) -> dict:
+    cache_file = _cache_path(regime_dir)
+    if not cache_file.exists():
+        return {}
+    try:
+        with cache_file.open("r") as handle:
+            raw = json.load(handle)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_prediction_cache(regime_dir: Path, cache: dict) -> None:
+    cache_file = _cache_path(regime_dir)
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    with cache_file.open("w") as handle:
+        json.dump(cache, handle)
 
 # ── NN pool (aligned with dataset_size_regimes) ────────────────────────────────
 def _build_nn_pool(
@@ -393,9 +478,6 @@ def _compute_line_stats(error_distributions):
     return stats
 
 def _lineplot_limits(stats, spec):
-    if spec.floor is not None and spec.ceiling is not None:
-        lower, upper = metric_limits_with_margin(spec.key)
-        return lower, upper
     lowers, uppers, positives = [], [], []
     for model in MODEL_LINE_ORDER:
         lowers.extend([v for v in stats[model]["q1"] if np.isfinite(v)])
@@ -419,8 +501,11 @@ def _lineplot_limits(stats, spec):
     if spec.y_scale == "log":
         if positives and ymin <= 0:
             ymin = min(positives) * 0.8
-        floor = spec.floor or LOG_SCALE_FLOOR
-        ymin = max(ymin, floor)
+        floor = spec.floor if spec.floor is not None else LOG_SCALE_FLOOR
+        if floor is not None and ymin < floor:
+            ymin = floor
+        if spec.ceiling is not None:
+            ymax = min(ymax, spec.ceiling * 1.1)
         if ymax <= ymin:
             ymax = ymin * 1.5
     else:
@@ -446,11 +531,32 @@ def _plot_timepoint_lineplot_for_metric(
     plot_dir.mkdir(parents=True, exist_ok=True)
 
     regimes = list(metric_distributions.keys())
-    stats = _compute_line_stats(metric_distributions)
+    seed_stats = {model: {"median": [], "q1": [], "q3": [], "min": [], "max": []} for model in MODEL_LINE_ORDER}
+    for regime in regimes:
+        for model in MODEL_LINE_ORDER:
+            seed_values = np.asarray(seed_medians.get(regime, {}).get(model, []), dtype=float)
+            seed_values = seed_values[np.isfinite(seed_values)]
+            if seed_values.size:
+                seed_values = clip_metric_values(seed_values, metric_key)
+                seed_values = seed_values[np.isfinite(seed_values)]
+            if seed_values.size == 0:
+                seed_stats[model]["median"].append(np.nan)
+                seed_stats[model]["q1"].append(np.nan)
+                seed_stats[model]["q3"].append(np.nan)
+                seed_stats[model]["min"].append(np.nan)
+                seed_stats[model]["max"].append(np.nan)
+            else:
+                seed_stats[model]["median"].append(float(np.median(seed_values)))
+                seed_stats[model]["q1"].append(float(np.quantile(seed_values, 0.25)))
+                seed_stats[model]["q3"].append(float(np.quantile(seed_values, 0.75)))
+                seed_stats[model]["min"].append(float(np.min(seed_values)))
+                seed_stats[model]["max"].append(float(np.max(seed_values)))
+
+    stats = {model: {"median": [], "q1": [], "q3": []} for model in MODEL_LINE_ORDER}
     for model in MODEL_LINE_ORDER:
         for key in ("median", "q1", "q3"):
             stats_array = clip_metric_values(
-                np.asarray(stats[model][key], dtype=float),
+                np.asarray(seed_stats[model][key], dtype=float),
                 metric_key,
             )
             if spec.y_scale == "log":
@@ -468,59 +574,74 @@ def _plot_timepoint_lineplot_for_metric(
     x_labels = [_label_for_regime(r) for r in regimes]
     x_label_text = "Time Group"
 
-    fig, ax = plt.subplots(figsize=(6.8, 4.2))
-
-    for model in MODEL_LINE_ORDER:
-        median = np.asarray(stats[model]["median"], dtype=float)
-        q1 = np.asarray(stats[model]["q1"], dtype=float)
-        q3 = np.asarray(stats[model]["q3"], dtype=float)
-        color = MODEL_COLOR_MAP[model]
-        if not template:
-            ax.plot(x, median, marker="o", label=model, color=color)
-            ax.fill_between(x, q1, q3, color=color, alpha=0.15)
-            for idx, regime in enumerate(regimes):
-                seed_values = np.asarray(
-                    seed_medians.get(regime, {}).get(model, []),
-                    dtype=float,
-                )
-                if seed_values.size == 0:
-                    continue
-                seed_values = seed_values[np.isfinite(seed_values)]
-                if seed_values.size == 0:
-                    continue
-                seed_values = clip_metric_values(seed_values, metric_key)
-                jitter = np.full(seed_values.shape, x[idx], dtype=float)
-                ax.scatter(
-                    jitter,
-                    seed_values,
-                    color=color,
-                    alpha=0.4,
-                    s=28,
-                    linewidths=0,
-                    zorder=4,
-                )
-        else:
-            ax.plot(x, median, color=color, linestyle="--", alpha=0.3)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(x_labels, rotation=15, ha="right")
-    ax.set_xlabel(x_label_text)
-    ax.set_ylabel(spec.axis_label)
-    ax.set_yscale(spec.y_scale)
     lower_limit, upper_limit = metric_limits_with_margin(metric_key)
-    if lower_limit is not None and upper_limit is not None:
-        ax.set_ylim(lower_limit, upper_limit)
-    elif ymin is not None and ymax is not None:
-        ax.set_ylim(ymin, ymax)
-    if not template:
-        ax.legend(frameon=False)
-    ax.grid(True, axis="y", linestyle="--", alpha=0.4)
 
-    suffix = "_template" if template else ""
-    plt.tight_layout()
-    filename = f"{spec.filename_prefix}_timepoint_lineplot{suffix}.png"
-    plt.savefig(plot_dir / filename, dpi=300)
-    plt.close()
+    def _render_lineplot(*, fixed_ylim: bool) -> None:
+        fig, ax = plt.subplots(figsize=(8.0, 6.0))
+
+        for model in MODEL_LINE_ORDER:
+            median = np.asarray(stats[model]["median"], dtype=float)
+            min_vals = np.asarray(seed_stats[model]["min"], dtype=float)
+            max_vals = np.asarray(seed_stats[model]["max"], dtype=float)
+            color = MODEL_COLOR_MAP[model]
+            is_orange = model.startswith("PySR")
+            line_z = 4 if is_orange else 3
+            band_z = 2 if is_orange else 1
+            if not template:
+                ax.plot(
+                    x,
+                    median,
+                    marker="o",
+                    markersize=12,
+                    linewidth=3.0,
+                    label=baseline_label(model),
+                    color=color,
+                    zorder=line_z,
+                )
+                if np.isfinite(min_vals).any() and np.isfinite(max_vals).any():
+                    ax.fill_between(x, min_vals, max_vals, color=color, alpha=0.15, zorder=band_z)
+            else:
+                ax.plot(x, median, color=color, linestyle="--", alpha=0.3, linewidth=3.0, zorder=line_z)
+
+        label_fs = 22
+        tick_fs = 19
+        legend_fs = 21
+        legend_title_fs = 22
+        ax.set_xticks(x)
+        ax.set_xticklabels(x_labels, rotation=15, ha="right", fontsize=tick_fs)
+        ax.set_xlabel(x_label_text, fontsize=label_fs)
+        ax.set_ylabel(spec.axis_label, fontsize=label_fs)
+        ax.set_yscale(spec.y_scale)
+        if fixed_ylim and spec.y_scale == "log":
+            lower, upper = 1e-2, 1e2
+            pad = 2.0
+            ax.set_ylim(lower / pad, upper * pad)
+        elif ymin is not None and ymax is not None:
+            if spec.y_scale == "log":
+                ax.set_ylim(ymin, ymax * 1.15)
+            else:
+                ax.set_ylim(ymin, ymax * 1.05)
+        elif lower_limit is not None and upper_limit is not None:
+            ax.set_ylim(lower_limit, upper_limit)
+        if not template and not fixed_ylim:
+            _dedupe_baseline_legend(ax)
+            legend = ax.get_legend()
+            if legend is not None:
+                legend.set_title(legend.get_title().get_text(), prop={"size": legend_title_fs})
+                for text in legend.get_texts():
+                    text.set_fontsize(legend_fs)
+        ax.tick_params(axis="both", labelsize=tick_fs)
+        ax.grid(True, axis="y", linestyle="--", alpha=0.4)
+
+        suffix = "_template" if template else ""
+        fixed_suffix = "_fixed_ylim" if fixed_ylim else ""
+        plt.tight_layout()
+        filename = f"{spec.filename_prefix}_timepoint_lineplot{fixed_suffix}{suffix}.png"
+        plt.savefig(plot_dir / filename, dpi=300)
+        plt.close()
+
+    _render_lineplot(fixed_ylim=False)
+    _render_lineplot(fixed_ylim=True)
 
 def plot_timepoint_lineplots(
     distributions: Dict[str, Dict[str, Dict[str, np.ndarray]]],
@@ -582,6 +703,7 @@ def _plot_error_distributions(metric_key, metric_distributions, output_dir):
             palette=palette,
             order=MODEL_LINE_ORDER,
         )
+        ax.set_xticklabels(baseline_labels(MODEL_LINE_ORDER))
         ax.set_title(regime)
         ax.set_xlabel("")
         if idx % ncols == 0:
@@ -597,7 +719,7 @@ def _plot_error_distributions(metric_key, metric_distributions, output_dir):
     for idx in range(len(regimes), len(axes)):
         plt.delaxes(axes[idx])
 
-    plt.suptitle(f"{spec.label} Error Distributions by Time Group", fontsize=16)
+    plt.suptitle(f"{spec.label} Error Distributions by Time Group", fontsize=32)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.savefig(metric_dir / f"{spec.filename_prefix}_error_distributions.png")
     plt.close()
@@ -655,7 +777,8 @@ def plot_horizontal_boxplots(model_dict, output_dir):
                     ax=ax,
                     showfliers=showfliers,
                 )
-                ax.set_title(regime, fontsize=14, weight="bold")
+                ax.set_yticklabels(baseline_labels(MODEL_LINE_ORDER))
+                ax.set_title(regime, fontsize=28, weight="bold")
                 ax.set_ylabel("")
                 if spec.y_scale == "log":
                     ax.set_xscale("log")
@@ -663,7 +786,7 @@ def plot_horizontal_boxplots(model_dict, output_dir):
                         ax.set_xlim(lower_limit, upper_limit)
                 elif lower_limit is not None and upper_limit is not None:
                     ax.set_xlim(lower_limit, upper_limit)
-            axes[-1].set_xlabel(spec.axis_label, fontsize=12)
+            axes[-1].set_xlabel(spec.axis_label, fontsize=24)
             for ax in axes[:-1]:
                 ax.set_xlabel("")
             plt.tight_layout()
@@ -725,7 +848,8 @@ def plot_vertical_boxplots(model_dict, output_dir):
                     ax=ax,
                     showfliers=showfliers,
                 )
-                ax.set_title(regime, fontsize=14, weight="bold")
+                ax.set_xticklabels(baseline_labels(MODEL_LINE_ORDER))
+                ax.set_title(regime, fontsize=28, weight="bold")
                 if spec.y_scale == "log":
                     ax.set_yscale("log")
                     if lower_limit is not None and upper_limit is not None:
@@ -736,7 +860,7 @@ def plot_vertical_boxplots(model_dict, output_dir):
                 if ax != axes[0]:
                     ax.set_ylabel("")
                 else:
-                    ax.set_ylabel(spec.axis_label, fontsize=12)
+                    ax.set_ylabel(spec.axis_label, fontsize=24)
                 if lower_limit is not None and upper_limit is not None and spec.y_scale != "log":
                     ax.set_ylim(lower_limit, upper_limit)
                 elif global_min is not None and global_max is not None:
@@ -777,6 +901,7 @@ def plot_model_subregimes(model_dict, output_dir):
         for col_idx, (family, variant_key) in enumerate(MODEL_COMBINATIONS):
             ax = axes[row_idx, col_idx] if n_rows > 1 else axes[col_idx]
             display_name = model_display_name(family, variant_key)
+            display_label = baseline_label(display_name)
             snapshot = collect_variant_predictions(regime_models, variant_key, evaluate_model)
             chosen = sampled.get((regime_name, variant_key))
             if snapshot is None or chosen is None or len(chosen) == 0:
@@ -802,22 +927,22 @@ def plot_model_subregimes(model_dict, output_dir):
                 alpha=0.4,
                 s=18,
                 color=MODEL_COLOR_MAP[display_name],
-                label=display_name,
+                label=display_label,
                 edgecolors='k',
                 linewidths=0.2,
             )
 
             if row_idx == len(regimes) - 1:
-                ax.set_xlabel("Groundtruth kcat_cg", fontsize=10)
+                ax.set_xlabel("Groundtruth kcat_cg", fontsize=20)
             if col_idx == 0:
-                ax.set_ylabel('Log-space MAE |ln(ŷ+ε) − ln(y+ε)| (ε=1e−20)', fontsize=10)
+                ax.set_ylabel('Log-space MAE |ln(ŷ+ε) − ln(y+ε)| (ε=1e−20)', fontsize=20)
             if row_idx == 0:
-                ax.set_title(display_name, fontsize=11)
+                ax.set_title(display_label, fontsize=22)
             if row_idx == 0 and col_idx == 0:
                 ax.legend(frameon=False, loc='upper left')
             ax.set_xscale('log')
 
-    fig.suptitle("Model Error Landscape by Time Group and Model", fontsize=16, y=1.02)
+    fig.suptitle("Model Error Landscape by Time Group and Model", fontsize=32, y=1.02)
     plt.tight_layout()
     out = Path(output_dir) / "shared/plots/error_landscape.png"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -854,7 +979,7 @@ def plot_input_error_correlation(model_dict, output_dir):
     for j in range(filled + 1, len(axes)):
         fig.delaxes(axes[j])
 
-    plt.suptitle("Feature–Error Correlations by Time Group", fontsize=16)
+    plt.suptitle("Feature–Error Correlations by Time Group", fontsize=32)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     out = Path(output_dir) / "shared/plots/feature_error_correlation_grid.png"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -900,7 +1025,7 @@ def plot_model_error_correlation(model_dict, output_dir):
     for j in range(filled + 1, len(axes)):
         fig.delaxes(axes[j])
 
-    plt.suptitle("Model–Model Error Correlations by Time Group", fontsize=16)
+    plt.suptitle("Model–Model Error Correlations by Time Group", fontsize=32)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     out = Path(output_dir) / "shared/plots/model_error_correlation_grid.png"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -947,6 +1072,7 @@ def _evaluate_models_single_seed(
     time_column: str = TIME_COLUMN,
     *,
     persist_outputs: bool = True,
+    plots_only: bool = False,
 ) -> Dict[str, Dict[str, Any]]:
     os.makedirs(output_dir, exist_ok=True)
     resolved_seed = seed_everything(resolve_seed(seed))
@@ -986,21 +1112,33 @@ def _evaluate_models_single_seed(
         (group_dir / "plots").mkdir(parents=True, exist_ok=True)
         (group_dir / "models/pysr").mkdir(parents=True, exist_ok=True)
         (group_dir / "models/nn").mkdir(parents=True, exist_ok=True)
+        variant_cache = load_prediction_cache(group_dir)
 
         # Drop grouping columns, keep features+target in linear space
         base_no_time = group_rows.drop(columns=["time_group", time_column]).reset_index(drop=True)
 
         # Cap per-group sample for the variant-aware symbolic modeling
-        capped_size = min(dataset_size, len(base_no_time)) if dataset_size else len(base_no_time)
-        capped_size = max(2, capped_size)
-        sample = (
-            base_no_time.sample(n=capped_size, random_state=seed)
-            if capped_size < len(base_no_time)
-            else base_no_time.copy()
-        ).reset_index(drop=True)
+        if plots_only:
+            sample_path = group_dir / "processed/model_sample.csv"
+            train_path = group_dir / "processed/train.csv"
+            test_path = group_dir / "processed/test.csv"
+            if not sample_path.exists() or not train_path.exists() or not test_path.exists():
+                LOGGER.warning("Missing persisted splits for plots-only mode in %s", group_dir)
+                continue
+            sample = pd.read_csv(sample_path)
+            base_train = pd.read_csv(train_path)
+            base_test = pd.read_csv(test_path)
+        else:
+            capped_size = min(dataset_size, len(base_no_time)) if dataset_size else len(base_no_time)
+            capped_size = max(2, capped_size)
+            sample = (
+                base_no_time.sample(n=capped_size, random_state=seed)
+                if capped_size < len(base_no_time)
+                else base_no_time.copy()
+            ).reset_index(drop=True)
 
-        if persist_outputs:
-            sample.to_csv(group_dir / "processed/model_sample.csv", index=False)
+            if persist_outputs:
+                sample.to_csv(group_dir / "processed/model_sample.csv", index=False)
 
         _emit(
             format_regime_message(
@@ -1013,13 +1151,21 @@ def _evaluate_models_single_seed(
         )
 
         # Shared train/test indices
-        indices = np.arange(len(sample))
-        test_size = max(1, int(np.ceil(len(sample) * 0.2)))
-        if len(sample) - test_size < 1:
-            LOGGER.warning("Skipping %s: insufficient train samples after split", label)
-            _emit(f"[{dirname}] {label}: insufficient samples for train/test split")
-            continue
-        train_idx, test_idx = train_test_split(indices, test_size=test_size, random_state=seed, shuffle=True)
+        if plots_only:
+            train_idx = test_idx = None
+        else:
+            indices = np.arange(len(sample))
+            test_size = max(1, int(np.ceil(len(sample) * 0.2)))
+            if len(sample) - test_size < 1:
+                LOGGER.warning("Skipping %s: insufficient train samples after split", label)
+                _emit(f"[{dirname}] {label}: insufficient samples for train/test split")
+                continue
+            train_idx, test_idx = train_test_split(indices, test_size=test_size, random_state=seed, shuffle=True)
+            base_train = sample.iloc[train_idx].reset_index(drop=True)
+            base_test = sample.iloc[test_idx].reset_index(drop=True)
+            if persist_outputs:
+                base_train.to_csv(group_dir / "processed/train.csv", index=False)
+                base_test.to_csv(group_dir / "processed/test.csv", index=False)
 
         # NN pool baseline (pre-variant)
         nn_base = base_no_time.copy()
@@ -1037,11 +1183,23 @@ def _evaluate_models_single_seed(
         # Variant-aware loop
         for variant_key, display_variant in VARIANTS.items():
             suffix = variant_suffix(variant_key)
+            cached_variant = variant_cache.get(variant_key, {})
 
             # Variant augmentation (adds/remaps columns per variant policy)
-            variant_sample = augment_for_variant(sample, variant_key)
-            variant_train = variant_sample.iloc[train_idx].reset_index(drop=True)
-            variant_test = variant_sample.iloc[test_idx].reset_index(drop=True)
+            if plots_only:
+                sample_path = group_dir / f"processed/model_sample{suffix}.csv" if suffix else group_dir / "processed/model_sample.csv"
+                train_path = group_dir / f"processed/train{suffix}.csv" if suffix else group_dir / "processed/train.csv"
+                test_path = group_dir / f"processed/test{suffix}.csv" if suffix else group_dir / "processed/test.csv"
+                if not sample_path.exists() or not train_path.exists() or not test_path.exists():
+                    LOGGER.warning("Missing variant splits for plots-only mode: %s", sample_path)
+                    continue
+                variant_sample = pd.read_csv(sample_path)
+                variant_train = pd.read_csv(train_path)
+                variant_test = pd.read_csv(test_path)
+            else:
+                variant_sample = augment_for_variant(sample, variant_key)
+                variant_train = variant_sample.iloc[train_idx].reset_index(drop=True)
+                variant_test = variant_sample.iloc[test_idx].reset_index(drop=True)
 
             # Persist splits
             if persist_outputs:
@@ -1073,15 +1231,54 @@ def _evaluate_models_single_seed(
             pysr_dir = group_dir / f"models/pysr{suffix}"
             pysr_dir.mkdir(parents=True, exist_ok=True)
             pysr_path = pysr_dir / "hall_of_fame.pkl"
-            config_override = {"maxsize": 35} if variant_key == "tQSSA" else None
-            pysr_model = run_pysr(
-                X_train,
-                y_train,
-                str(pysr_path),
-                log_prefix=f"[{dirname}] [{display_variant}]",
-                config_override=config_override,
-            )
-            y_pred_pysr = np.asarray(pysr_model.predict(X_test), dtype=float)
+            config_override = dict(pysr_operator_config(variant_key))
+            if variant_key == "tQSSA":
+                config_override["maxsize"] = 35
+            if not config_override:
+                config_override = None
+            if plots_only:
+                cached_preds = cached_variant.get("predictions", {})
+                cached_y_true = cached_variant.get("y_true")
+                if cached_preds and cached_y_true is not None:
+                    pysr_model = None
+                    y_pred_pysr = np.asarray(
+                        cached_preds.get(model_display_name("pysr", variant_key), []),
+                        dtype=float,
+                    )
+                    y_test = np.asarray(cached_y_true, dtype=float)
+                else:
+                    _emit(
+                        f"[{dirname}] [{display_variant}] Cached predictions missing; loading PySR model to rebuild cache."
+                    )
+                    pysr_model = run_pysr(
+                        X_train,
+                        y_train,
+                        str(pysr_path),
+                        log_prefix=f"[{dirname}] [{display_variant}]",
+                        config_override=config_override,
+                        plots_only=True,
+                        seed=seed,
+                    )
+                    y_pred_pysr = np.asarray(pysr_model.predict(X_test), dtype=float)
+                    cached_variant["y_true"] = y_test.tolist()
+                    preds = cached_variant.get("predictions", {})
+                    preds[model_display_name("pysr", variant_key)] = y_pred_pysr.tolist()
+                    cached_variant["predictions"] = preds
+            else:
+                pysr_model = run_pysr(
+                    X_train,
+                    y_train,
+                    str(pysr_path),
+                    log_prefix=f"[{dirname}] [{display_variant}]",
+                    config_override=config_override,
+                    plots_only=plots_only,
+                    seed=seed,
+                )
+                y_pred_pysr = np.asarray(pysr_model.predict(X_test), dtype=float)
+                cached_variant["y_true"] = y_test.tolist()
+                preds = cached_variant.get("predictions", {})
+                preds[model_display_name("pysr", variant_key)] = y_pred_pysr.tolist()
+                cached_variant["predictions"] = preds
             pysr_metrics = metric_summary(y_pred_pysr, y_test)
             _emit(
                 format_model_metrics(
@@ -1093,11 +1290,20 @@ def _evaluate_models_single_seed(
             )
 
             # ── MM (variant-aware)
-            try:
-                mm_variant_pred = np.asarray(mm_predictions(variant_test)[display_variant], dtype=float)
-            except Exception as exc:
-                _emit(f"[WARN] Failed to compute MM {display_variant}: {exc}")
-                mm_variant_pred = np.zeros_like(y_test)
+            mm_variant_pred = None
+            if plots_only:
+                cached_mm = cached_variant.get("predictions", {}).get(model_display_name("mm", variant_key))
+                if cached_mm is not None:
+                    mm_variant_pred = np.asarray(cached_mm, dtype=float)
+            if mm_variant_pred is None:
+                try:
+                    mm_variant_pred = np.asarray(mm_predictions(variant_test)[display_variant], dtype=float)
+                except Exception as exc:
+                    _emit(f"[WARN] Failed to compute MM {display_variant}: {exc}")
+                    mm_variant_pred = np.zeros_like(y_test)
+                preds = cached_variant.get("predictions", {})
+                preds[model_display_name("mm", variant_key)] = mm_variant_pred.tolist()
+                cached_variant["predictions"] = preds
             mm_metrics = metric_summary(mm_variant_pred, y_test)
             _emit(
                 format_model_metrics(
@@ -1133,35 +1339,77 @@ def _evaluate_models_single_seed(
             nn_X_train_pre, nn_pipeline = preprocess_data(nn_X_train.values)
             nn_X_val_pre = nn_pipeline.transform(nn_X_val.values)
             nn_train_pre = pd.DataFrame(
-                np.column_stack([nn_X_train_pre, np.log(nn_y_train.values)]),
+                np.column_stack([nn_X_train_pre, _safe_log_values(nn_y_train.values, "NN train targets")]),
                 columns=list(nn_features.columns) + [TARGET_COLUMN],
             )
             nn_val_pre = pd.DataFrame(
-                np.column_stack([nn_X_val_pre, np.log(nn_y_val.values)]),
+                np.column_stack([nn_X_val_pre, _safe_log_values(nn_y_val.values, "NN val targets")]),
                 columns=list(nn_features.columns) + [TARGET_COLUMN],
             )
 
             train_pre = pd.DataFrame(
-                np.column_stack([nn_pipeline.transform(variant_train.iloc[:, :-1].values), np.log(y_train)]),
+                np.column_stack(
+                    [
+                        nn_pipeline.transform(variant_train.iloc[:, :-1].values),
+                        _safe_log_values(y_train, "Variant train targets"),
+                    ]
+                ),
                 columns=list(variant_train.columns),
             )
             test_pre = pd.DataFrame(
-                np.column_stack([nn_pipeline.transform(variant_test.iloc[:, :-1].values), np.log(y_test)]),
+                np.column_stack(
+                    [
+                        nn_pipeline.transform(variant_test.iloc[:, :-1].values),
+                        _safe_log_values(y_test, "Variant test targets"),
+                    ]
+                ),
                 columns=list(variant_test.columns),
             )
             full_pre = pd.DataFrame(
-                np.column_stack([nn_pipeline.transform(X_full), np.log(y_full)]),
+                np.column_stack([nn_pipeline.transform(X_full), _safe_log_values(y_full, "Full targets")]),
                 columns=list(variant_sample.columns),
             )
 
             nn_dir = group_dir / f"models/nn{suffix}"
             nn_dir.mkdir(parents=True, exist_ok=True)
             nn_path = nn_dir / "model.pkl"
-            retrain_flag = not nn_path.exists()
-            nn_model_ref = train_model(nn_train_pre, nn_val_pre, str(nn_path), verbose=False, retrain=retrain_flag, seed=seed)
+            if plots_only:
+                cached_nn = cached_variant.get("predictions", {}).get(model_display_name("nn", variant_key))
+                if cached_nn is not None:
+                    nn_model_ref = None
+                    if nn_path.exists():
+                        nn_model_ref = load_model_checkpoint(
+                            str(nn_path),
+                            input_dim=nn_train_pre.shape[1] - 1,
+                        )
+                    nn_preds = np.asarray(cached_nn, dtype=float)
+                else:
+                    if not nn_path.exists():
+                        raise FileNotFoundError(
+                            f"Missing NN checkpoint for plots-only mode: {nn_path}"
+                        )
+                    _emit(
+                        f"[{dirname}] [{display_variant}] Cached predictions missing; loading NN checkpoint to rebuild cache."
+                    )
+                    nn_model_ref = load_model_checkpoint(
+                        str(nn_path),
+                        input_dim=nn_train_pre.shape[1] - 1,
+                    )
+                    _, nn_pred_tensor = evaluate_model(nn_model_ref, test_pre)
+                    nn_preds = nn_pred_tensor.detach().cpu().numpy().flatten()
+                    preds = cached_variant.get("predictions", {})
+                    preds[model_display_name("nn", variant_key)] = nn_preds.tolist()
+                    cached_variant["predictions"] = preds
+                    cached_variant["y_true"] = y_test.tolist()
+            else:
+                retrain_flag = not plots_only or not nn_path.exists()
+                nn_model_ref = train_model(nn_train_pre, nn_val_pre, str(nn_path), verbose=False, retrain=retrain_flag, seed=seed)
 
-            _, nn_pred_tensor = evaluate_model(nn_model_ref, test_pre)
-            nn_preds = nn_pred_tensor.detach().cpu().numpy().flatten()
+                _, nn_pred_tensor = evaluate_model(nn_model_ref, test_pre)
+                nn_preds = nn_pred_tensor.detach().cpu().numpy().flatten()
+                preds = cached_variant.get("predictions", {})
+                preds[model_display_name("nn", variant_key)] = nn_preds.tolist()
+                cached_variant["predictions"] = preds
             nn_metrics = metric_summary(nn_preds, y_test)
             _emit(
                 format_model_metrics(
@@ -1181,14 +1429,24 @@ def _evaluate_models_single_seed(
             regime_entry[f'mm{suffix}'] = mm_variant_pred
             regime_entry[f'preprocessed{suffix}'] = full_pre.reset_index(drop=True)
             regime_entry[f'test_preprocessed{suffix}'] = test_pre.reset_index(drop=True)
+            regime_entry[f'cached_predictions{suffix}'] = {
+                k: np.asarray(v, dtype=float) for k, v in cached_variant.get("predictions", {}).items()
+            }
+            regime_entry[f'cached_y_true{suffix}'] = np.asarray(
+                cached_variant.get("y_true", y_test.tolist()), dtype=float
+            )
 
             if suffix == "":
                 regime_entry['pysr'] = pysr_model
                 regime_entry['nn'] = nn_model_ref
                 regime_entry['mm'] = mm_variant_pred
+                regime_entry['cached_predictions'] = regime_entry[f'cached_predictions{suffix}']
+                regime_entry['cached_y_true'] = regime_entry[f'cached_y_true{suffix}']
 
         model_dict[label] = regime_entry
         _emit("")
+        if persist_outputs:
+            save_prediction_cache(group_dir, variant_cache)
 
     if not model_dict:
         LOGGER.warning("No valid timegroups processed; skipping plots")
@@ -1199,6 +1457,23 @@ def _evaluate_models_single_seed(
     return model_dict
 
 
+def _render_variant_plots(model_dict: Dict[str, Dict[str, Any]], output_dir: str) -> None:
+    """Write per-variant plot bundles under output_dir/variants/<variant>."""
+    for variant_key in VARIANTS.keys():
+        variant_dir = Path(output_dir) / "variants" / variant_key.lower()
+        with variant_plot_context(variant_key):
+            plot_model_subregimes(model_dict, variant_dir)
+            plot_error_distributions(model_dict, variant_dir)
+            plot_input_error_correlation(model_dict, variant_dir)
+            plot_model_error_correlation(model_dict, variant_dir)
+            plot_horizontal_boxplots(model_dict, variant_dir)
+            plot_vertical_boxplots(model_dict, variant_dir)
+            variant_distributions, centers, seed_medians = _collect_error_distributions(model_dict)
+            plot_timepoint_lineplots(variant_distributions, centers, seed_medians, variant_dir, template=False)
+            plot_timepoint_lineplots(variant_distributions, centers, seed_medians, variant_dir, template=True)
+        _emit(f"[plots] Saved {variant_key} variant outputs to {variant_dir}")
+
+
 def evaluate_models(
     data: pd.DataFrame,
     output_dir: str,
@@ -1207,17 +1482,25 @@ def evaluate_models(
     time_column: str = TIME_COLUMN,
     *,
     num_seeds: int = 3,
+    plots_only: bool = False,
+    render_plots: bool = True,
 ) -> None:
     seeds = [seed + offset for offset in range(max(1, num_seeds))]
     seed_model_dicts: List[Dict[str, Dict[str, Any]]] = []
 
     for idx, run_seed in enumerate(seeds):
-        persist = idx == 0
+        # Always persist per-seed splits/predictions so plots-only can reuse them.
+        persist = True
         run_output_dir = (
             output_dir
-            if persist
+            if num_seeds <= 1
             else str(Path(output_dir) / "_multi_seed" / f"seed_{idx + 1}")
         )
+        if plots_only and not has_persisted_splits(Path(run_output_dir)):
+            _emit(
+                f"[multi-seed] skipping run {idx + 1}/{len(seeds)} | output_dir={run_output_dir} (missing persisted splits)"
+            )
+            continue
         _emit(
             f"[multi-seed] run {idx + 1}/{len(seeds)} | output_dir={run_output_dir}"
         )
@@ -1228,6 +1511,7 @@ def evaluate_models(
             run_seed,
             time_column=time_column,
             persist_outputs=persist,
+            plots_only=plots_only,
         )
         if model_dict:
             seed_model_dicts.append(model_dict)
@@ -1236,33 +1520,41 @@ def evaluate_models(
         LOGGER.warning("No valid timegroups processed; skipping plots")
         return
 
-    aggregated_errors, seed_medians_map = aggregate_seed_error_statistics(
-        seed_model_dicts,
-        evaluate_model,
-    )
-
     base_model_dict = seed_model_dicts[0]
-    for regime, models in base_model_dict.items():
-        models["aggregated_errors"] = aggregated_errors.get(regime, {})
-        models["aggregated_seed_medians"] = seed_medians_map.get(regime, {})
-        models["seed_values"] = seeds
+    # Save per-seed PySR formulas under output_dir/_multi_seed/seed_{i}
+    for idx, model_dict in enumerate(seed_model_dicts):
+        seed_dir = Path(output_dir) / "_multi_seed" / f"seed_{idx + 1}"
+        save_pysr_formulas(model_dict, features=None, output_dir=seed_dir)
+    if render_plots:
+        aggregated_errors, seed_medians_map = aggregate_seed_error_statistics(
+            seed_model_dicts,
+            evaluate_model,
+        )
 
-    error_distributions, centers, seed_medians = _collect_error_distributions(base_model_dict)
+        for regime, models in base_model_dict.items():
+            models["aggregated_errors"] = aggregated_errors.get(regime, {})
+            models["aggregated_seed_medians"] = seed_medians_map.get(regime, {})
+            models["seed_values"] = seeds
 
-    plot_model_subregimes(base_model_dict, output_dir)
-    plot_error_distributions(base_model_dict, output_dir)
-    plot_input_error_correlation(base_model_dict, output_dir)
-    plot_model_error_correlation(base_model_dict, output_dir)
+        error_distributions, centers, seed_medians = _collect_error_distributions(base_model_dict)
 
-    plot_horizontal_boxplots(base_model_dict, output_dir)
-    plot_vertical_boxplots(base_model_dict, output_dir)
-    plot_timepoint_lineplots(error_distributions, centers, seed_medians, output_dir, template=False)
-    plot_timepoint_lineplots(error_distributions, centers, seed_medians, output_dir, template=True)
+        plot_model_subregimes(base_model_dict, output_dir)
+        plot_error_distributions(base_model_dict, output_dir)
+        plot_input_error_correlation(base_model_dict, output_dir)
+        plot_model_error_correlation(base_model_dict, output_dir)
 
+        plot_horizontal_boxplots(base_model_dict, output_dir)
+        plot_vertical_boxplots(base_model_dict, output_dir)
+        plot_timepoint_lineplots(error_distributions, centers, seed_medians, output_dir, template=False)
+        plot_timepoint_lineplots(error_distributions, centers, seed_medians, output_dir, template=True)
+
+        _render_variant_plots(base_model_dict, output_dir)
+    # Keep existing shared output at output_dir for downstream rules
     save_pysr_formulas(base_model_dict, features=None, output_dir=output_dir)
-    _emit(
-        f"Timepoint regimes completed across {len(seeds)} seed runs. Outputs written to {output_dir}"
-    )
+    message = f"Timepoint regimes completed across {len(seeds)} seed runs. Outputs written to {output_dir}"
+    if not render_plots:
+        message = f"{message} (plots disabled)"
+    _emit(message)
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
 def main():
@@ -1275,6 +1567,8 @@ def main():
     parser.add_argument("--time_column", type=str, default=TIME_COLUMN, help="Column representing time")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--num_seeds", type=int, default=3, dest="num_seeds", help="Number of random seeds to evaluate per model (>=1)")
+    parser.add_argument("--plots-only", action="store_true", help="Do not train; load existing models and render plots only")
+    parser.add_argument("--no-plots", action="store_true", help="Skip plot generation during evaluation")
     args = parser.parse_args()
 
     seed = seed_everything(resolve_seed(args.seed))
@@ -1294,6 +1588,8 @@ def main():
         seed=seed,
         time_column=args.time_column,
         num_seeds=max(1, args.num_seeds),
+        plots_only=args.plots_only,
+        render_plots=not args.no_plots,
     )
 
 if __name__ == "__main__":

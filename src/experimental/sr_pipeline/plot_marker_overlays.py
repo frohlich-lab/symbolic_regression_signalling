@@ -129,13 +129,97 @@ def evaluate_formula(formula: str, features: pd.DataFrame) -> np.ndarray:
     return vals
 
 
+def _resolve_overlay_output_dir(path: Path) -> Path:
+    """
+    Keep per-seed overlays under plots/overlays when callers point at a seed root.
+    """
+    seed_root = None
+    if path.name.startswith("seed_"):
+        seed_root = path
+    elif path.name == "reports" and path.parent.name.startswith("seed_"):
+        seed_root = path.parent
+    if seed_root is not None:
+        candidate = seed_root / "plots" / "overlays"
+        candidate.mkdir(parents=True, exist_ok=True)
+        return candidate
+    if path.name == "plots":
+        candidate = path / "overlays"
+        candidate.mkdir(parents=True, exist_ok=True)
+        return candidate
+    return path
+
+
+def _assert_runs_only(path: Optional[Path], label: str) -> None:
+    """
+    Guard against using alternate experimental run roots (e.g., runs_*); enforce data/experimental/runs/.
+    """
+    if path is None:
+        return
+    p = Path(path)
+    parts = p.parts
+    if "experimental" not in parts:
+        return
+    idx = parts.index("experimental")
+    if idx + 1 >= len(parts):
+        return
+    sub = parts[idx + 1]
+    if sub.startswith("runs") and sub != "runs":
+        raise ValueError(f"{label} must use data/experimental/runs/... not {p}")
+
+
+def _simple_ylim(values: Sequence[float], pad_frac: float = 0.05) -> Optional[Tuple[float, float]]:
+    """
+    Compute padded y-limits from the min/max of the plotted values.
+    """
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if not arr.size:
+        return None
+    low = float(np.min(arr))
+    high = float(np.max(arr))
+    if low == high:
+        span = max(1.0, abs(high) if np.isfinite(high) else 1.0)
+        low, high = low - 0.5 * span, high + 0.5 * span
+    span = high - low
+    pad = pad_frac * span
+    return low - pad, high + pad
+
+
+def _log_negative_points(
+    values: Sequence[float],
+    times: Sequence[float],
+    *,
+    marker: str,
+    bin_label: object,
+    label: str,
+) -> None:
+    """Emit a warning for any negative values in a trajectory."""
+    vals = np.asarray(values, dtype=float)
+    ts = np.asarray(times, dtype=float)
+    mask = np.isfinite(vals) & np.isfinite(ts) & (vals < 0)
+    if not mask.any():
+        return
+    pairs = [(float(ts[i]), float(vals[i])) for i in np.where(mask)[0]]
+    LOGGER.warning("Negative %s for marker=%s bin=%s at (time, value): %s", label, marker, bin_label, pairs)
+
+
 def make_overlay_plots(
     dataset: pd.DataFrame,
     summary: pd.DataFrame,
     summary_seed: Optional[pd.DataFrame],
     args: argparse.Namespace,
 ) -> None:
-    base_output_dir = Path(args.output_dir)
+    # Enforce experimental runs root (no runs_* variants)
+    _assert_runs_only(args.dataset, "dataset")
+    _assert_runs_only(args.summary, "summary")
+    _assert_runs_only(args.summary_seed, "summary_seed")
+    _assert_runs_only(args.output_dir, "output_dir")
+    _assert_runs_only(args.predicted_trajectories, "predicted_trajectories")
+    _assert_runs_only(args.integration_trajectories, "integration_trajectories")
+    _assert_runs_only(args.integration_metrics, "integration_metrics")
+    _assert_runs_only(args.metrics_output_dir, "metrics_output_dir")
+
+    base_output_dir = _resolve_overlay_output_dir(Path(args.output_dir))
     base_output_dir.mkdir(parents=True, exist_ok=True)
     # Keep only selected model rows
     summary = summary[summary["model"] == args.model].copy()
@@ -298,13 +382,20 @@ def make_overlay_plots(
         if chosen_seed is None:
             chosen_seed = seed_annot.pick_seed(summary_seed, columns=cols)
 
-        pred_df = pred_df_all
-        if pred_df_all is not None and chosen_seed is not None:
+        def _filter_by_seed(df_all: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+            """Subset to the chosen seed, matching string/int ids interchangeably."""
+            if df_all is None:
+                return None
+            if chosen_seed is None:
+                return df_all
+            seed_str = str(chosen_seed)
             for col in ("seed", "random_state"):
-                if col in pred_df_all.columns:
-                    pred_df = pred_df_all[pred_df_all[col] == chosen_seed].copy()
-                    break
-        if pred_df is None and chosen_seed is not None and summary_seeds:
+                if col in df_all.columns:
+                    return df_all[df_all[col].astype(str) == seed_str].copy()
+            return df_all.copy()
+
+        pred_df = _filter_by_seed(pred_df_all)
+        if chosen_seed is not None and summary_seeds and (pred_df is None or pred_df.empty):
             # Inject seed column if predictions lack it but summary has a single seed
             pred_df = pred_df_all.copy() if pred_df_all is not None else None
             if pred_df is not None and "seed" not in pred_df.columns:
@@ -312,26 +403,16 @@ def make_overlay_plots(
         if pred_df is not None and pred_df.empty:
             pred_df = None
 
-        integration_df = integration_df_all
-        if integration_df_all is not None and chosen_seed is not None:
-            for col in ("seed", "random_state"):
-                if col in integration_df_all.columns:
-                    integration_df = integration_df_all[integration_df_all[col] == chosen_seed].copy()
-                    break
-        if integration_df is None and chosen_seed is not None and summary_seeds:
+        integration_df = _filter_by_seed(integration_df_all)
+        if chosen_seed is not None and summary_seeds and (integration_df is None or integration_df.empty):
             integration_df = integration_df_all.copy() if integration_df_all is not None else None
             if integration_df is not None and "seed" not in integration_df.columns:
                 integration_df["seed"] = chosen_seed
         if integration_df is not None and integration_df.empty:
             integration_df = None
 
-        integration_metrics_df = integration_metrics_df_all
-        if integration_metrics_df_all is not None and chosen_seed is not None:
-            for col in ("seed", "random_state"):
-                if col in integration_metrics_df_all.columns:
-                    integration_metrics_df = integration_metrics_df_all[integration_metrics_df_all[col] == chosen_seed].copy()
-                    break
-        if integration_metrics_df is None and chosen_seed is not None and summary_seeds:
+        integration_metrics_df = _filter_by_seed(integration_metrics_df_all)
+        if chosen_seed is not None and summary_seeds and (integration_metrics_df is None or integration_metrics_df.empty):
             integration_metrics_df = integration_metrics_df_all.copy() if integration_metrics_df_all is not None else None
             if integration_metrics_df is not None and "seed" not in integration_metrics_df.columns:
                 integration_metrics_df["seed"] = chosen_seed
@@ -467,7 +548,7 @@ def _make_overlay_plots_core(
         fig, axes = plt.subplots(
             len(chunk),
             ncols,
-            figsize=(4.2 * ncols, 3.1 * len(chunk)),
+            figsize=(4.2 * ncols, 4.1 * len(chunk)),
             squeeze=False,
         )
 
@@ -553,6 +634,11 @@ def _make_overlay_plots_core(
             cmap = plt.colormaps.get_cmap("viridis").resampled(max(1, len(bins)))
             ax_pred_dt, ax_obs_dt, ax_pred_int, ax_pred_int_ode, ax_obs_int = axes[i]
 
+            dt_vals: List[float] = []
+            pe_pred_vals: List[float] = []
+            pe_pred_ode_vals: List[float] = []
+            pe_obs_vals: List[float] = []
+
             for cidx, b in enumerate(bins):
                 if integrate_on_the_fly:
                     source = sub_pred if sub_pred is not None else sub
@@ -582,7 +668,10 @@ def _make_overlay_plots_core(
                         dt = t[j] - t[j - 1]
                         if np.isfinite(dt_pred[j - 1]) and np.isfinite(integ[j - 1]):
                             integ[j] = integ[j - 1] + dt * dt_pred[j - 1]
+                    _log_negative_points(obs_pe, t, marker=marker, bin_label=b, label="obs pERK")
+                    _log_negative_points(integ, t, marker=marker, bin_label=b, label="pred integrated")
                 elif use_precomputed:
+                    # Precomputed integration (may include train/test phases)
                     g_full = sub_int[sub_int["GFP_bin"] == b].copy()
                     g_full.sort_values("timepoint", inplace=True)
                     phases = (
@@ -626,20 +715,24 @@ def _make_overlay_plots_core(
                         mask_dt_pred = np.isfinite(dt_pred)
                         if mask_dt_pred.any():
                             ax_pred_dt.plot(t[mask_dt_pred], dt_pred[mask_dt_pred], color=color, label=label, linestyle=linestyle)
+                            dt_vals.extend(dt_pred[mask_dt_pred].tolist())
                         mask_obs_dt = np.isfinite(obs_dt)
                         if mask_obs_dt.any():
-                            ax_obs_dt.plot(t[mask_obs_dt], obs_dt[mask_obs_dt], color=color, linestyle=linestyle)
+                            ax_obs_dt.plot(t[mask_obs_dt], obs_dt[mask_obs_dt], color=color, linestyle="-")
+                            dt_vals.extend(obs_dt[mask_obs_dt].tolist())
                         mask_integ = np.isfinite(integ)
                         if mask_integ.any():
                             ax_pred_int.plot(t[mask_integ], integ[mask_integ], color=color, linestyle=linestyle)
+                            pe_pred_vals.extend(integ[mask_integ].tolist())
                         mask_obs_pe = np.isfinite(obs_pe)
                         if mask_obs_pe.any():
                             ax_obs_int.plot(
                                 t[mask_obs_pe],
                                 obs_pe[mask_obs_pe],
                                 color=color,
-                                linestyle=linestyle,
+                                linestyle="-",
                             )
+                            pe_obs_vals.extend(obs_pe[mask_obs_pe].tolist())
                         if integ_ode is not None:
                             mask_integ_ode = np.isfinite(integ_ode)
                             if mask_integ_ode.any():
@@ -649,11 +742,15 @@ def _make_overlay_plots_core(
                                     color=color,
                                     linestyle=linestyle,
                                 )
+                                pe_pred_ode_vals.extend(integ_ode[mask_integ_ode].tolist())
                             else:
                                 ax_pred_int_ode.text(0.5, 0.5, "ODE\nnot available", ha="center", va="center")
                         else:
                             ax_pred_int_ode.text(0.5, 0.5, "ODE\nnot available", ha="center", va="center")
-                    continue
+                        _log_negative_points(obs_pe, t, marker=marker, bin_label=b, label="obs pERK")
+                        _log_negative_points(integ, t, marker=marker, bin_label=b, label="pred integrated")
+                        if integ_ode is not None:
+                            _log_negative_points(integ_ode, t, marker=marker, bin_label=b, label="pred integrated ODE")
                 else:
                     # No integration available; just plot dt panels
                     source = sub_pred if sub_pred is not None else sub
@@ -686,6 +783,7 @@ def _make_overlay_plots_core(
                     mask_obs_pe_plot = np.isfinite(t) & np.isfinite(obs_pe)
                     if mask_obs_pe_plot.any():
                         ax_obs_int.plot(t[mask_obs_pe_plot], obs_pe[mask_obs_pe_plot], color=color, linestyle="--")
+                    _log_negative_points(obs_pe, t, marker=marker, bin_label=b, label="obs pERK")
                     continue
 
                 meas_mask = (
@@ -695,8 +793,9 @@ def _make_overlay_plots_core(
                 )
                 if meas_mask.sum() > 1 and np.isfinite(integ[meas_mask]).sum() > 1:
                     obs_pe_eval = _obs_pe_array(g, len(g))
-                    if len(obs_pe_eval) == len(g):
-                        obs_pe_eval = obs_pe_eval[mask][order]
+                    # Use the filtered/ordered arrays already computed above
+                    if len(obs_pe_eval) == len(obs_pe):
+                        obs_pe_eval = obs_pe
                     try:
                         r2 = np.corrcoef(obs_pe_eval[meas_mask], integ[meas_mask])[0, 1] ** 2
                         integ_r2_vals.append(float(r2))
@@ -709,17 +808,20 @@ def _make_overlay_plots_core(
                 mask_plot = np.isfinite(t) & np.isfinite(dt_pred)
                 if mask_plot.any():
                     ax_pred_dt.plot(t[mask_plot], dt_pred[mask_plot], color=color, label=str(b))
+                    dt_vals.extend(dt_pred[mask_plot].tolist())
                 mask_obs_plot = np.isfinite(t) & np.isfinite(obs_dt)
                 if mask_obs_plot.any():
                     ax_obs_dt.plot(t[mask_obs_plot], obs_dt[mask_obs_plot], color=color, linestyle="--")
+                    dt_vals.extend(obs_dt[mask_obs_plot].tolist())
 
                 # Plot integrated trajectories only where finite
                 mask_integ_plot = np.isfinite(t) & np.isfinite(integ)
                 if mask_integ_plot.any():
                     ax_pred_int.plot(t[mask_integ_plot], integ[mask_integ_plot], color=color)
+                    pe_pred_vals.extend(integ[mask_integ_plot].tolist())
                 obs_pe_plot = _obs_pe_array(g, len(g))
                 if len(obs_pe_plot) == len(g):
-                    obs_pe_plot = obs_pe_plot[mask][order]
+                    obs_pe_plot = obs_pe
                 mask_obs_pe_plot = np.isfinite(t) & np.isfinite(obs_pe_plot[: len(t)])
                 if mask_obs_pe_plot.any():
                     ax_obs_int.plot(
@@ -728,15 +830,32 @@ def _make_overlay_plots_core(
                         color=color,
                         linestyle="--",
                     )
+                    pe_obs_vals.extend(obs_pe_plot[: len(t)][mask_obs_pe_plot].tolist())
 
                 if use_precomputed and "pred_integrated_ode" in g.columns:
                     mask_integ_ode_plot = np.isfinite(t) & np.isfinite(integ_ode)
                     if mask_integ_ode_plot.any():
                         ax_pred_int_ode.plot(t[mask_integ_ode_plot], integ_ode[mask_integ_ode_plot], color=color)
+                        pe_pred_ode_vals.extend(integ_ode[mask_integ_ode_plot].tolist())
                 else:
                     ax_pred_int_ode.text(0.5, 0.5, "ODE\nnot available", ha="center", va="center")
 
             metrics_rows.append({"marker": marker, "model": args.model})
+
+            dt_limits = _simple_ylim(dt_vals, pad_frac=0.08)
+            if dt_limits:
+                ax_pred_dt.set_ylim(*dt_limits)
+                ax_obs_dt.set_ylim(*dt_limits)
+
+            pe_pred_limits = _simple_ylim(pe_pred_vals, pad_frac=0.05)
+            if pe_pred_limits:
+                ax_pred_int.set_ylim(*pe_pred_limits)
+
+            pe_shared_vals = pe_pred_ode_vals + pe_obs_vals
+            pe_shared_limits = _simple_ylim(pe_shared_vals, pad_frac=0.05)
+            if pe_shared_limits:
+                for ax in (ax_pred_int_ode, ax_obs_int):
+                    ax.set_ylim(*pe_shared_limits)
 
             ax_pred_dt.set_title(
                 f"{marker} predicted dt (R2 train={_fmt_r2(train_r2)}, test={_fmt_r2(test_r2)})"

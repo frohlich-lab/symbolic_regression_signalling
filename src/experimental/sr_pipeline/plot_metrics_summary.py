@@ -120,6 +120,13 @@ def parse_args() -> argparse.Namespace:
         default=0.3,
         help="Minimum dt R² − ODE R² gap required for diagnostics.",
     )
+    parser.add_argument(
+        "--binwise-perk-markers",
+        nargs="*",
+        type=str,
+        default=("ERBB2", "PIP5K3", "DUSP10 (P2)", "ARAF"),
+        help="Markers to plot predicted vs ground-truth pERK per GFP bin (per seed, compact panels).",
+    )
     return parser.parse_args()
 
 
@@ -215,6 +222,17 @@ def _add_seed_note(fig: plt.Figure, note: Optional[str]) -> None:
 def _format_seed_label(seeds: Sequence[object], *, averaged: bool) -> Optional[str]:
     """Format a seed label indicating whether values are averaged."""
     return seed_annot.format_seed_label(seeds, averaged=averaged, default=None)
+
+
+def _progress_printer(planned: Sequence[str]) -> Tuple[callable, int]:
+    total = len(planned)
+    counter = {"idx": 0}
+
+    def _log(label: str) -> None:
+        counter["idx"] += 1
+        print(f"[plot_metrics_summary] ({counter['idx']}/{total}) {label}", flush=True)
+
+    return _log, total
 
 
 def _plot_scatter_variants(
@@ -1086,6 +1104,12 @@ def _plot_marker_trajectories(
     if pred_df.empty or integ_df.empty:
         return
 
+    def _safe_save(fig: plt.Figure, path: Path) -> None:
+        try:
+            fig.savefig(path, dpi=200, bbox_inches="tight")
+        except Exception as exc:
+            print(f"[plot_metrics_summary] Failed to save {path}: {exc}", flush=True)
+
     seeds_available: List[str] = []
     for cand in ("seed", "random_state"):
         if cand in pred_df.columns:
@@ -1139,8 +1163,8 @@ def _plot_marker_trajectories(
         fig.suptitle(f"{marker} | {model} {mode} dt")
         _add_seed_note(fig, seed_note)
         fig.tight_layout(rect=(0, 0, 1, 0.96))
-        fig.savefig(marker_dir / "dt.png", dpi=200, bbox_inches="tight")
-        fig.savefig(marker_dir / "dt.svg", dpi=200, bbox_inches="tight")
+        _safe_save(fig, marker_dir / "dt.png")
+        _safe_save(fig, marker_dir / "dt.svg")
         plt.close(fig)
 
         # Integrated plots
@@ -1182,8 +1206,8 @@ def _plot_marker_trajectories(
             fig.suptitle(f"{marker} | {model} {mode} {title_suffix}")
             _add_seed_note(fig, seed_note)
             fig.tight_layout(rect=(0, 0, 1, 0.96))
-            fig.savefig(marker_dir / f"{fname}.png", dpi=200, bbox_inches="tight")
-            fig.savefig(marker_dir / f"{fname}.svg", dpi=200, bbox_inches="tight")
+            _safe_save(fig, marker_dir / f"{fname}.png")
+            _safe_save(fig, marker_dir / f"{fname}.svg")
             plt.close(fig)
 
 
@@ -1390,6 +1414,324 @@ def _plot_worst_ode_diagnostics(
             _plot_marker_diagnostic_panel(outdir, marker_row, traj_df, mode, model)
 
 
+def _safe_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    mask = np.isfinite(y_true) & np.isfinite(y_pred)
+    if mask.sum() < 2:
+        return float("nan")
+    y_true_f = y_true[mask]
+    y_pred_f = y_pred[mask]
+    denom = np.var(y_true_f)
+    if denom <= 0:
+        return float("nan")
+    ss_res = float(np.sum((y_true_f - y_pred_f) ** 2))
+    ss_tot = float(np.sum((y_true_f - np.mean(y_true_f)) ** 2))
+    if ss_tot <= 0:
+        return float("nan")
+    return 1.0 - ss_res / ss_tot
+
+
+def _plot_binwise_perk_traj(
+    outdir: Path,
+    trajectories_dir: Optional[Path],
+    markers: Sequence[str],
+    models: Sequence[str],
+    mode: str,
+    measured_timepoints: Optional[Sequence[float]] = None,
+) -> None:
+    if trajectories_dir is None:
+        return
+    traj_path = Path(trajectories_dir) / f"marker_integration_trajectories_{mode}.csv"
+    if not traj_path.exists():
+        return
+    try:
+        traj = pd.read_csv(traj_path)
+    except Exception:
+        return
+    if traj.empty:
+        return
+
+    markers_norm = {str(m).strip().upper() for m in markers if str(m).strip()}
+    pred_cols = ["pred_integrated_ode", "pred_integrated"]
+    obs_candidates = ["obs_pERK1_2", "p-ERK1-2", "p_ERK1_2"]
+
+    def _pick_obs_col(df: pd.DataFrame) -> Optional[str]:
+        for c in obs_candidates:
+            if c in df.columns:
+                return c
+        return None
+
+    for model in models:
+        df_model = traj[traj.get("model") == model]
+        if "dataset_mode" in df_model.columns:
+            df_model = df_model[df_model["dataset_mode"] == mode]
+        if df_model.empty:
+            continue
+        seeds = sorted(df_model.get("seed", pd.Series([])).dropna().unique().tolist())
+        for seed in seeds:
+            df_seed = df_model[df_model.get("seed") == seed]
+            if df_seed.empty:
+                continue
+            for marker in markers_norm:
+                sub = df_seed[df_seed["marker"].str.upper() == marker]
+                if sub.empty:
+                    continue
+                obs_col = _pick_obs_col(sub)
+                pred_col = next((c for c in pred_cols if c in sub.columns), None)
+                if not obs_col or not pred_col:
+                    continue
+                bins = sorted(sub["GFP_bin"].dropna().unique().tolist())
+                if not bins:
+                    continue
+                min_bin = min(bins)
+                max_bin = max(bins)
+                strength_targets = [
+                    (0.0, "none"),
+                    (1.0 / 3.0, "low"),
+                    (2.0 / 3.0, "high"),
+                    (1.0, "maximal"),
+                ]
+
+                def _bin_fraction(bin_value: float) -> float:
+                    if max_bin == min_bin:
+                        return 0.0
+                    return (bin_value - min_bin) / (max_bin - min_bin)
+
+                def _strength_label_for_bin(bin_value: float) -> str:
+                    frac = _bin_fraction(bin_value)
+                    distances = [abs(frac - t) for t, _ in strength_targets]
+                    min_dist = min(distances)
+                    candidates = [pair for pair, d in zip(strength_targets, distances) if d == min_dist]
+                    # Prefer higher target on ties
+                    target, label = max(candidates, key=lambda p: p[0])
+                    return label
+
+                cmap = plt.colormaps.get_cmap("viridis").resampled(max(1, len(bins)))
+                bin_colors = {b: cmap(idx) for idx, b in enumerate(bins)}
+                n_bins = len(bins)
+                ncols = 2
+                nrows = int(np.ceil(n_bins / ncols))
+                fig, axes = plt.subplots(nrows, ncols, figsize=(6.0, 1.7 * nrows), sharey=True)
+                axes = np.atleast_1d(axes).flatten()
+                for ax in axes[n_bins:]:
+                    ax.axis("off")
+
+                # Collect global y-limits across bins for consistent scaling
+                all_vals: List[float] = []
+                per_bin_data = []
+                for b in bins:
+                    g = sub[sub["GFP_bin"] == b].copy().sort_values("timepoint")
+                    t = pd.to_numeric(g.get("timepoint"), errors="coerce").to_numpy(dtype=float)
+                    obs = pd.to_numeric(g[obs_col], errors="coerce").to_numpy(dtype=float)
+                    pred = pd.to_numeric(g[pred_col], errors="coerce").to_numpy(dtype=float)
+                    if mode == "per_minute" and measured_timepoints:
+                        mask = np.isin(t, measured_timepoints)
+                        t, obs, pred = t[mask], obs[mask], pred[mask]
+                    per_bin_data.append((b, t, obs, pred))
+                    finite = np.isfinite(obs) | np.isfinite(pred)
+                    if finite.any():
+                        all_vals.extend(list(obs[np.isfinite(obs)]))
+                        all_vals.extend(list(pred[np.isfinite(pred)]))
+                y_min, y_max = None, None
+                if all_vals:
+                    y_min = min(all_vals)
+                    y_max = max(all_vals)
+                    span = y_max - y_min if y_max > y_min else 1.0
+                    pad = 0.08 * span
+                    y_min -= pad
+                    y_max += pad
+                x_min, x_max = None, None
+                all_times = [t for _, t, _, _ in per_bin_data if len(t) > 0]
+                if all_times:
+                    flat_times = np.concatenate(all_times)
+                    finite_times = flat_times[np.isfinite(flat_times)]
+                    if finite_times.size:
+                        x_min = float(np.min(finite_times))
+                        x_max = float(np.max(finite_times))
+                        span = x_max - x_min if x_max > x_min else 1.0
+                        x_pad_right = 0.05 * span
+
+                for ax, (b, t, obs, pred) in zip(axes, per_bin_data):
+                    r2 = _safe_r2(obs, pred)
+                    if len(t) == 0 or (not np.isfinite(obs).any() and not np.isfinite(pred).any()):
+                        ax.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=11, transform=ax.transAxes)
+                        ax.axis("off")
+                        continue
+                    # Ensure finite ordering for connected line
+                    finite_mask = np.isfinite(t) & np.isfinite(pred)
+                    t_plot = t[finite_mask]
+                    pred_plot = pred[finite_mask]
+                    order = np.argsort(t_plot)
+                    t_plot = t_plot[order]
+                    pred_plot = pred_plot[order]
+                    pred_color = bin_colors.get(b, "#111111")
+                    ax.plot(t_plot, pred_plot, "-o", ms=3.6, lw=2.4, label="pred", alpha=0.9, color=pred_color)
+                    ax.scatter(t, obs, marker="x", s=36, linewidths=1.4, color="#111111", label="obs", alpha=0.95)
+                    if y_min is not None and y_max is not None:
+                        ax.set_ylim(y_min, y_max)
+                    if x_min is not None and x_max is not None:
+                        ax.set_xlim(x_min, x_max + x_pad_right)
+                    try:
+                        ax.set_box_aspect(0.8)
+                    except Exception:
+                        pass
+                    ax.grid(True, linestyle="--", alpha=0.3)
+                    r2_txt = f"{r2:.2f}" if np.isfinite(r2) else "N/A"
+                    ax.text(
+                        0.98,
+                        0.98,
+                        f"R² {r2_txt}",
+                        transform=ax.transAxes,
+                        va="top",
+                        ha="right",
+                        fontsize=12,
+                    )
+                    ax.tick_params(labelsize=11)
+                    ax.set_xlabel("Time", fontsize=11)
+                    ax.set_ylabel("pERK", fontsize=11)
+                if axes.size:
+                    axes[0].get_legend().remove() if axes[0].get_legend() else None
+                fig.suptitle(
+                    f"{marker} | seed {seed} | {model} | {mode}",
+                    fontsize=15,
+                )
+                fig.tight_layout(rect=(0, 0, 1, 0.90))
+                out_dir = outdir / "seeds" / f"seed_{seed}" / "binwise_perk" / mode
+                out_dir.mkdir(parents=True, exist_ok=True)
+                secondary_dirs = []
+                if trajectories_dir is not None:
+                    traj_root = Path(trajectories_dir)
+                    # Mirror outputs into data/experimental/seeds/… (two levels up from runs/aggregated/trajectories)
+                    try:
+                        seeds_root_exp = traj_root.parents[2] / "seeds"
+                        print(seeds_root_exp)
+                        secondary_dirs.append(seeds_root_exp / f"seed_{seed}" / "binwise_perk" / mode)
+                    except Exception:
+                        pass
+                for sec in secondary_dirs:
+                    sec.mkdir(parents=True, exist_ok=True)
+                stem = f"{marker}_seed{seed}_{model}_{mode}_bin_traj".replace(" ", "_")
+                for ext in ("png", "svg"):
+                    fig.savefig(out_dir / f"{stem}.{ext}", dpi=220, bbox_inches="tight")
+                    for sec in secondary_dirs:
+                        try:
+                            fig.savefig(sec / f"{stem}.{ext}", dpi=220, bbox_inches="tight")
+                        except Exception:
+                            pass
+                plt.close(fig)
+
+                # 2x2 subset for bins closest to 0/33/66/100% (prefer higher on ties)
+                bin_lookup = {b: (t, obs, pred) for b, t, obs, pred in per_bin_data}
+                selected_bins = []
+                selected_labels = []
+                for target, label in strength_targets:
+                    distances = [abs(_bin_fraction(b) - target) for b in bins]
+                    if not distances:
+                        continue
+                    min_dist = min(distances)
+                    candidates = [b for b, d in zip(bins, distances) if d == min_dist]
+                    chosen = max(candidates)
+                    if chosen in selected_bins:
+                        remaining = [b for b in candidates if b not in selected_bins]
+                        if remaining:
+                            chosen = max(remaining)
+                    selected_bins.append(chosen)
+                    selected_labels.append(label)
+                if selected_bins:
+                    fig_sel, axes_sel = plt.subplots(2, 2, figsize=(5.2, 4.4), sharex=True, sharey=True)
+                    axes_sel = np.atleast_1d(axes_sel).flatten()
+                    for ax in axes_sel[len(selected_bins):]:
+                        ax.axis("off")
+
+                    sel_vals: List[float] = []
+                    sel_times: List[float] = []
+                    for b in selected_bins:
+                        t, obs, pred = bin_lookup.get(b, (np.array([]), np.array([]), np.array([])))
+                        if len(t) == 0:
+                            continue
+                        if np.isfinite(obs).any():
+                            sel_vals.extend(list(obs[np.isfinite(obs)]))
+                        if np.isfinite(pred).any():
+                            sel_vals.extend(list(pred[np.isfinite(pred)]))
+                        if np.isfinite(t).any():
+                            sel_times.extend(list(t[np.isfinite(t)]))
+
+                    y_min_sel, y_max_sel = None, None
+                    if sel_vals:
+                        y_min_sel = min(sel_vals)
+                        y_max_sel = max(sel_vals)
+                        span = y_max_sel - y_min_sel if y_max_sel > y_min_sel else 1.0
+                        pad = 0.08 * span
+                        y_min_sel -= pad
+                        y_max_sel += pad
+
+                    x_min_sel, x_max_sel = None, None
+                    if sel_times:
+                        x_min_sel = min(sel_times)
+                        x_max_sel = max(sel_times)
+                        span = x_max_sel - x_min_sel if x_max_sel > x_min_sel else 1.0
+                        x_pad_right = 0.05 * span
+
+                    for idx, (ax, b, label) in enumerate(zip(axes_sel, selected_bins, selected_labels)):
+                        t, obs, pred = bin_lookup.get(b, (np.array([]), np.array([]), np.array([])))
+                        r2 = _safe_r2(obs, pred)
+                        if len(t) == 0 or (not np.isfinite(obs).any() and not np.isfinite(pred).any()):
+                            ax.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=11, transform=ax.transAxes)
+                            ax.axis("off")
+                            continue
+                        finite_mask = np.isfinite(t) & np.isfinite(pred)
+                        t_plot = t[finite_mask]
+                        pred_plot = pred[finite_mask]
+                        order = np.argsort(t_plot)
+                        t_plot = t_plot[order]
+                        pred_plot = pred_plot[order]
+                        pred_color = bin_colors.get(b, "#111111")
+                        ax.plot(t_plot, pred_plot, "-o", ms=3.6, lw=2.4, label="pred", alpha=0.9, color=pred_color)
+                        ax.scatter(t, obs, marker="x", s=36, linewidths=1.4, color="#111111", label="obs", alpha=0.95)
+                        if y_min_sel is not None and y_max_sel is not None:
+                            ax.set_ylim(y_min_sel, y_max_sel)
+                        if x_min_sel is not None and x_max_sel is not None:
+                            ax.set_xlim(x_min_sel, x_max_sel + x_pad_right)
+                        ax.grid(True, linestyle="--", alpha=0.3)
+                        r2_txt = f"{r2:.2f}" if np.isfinite(r2) else "N/A"
+                        ax.text(
+                            0.98,
+                            0.98,
+                            f"R² {r2_txt}",
+                            transform=ax.transAxes,
+                            va="top",
+                            ha="right",
+                            fontsize=12,
+                        )
+                        ax.tick_params(labelsize=11)
+                        row = idx // 2
+                        col = idx % 2
+                        if row == 1:
+                            ax.set_xlabel("Time", fontsize=11)
+                        else:
+                            ax.set_xlabel("")
+                        if col == 0:
+                            ax.set_ylabel("pERK", fontsize=11)
+                        else:
+                            ax.set_ylabel("")
+
+                    if axes_sel.size:
+                        axes_sel[0].get_legend().remove() if axes_sel[0].get_legend() else None
+                    fig_sel.suptitle(
+                        f"{marker} | seed {seed} | {model} | {mode} (bins 10/20/30/40)",
+                        fontsize=15,
+                    )
+                    fig_sel.tight_layout(rect=(0, 0, 1, 0.90))
+                    stem_sel = f"{marker}_seed{seed}_{model}_{mode}_bin_traj_selected".replace(" ", "_")
+                    for ext in ("png", "svg"):
+                        fig_sel.savefig(out_dir / f"{stem_sel}.{ext}", dpi=220, bbox_inches="tight")
+                        for sec in secondary_dirs:
+                            try:
+                                fig_sel.savefig(sec / f"{stem_sel}.{ext}", dpi=220, bbox_inches="tight")
+                            except Exception:
+                                pass
+                    plt.close(fig_sel)
+
+
 def main() -> None:
     args = parse_args()
     df = pd.read_csv(args.summary)
@@ -1503,7 +1845,25 @@ def main() -> None:
     integration_split_frames: List[pd.DataFrame] = []
     integration_seed_notes: Dict[str, Optional[str]] = {}
 
+    planned_steps: List[str] = [
+        "Model scatter/KDE",
+        "Integration scatter (dt vs integrated)",
+        "Integration lines/boxes",
+        "R2 line/box plots",
+        "Feature usage/importance",
+        "PySR symbol counts",
+        "Seed variance/lines",
+        "Binwise pERK scatters",
+        "Worst ODE diagnostics",
+        "Marker trajectory overlays",
+    ]
+    progress_log, _ = _progress_printer(planned_steps)
+    print("[plot_metrics_summary] Planned plot tasks:", flush=True)
+    for idx, label in enumerate(planned_steps, start=1):
+        print(f"[plot_metrics_summary]   {idx}/{len(planned_steps)} {label}", flush=True)
+
     # Model comparison: PySR vs Linear Regression
+    progress_log("Model scatter/KDE")
     models = ["PySR", "Linear Regression"]
     df_models = df[df["model"].isin(models)].copy()
     if not df_models.empty:
@@ -1844,6 +2204,7 @@ def main() -> None:
                     _copy_preferred_variant_to_base(scatter_dir, "metrics_linreg_modes_relmae")
 
     # Integrated R2 vs dt R2 (PySR only)
+    progress_log("Integration scatter (dt vs integrated)")
     def _load_integration_metrics(mode: str) -> Optional[pd.DataFrame]:
         if args.integration_metrics_dir is None:
             return None
@@ -1856,6 +2217,9 @@ def main() -> None:
             return None
 
     for mode in tqdm(("snapshot", "per_minute"), desc="Integration modes"):
+        if mode == "snapshot":
+            print("[plot_metrics_summary] Skipping snapshot integration scatter/lines (disabled).", flush=True)
+            continue
         df_int = _load_integration_metrics(mode)
         if df_int is None or df_int.empty:
             continue
@@ -1929,6 +2293,45 @@ def main() -> None:
                 metric_group="integrated",
             )
 
+            # relMAE variants (dt vs integrated)
+            if {
+                "dt_rel_mae_mean_bins",
+                "integ_rel_mae_median_bins",
+            }.issubset(sub.columns):
+                _plot_scatter_variants(
+                    scatter_dir,
+                    sub,
+                    "dt_rel_mae_mean_bins",
+                    "integ_rel_mae_median_bins",
+                    f"{sub_title}: dt relMAE (mean bins) vs integrated relMAE (median bins) ({mode})",
+                    f"metrics_integrated_{mode}_{model_name.lower().replace(' ', '_')}_relmae",
+                    zoom_thr,
+                    zoom=False,
+                    log_axes=True,
+                    draw_threshold=False,
+                    metric_group="integrated_relmae",
+                    seed_note=integration_seed_notes.get(mode),
+                )
+                _plot_scatter_variants(
+                    scatter_dir,
+                    sub,
+                    "dt_rel_mae_mean_bins",
+                    "integ_rel_mae_median_bins",
+                    f"{sub_title}: dt relMAE (mean bins) vs integrated relMAE (median bins) ({mode})",
+                    f"metrics_integrated_{mode}_{model_name.lower().replace(' ', '_')}_relmae",
+                    zoom_thr,
+                    zoom=True,
+                    log_axes=True,
+                    draw_threshold=False,
+                    metric_group="integrated_relmae",
+                    seed_note=integration_seed_notes.get(mode),
+                )
+                _copy_preferred_variant_to_base(
+                    scatter_dir,
+                    f"metrics_integrated_{mode}_{model_name.lower().replace(' ', '_')}_relmae",
+                    metric_group="integrated_relmae",
+                )
+
             if "ode_integ_r2_median" in sub.columns:
                 sub_ode = sub.rename(columns={"ode_integ_r2_median": "integrated_ode_r2"}).copy()
                 _plot_scatter_variants(
@@ -1998,6 +2401,7 @@ def main() -> None:
     integrated_ode_box_done = False
 
     # Integrated line/box plots (feature integration)
+    progress_log("Integration lines/boxes")
     if integration_frames:
         df_int_all = pd.concat(integration_frames, ignore_index=True)
         if "seed" in df_int_all.columns:
@@ -2032,6 +2436,25 @@ def main() -> None:
                 seed_note=seed_note_int_all,
             )
             integrated_box_done = True
+        if "integ_rel_mae_median_bins" in df_int_all.columns:
+            _plot_metric_lineplot(
+                df_int_all,
+                outdir,
+                marker_type,
+                "integ_rel_mae_median_bins",
+                "metrics_integrated_relmae_by_marker",
+                "Integrated relMAE (median bins)",
+                seed_note=seed_note_int_all,
+            )
+            series_defs_rel = [("Overall", df_int_all["integ_rel_mae_median_bins"])]
+            _plot_metric_boxplot(
+                df_int_all,
+                outdir,
+                series_defs_rel,
+                "metrics_integrated_relmae_boxplot",
+                "Integrated relMAE (median bins)",
+                seed_note=seed_note_int_all,
+            )
         if "integrated_ode_r2" not in df_int_all.columns and "ode_integ_r2_median" in df_int_all.columns:
             df_int_all["integrated_ode_r2"] = df_int_all["ode_integ_r2_median"]
         if "integrated_ode_r2" in df_int_all.columns:
@@ -2221,6 +2644,7 @@ def main() -> None:
         _save_placeholder(outdir, "metrics_integrated_ode_r2_boxplot", "boxes", seed_note=DEFAULT_SEED_NOTE)
 
     # R2 line plot across markers/models/modes
+    progress_log("R2 line/box plots")
     line_dir = outdir / "lines"
     _plot_metric_lineplot(df, outdir, marker_type, "test_r2", "metrics_r2_by_marker", "Test R2", seed_note=DEFAULT_SEED_NOTE)
     series_defs_dt: List[Tuple[str, pd.Series]] = []
@@ -2252,6 +2676,7 @@ def main() -> None:
             plt.savefig(default_dir / f"{stem}_relmae.{ext}", dpi=200, bbox_inches="tight")
         plt.close()
 
+    progress_log("Feature usage/importance")
     # Linear regression feature importance plots (per dataset mode)
     datasets_for_importance = {
         "snapshot": _prepare_importance_dataset(args.snapshot_dataset),
@@ -2280,6 +2705,7 @@ def main() -> None:
     importance_df = pd.concat(importance_frames, axis=0) if importance_frames else pd.DataFrame()
     _plot_feature_importance(importance_df, outdir, expected_modes=("snapshot", "per_minute"), seed_note=DEFAULT_SEED_NOTE)
 
+    progress_log("PySR symbol counts")
     # PySR formula variable count boxplots (snapshot and per-minute)
     df_pysr = df[df["model"] == "PySR"].copy()
     _plot_pysr_symbol_counts(
@@ -2295,7 +2721,10 @@ def main() -> None:
     _plot_feature_bars(feature_counts, outdir, seed_note=DEFAULT_SEED_NOTE)
 
     # Seed-aware diagnostics: variance barplot and seed lines
-    if df_seed is not None and seed_col and "test_r2" in df_seed.columns:
+    progress_log("Seed variance/lines")
+    if df_seed is not None and seed_col and seed_col not in df_seed.columns:
+        print(f"[plot_metrics_summary] Seed column '{seed_col}' missing from summary; skipping seed variance plots.")
+    if df_seed is not None and seed_col and seed_col in df_seed.columns and "test_r2" in df_seed.columns:
         var_dir = outdir / "seed_variance"
         var_dir.mkdir(parents=True, exist_ok=True)
         keys_seed = [k for k in ["group_name", "dataset_mode", "feature_mode", "model"] if k in df_seed.columns]
@@ -2346,6 +2775,23 @@ def main() -> None:
                     plt.savefig(line_dir / f"{stem}.{ext}", dpi=220, bbox_inches="tight")
                 plt.close()
 
+    progress_log("Binwise pERK scatters")
+    bin_markers = [m for m in args.binwise_perk_markers if str(m).strip()]
+    traj_dir_bin = args.trajectories_dir or args.integration_metrics_dir
+    if bin_markers and traj_dir_bin:
+        bin_models = ("PySR", "Linear Regression")
+        traj_dir_bin = Path(traj_dir_bin)
+        for mode in ("snapshot", "per_minute"):
+            _plot_binwise_perk_traj(
+                outdir,
+                traj_dir_bin,
+                bin_markers,
+                bin_models,
+                mode,
+                measured_timepoints=args.measured_timepoints,
+            )
+
+    progress_log("Worst ODE diagnostics")
     diag_traj_dir = args.trajectories_dir or args.integration_metrics_dir
     _plot_worst_ode_diagnostics(
         outdir,
@@ -2359,20 +2805,26 @@ def main() -> None:
     )
 
     # Per-marker trajectories per strategy (dt, integrated, integrated ODE) — last to keep other plots first
+    progress_log("Marker trajectory overlays")
     traj_dir = args.trajectories_dir or args.integration_metrics_dir
     if traj_dir:
         traj_dir = Path(traj_dir)
-        for mode in tqdm(("snapshot", "per_minute"), desc="Trajectory plots"):
+        for mode in ("per_minute",):
             pred_path = traj_dir / f"predicted_trajectories_{mode}.csv"
             integ_path = traj_dir / f"marker_integration_trajectories_{mode}.csv"
+            if not pred_path.exists() and not integ_path.exists():
+                continue
             for model in ("PySR", "Linear Regression"):
-                _plot_marker_trajectories(
-                    outdir,
-                    mode,
-                    model,
-                    predicted_path=pred_path,
-                    integration_path=integ_path,
-                )
+                try:
+                    _plot_marker_trajectories(
+                        outdir,
+                        mode,
+                        model,
+                        predicted_path=pred_path,
+                        integration_path=integ_path,
+                    )
+                except Exception as exc:
+                    print(f"[plot_metrics_summary] Skipped trajectory overlays for {model} {mode}: {exc}", flush=True)
 
 
 if __name__ == "__main__":

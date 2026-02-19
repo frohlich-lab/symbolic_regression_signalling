@@ -1,0 +1,14 @@
+name: odeformer_env
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3.9
+  - numpy<2.0
+  - pandas
+  - sympy
+  - scikit-learn
+  - pytorch
+  - pip
+  - pip:
+      - odeformer

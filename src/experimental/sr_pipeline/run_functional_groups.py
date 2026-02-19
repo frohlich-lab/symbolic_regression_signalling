@@ -10,7 +10,9 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import re
 import logging
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,12 +31,15 @@ from sklearn.metrics import r2_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from scipy.optimize import lsq_linear
 
 from experimental.sr_pipeline.metrics import binwise_r2, binwise_r2_stats
 from experimental.sr_pipeline.seeding import canonicalize_seeds, seed_all
 
 # Columns that should not be passed to the regression model as inputs.
 EXCLUDE_COLUMNS = {"p-ERK1-2_dt", "p-MEK1-2_dt", "marker", "timepoint", "GFP_bin"}
+# Relative MAE denominator floor; tuned for ~0.1 percentage-point precision.
+REL_MAE_EPS = 1e-1
 
 
 LOGGER = logging.getLogger("sr.functional_groups")
@@ -101,6 +106,7 @@ class GroupResult:
     train_r2_bin_mean: Optional[float] = None
     train_r2_bin_median: Optional[float] = None
     train_r2_bin_count: Optional[int] = None
+    best_loss: Optional[float] = None
     target_space: Literal["linear"] = "linear"
 
 
@@ -211,19 +217,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-iterations",
         type=int,
-        default=600,
+        default=700,
         help="PySR niterations parameter (default mirrors notebook).",
     )
     parser.add_argument(
         "--population-size",
         type=int,
-        default=35,
+        default=30,
         help="PySR population size per generation.",
     )
     parser.add_argument(
         "--populations",
         type=int,
-        default=35,
+        default=30,
         help="PySR populations (parallel demes).",
     )
     parser.add_argument(
@@ -341,7 +347,7 @@ def _compute_regression_metrics(
             return None
         y_true_f = y_true[finite]
         y_pred_f = y_pred[finite]
-        denom = np.maximum(np.abs(y_true_f), 1e-2)
+        denom = np.maximum(np.abs(y_true_f), REL_MAE_EPS)
         return float(np.mean(np.abs(y_pred_f - y_true_f) / denom))
 
     def _r2(y_true: np.ndarray, y_pred: np.ndarray) -> Optional[float]:
@@ -501,6 +507,26 @@ def train_group_models(
     sanitized_names = sanitize_feature_names(X.columns)
     X.columns = sanitized_names
 
+    # Dynamic pERK feature index for the custom PySR loss (Julia is 1-based).
+    perk_name = sanitize_feature_names(["p_ERK1_2"])[0]
+    perk_idx_1b: Optional[int] = None
+    if perk_name in sanitized_names:
+        perk_idx_1b = sanitized_names.index(perk_name) + 1
+    else:
+        # fallback: pick the first ERK-like feature if p_ERK1_2 is missing
+        fallback = next((n for n in sanitized_names if "ERK" in n.upper()), None)
+        if fallback is not None:
+            perk_idx_1b = sanitized_names.index(fallback) + 1
+
+    gfp_name = sanitize_feature_names(["GFP"])[0]
+    gfp_idx_1b: Optional[int] = None
+    if gfp_name in sanitized_names:
+        gfp_idx_1b = sanitized_names.index(gfp_name) + 1
+    else:
+        fallback = next((n for n in sanitized_names if "GFP" in n.upper()), None)
+        if fallback is not None:
+            gfp_idx_1b = sanitized_names.index(fallback) + 1
+
     train_bins, test_bins = choose_bin_split(subset, test_size=test_size, random_state=random_state)
     if not train_bins or not test_bins:
         if log_prefix:
@@ -558,7 +584,37 @@ def train_group_models(
         # Import lazily to avoid triggering Julia init when this module is imported for metrics-only scripts.
         from pysr import PySRRegressor
 
-        pysr_model = PySRRegressor(**(sr_kwargs or {}))
+        sr_kwargs_local = dict(sr_kwargs or {})
+        if perk_idx_1b is not None and "loss_function" in sr_kwargs_local:
+            loss_fn = sr_kwargs_local["loss_function"]
+            if isinstance(loss_fn, str) and "REQUIRED_IDX" in loss_fn:
+                sr_kwargs_local["loss_function"] = re.sub(
+                    r"REQUIRED_IDX\s*=\s*\d+",
+                    f"REQUIRED_IDX = {perk_idx_1b}",
+                    loss_fn,
+                )
+        elif "loss_function" in (sr_kwargs or {}) and log_prefix:
+            LOGGER.warning(
+                "%s: could not determine pERK feature index; leaving REQUIRED_IDX unchanged in loss_function",
+                log_prefix,
+            )
+
+        if gfp_idx_1b is not None and "loss_function" in sr_kwargs_local:
+            loss_fn = sr_kwargs_local["loss_function"]
+            if isinstance(loss_fn, str) and "REQUIRED_IDX_GFP" in loss_fn:
+                sr_kwargs_local["loss_function"] = re.sub(
+                    r"REQUIRED_IDX_GFP\s*=\s*\d+",
+                    f"REQUIRED_IDX_GFP = {gfp_idx_1b}",
+                    loss_fn,
+                )
+        elif "loss_function" in (sr_kwargs or {}) and log_prefix:
+            LOGGER.warning(
+                "%s: could not determine GFP feature index; leaving REQUIRED_IDX_GFP unchanged in loss_function",
+                log_prefix,
+            )
+
+        pysr_model = PySRRegressor(**sr_kwargs_local)
+        best_loss: Optional[float] = None
 
         try:
             pysr_model.fit(X_train, y_train)
@@ -620,6 +676,12 @@ def train_group_models(
                     np.array([], dtype=float),
                 )
             formula = str(pysr_model.sympy()) if pysr_model.equations_ is not None else None
+            equations = getattr(pysr_model, "equations_", None)
+            if equations is not None and len(equations) > 0:
+                try:
+                    best_loss = float(equations.iloc[0]["loss"])
+                except Exception:
+                    best_loss = None
         except Exception:
             metrics_raw = {
                 "train_r2": None,
@@ -648,23 +710,48 @@ def train_group_models(
                 train_r2_bin_mean=metrics_raw.get("train_r2_bin_mean"),
                 train_r2_bin_median=metrics_raw.get("train_r2_bin_median"),
                 train_r2_bin_count=metrics_raw.get("train_r2_bin_count"),
+                best_loss=best_loss,
             )
         )
 
     if run_linreg:
-        pipeline = Pipeline([
-            ("scaler", StandardScaler()),
-            ("regressor", LinearRegression()),
-        ])
         try:
-            pipeline.fit(X_train.values, y_train.values)
-            y_pred_train = pipeline.predict(X_train.values)
-            _record_preds(train_df, y_pred_train, "Linear Regression", "train")
+            # Standardise features then fit constrained least squares with pERK coefficient <= 0.
+            scaler = StandardScaler()
+            X_train_np = X_train.values
+            X_test_np = X_test_raw.values if len(y_test_raw) > 0 else np.empty((0, X_train_np.shape[1]))
+            Xtr = scaler.fit_transform(X_train_np)
+            Xte = scaler.transform(X_test_np) if len(y_test_raw) > 0 else X_test_np
+
+            perk_name = sanitize_feature_names(["p_ERK1_2"])[0]
+            if perk_name not in sanitized_names:
+                # fallback: first ERK-like feature
+                perk_name = next((n for n in sanitized_names if "ERK" in n), perk_name)
+            if perk_name not in sanitized_names:
+                raise RuntimeError(f"Could not find pERK feature in LR features. perk_name={perk_name}")
+            perk_idx = sanitized_names.index(perk_name)
+
+            Xtr_aug = np.column_stack([Xtr, np.ones(len(y_train))])
+            lb = np.full(Xtr_aug.shape[1], -np.inf)
+            ub = np.full(Xtr_aug.shape[1], np.inf)
+            ub[perk_idx] = 0.0  # enforce non-positive pERK coefficient
+
+            res = lsq_linear(Xtr_aug, y_train.values, bounds=(lb, ub), lsmr_tol="auto", verbose=0)
+            coef_scaled = res.x[:-1]
+            intercept_scaled = float(res.x[-1])
+
+            y_pred_train = Xtr @ coef_scaled + intercept_scaled
+            y_pred_test = Xte @ coef_scaled + intercept_scaled if len(y_test_raw) > 0 else np.array([])
+
+            # Unscale coefficients for readability/formula
+            scale = np.where(np.asarray(scaler.scale_) == 0.0, 1.0, np.asarray(scaler.scale_))
+            mean = np.asarray(scaler.mean_)
+            coef_unscaled = coef_scaled / scale
+            intercept_unscaled = intercept_scaled - np.sum((coef_scaled * mean) / scale)
+
             if len(y_test_raw) > 0:
-                y_pred_lin = pipeline.predict(X_test_raw.values)
                 y_true_eval = y_test_raw.values
-                y_pred_eval = y_pred_lin
-                _record_preds(test_df_raw, y_pred_lin, "Linear Regression", "test")
+                y_pred_eval = y_pred_test
                 if dataset_mode == "per_minute":
                     measured_mask = np.isin(test_df_raw["timepoint"].to_numpy(), measured_timepoints)
                     if measured_mask.any():
@@ -676,16 +763,7 @@ def train_group_models(
                     y_true_eval,
                     y_pred_eval,
                 )
-                train_df["__y_pred__"] = y_pred_train
-                test_df_raw["__y_pred__"] = y_pred_lin
-                train_stats = binwise_r2_stats(
-                    train_df,
-                    "p-ERK1-2_dt",
-                    "__y_pred__",
-                    measured_timepoints,
-                    dataset_mode,
-                    clamp_negative=True,
-                )
+                test_df_raw["__y_pred__"] = y_pred_test
                 test_stats = binwise_r2_stats(
                     test_df_raw,
                     "p-ERK1-2_dt",
@@ -694,11 +772,6 @@ def train_group_models(
                     dataset_mode,
                     clamp_negative=True,
                 )
-                if train_stats:
-                    metrics_lin_raw["train_r2"] = train_stats["mean"]
-                    metrics_lin_raw["train_r2_bin_mean"] = train_stats["mean"]
-                    metrics_lin_raw["train_r2_bin_median"] = train_stats["median"]
-                    metrics_lin_raw["train_r2_bin_count"] = train_stats["count"]
                 if test_stats:
                     metrics_lin_raw["test_r2"] = test_stats["mean"]
                     metrics_lin_raw["test_r2_bin_mean"] = test_stats["mean"]
@@ -711,7 +784,29 @@ def train_group_models(
                     np.array([], dtype=float),
                     np.array([], dtype=float),
                 )
-            formula_lin = _format_linear_formula(pipeline, sanitized_names)
+
+            train_df["__y_pred__"] = y_pred_train
+            train_stats = binwise_r2_stats(
+                train_df,
+                "p-ERK1-2_dt",
+                "__y_pred__",
+                measured_timepoints,
+                dataset_mode,
+                clamp_negative=True,
+            )
+            if train_stats:
+                metrics_lin_raw["train_r2"] = train_stats["mean"]
+                metrics_lin_raw["train_r2_bin_mean"] = train_stats["mean"]
+                metrics_lin_raw["train_r2_bin_median"] = train_stats["median"]
+                metrics_lin_raw["train_r2_bin_count"] = train_stats["count"]
+
+            def _format_from_coeffs(coef_vec: np.ndarray, intercept_val: float) -> str:
+                parts = [f"{intercept_val:.4f}"]
+                for name, c in zip(sanitized_names, coef_vec):
+                    parts.append(f" {c:+.4f} * {name}")
+                return "".join(parts)
+
+            formula_lin = _format_from_coeffs(coef_unscaled, intercept_unscaled)
         except Exception:
             metrics_lin_raw = {
                 "train_r2": None,
@@ -798,8 +893,10 @@ def run_pipeline(args: argparse.Namespace) -> Path:
     for path in (reports_dir, summary_dir, formulas_dir):
         path.mkdir(parents=True, exist_ok=True)
     metrics_dir.mkdir(parents=True, exist_ok=True)
+    trajectories_dir = output_dir / "trajectories"
     plots_dir = output_dir / "plots"
     overlays_dir = plots_dir / "overlays"
+    trajectories_dir.mkdir(parents=True, exist_ok=True)
     plots_dir.mkdir(parents=True, exist_ok=True)
     overlays_dir.mkdir(parents=True, exist_ok=True)
 
@@ -887,45 +984,132 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         if run_pysr:
             loss_required_pERK = r"""
             import SymbolicRegression: Dataset, eval_tree_array
+            import Statistics: count
 
-            # REQUIRED FEATURE INDEX (1-based)
-            const REQUIRED_IDX = 2   # p_ERK1_2 is x1 → index 2 in Julia
+            const REQUIRED_IDX = 2
+            const REQUIRED_IDX_GFP = 1
+            const MISSING_PENALTY = 1000.0
 
-            function loss_with_required_pERK(tree, dataset::Dataset{T,L}, options)::L where {T,L}
-                prediction, complete = eval_tree_array(tree, dataset.X, options)
-                if !complete
-                    return L(Inf)
+            const DEP_TOL = 1e-4
+            const REDUNDANT_PENALTY = 1000.0
+
+            const WRONGSIGN_P_LINEAR = 1000.0
+            const WRONGSIGN_INV_LINEAR = 1000.0
+
+            const EPS_REL = 1e-3
+            const LIN_TOL_REL = 1e-3
+
+            @inline relu_pos(x) = x > 0 ? x : 0.0
+            @inline relu_neg(x) = x < 0 ? -x : 0.0
+
+            function _loss_core(tree, X, y, options)
+                f0, ok0 = eval_tree_array(tree, X, options)
+                if !ok0
+                    return eltype(y)(Inf)
+                end
+                base = sum((f0 .- y).^2) / length(y)
+
+                has_required = any(n -> n.degree == 0 && !n.constant && n.feature == REQUIRED_IDX, tree)
+                has_gfp = any(n -> n.degree == 0 && !n.constant && n.feature == REQUIRED_IDX_GFP, tree)
+                if !has_required || !has_gfp
+                    return base + eltype(y)(MISSING_PENALTY)
                 end
 
-                base = sum((prediction .- dataset.y).^2) / dataset.n
+                p = view(X, REQUIRED_IDX, :)
+                eps = EPS_REL .* (abs.(p) .+ 1.0)
 
-                # true if expression uses REQUIRED_IDX as a feature
-                has_required = any(n ->
-                    n.degree == 0 && !n.constant && n.feature == REQUIRED_IDX,
-                    tree,
-                )
+                Xplus  = copy(X)
+                Xminus = copy(X)
+                @inbounds Xplus[REQUIRED_IDX, :]  .= p .+ eps
+                @inbounds Xminus[REQUIRED_IDX, :] .= p .- eps
 
-                return has_required ? base : base + L(1000)
+                fplus,  okp = eval_tree_array(tree, Xplus,  options)
+                fminus, okm = eval_tree_array(tree, Xminus, options)
+                if !(okp && okm)
+                    return eltype(y)(Inf)
+                end
+
+                delta = abs.(fplus .- fminus)
+                rel = delta ./ (abs.(f0) .+ 1.0)
+                dep = sum(rel) / length(rel)
+                if dep < DEP_TOL
+                    return base + eltype(y)(REDUNDANT_PENALTY)
+                end
+
+                # Require non-trivial dependence on GFP as well (not just symbol presence).
+                g = view(X, REQUIRED_IDX_GFP, :)
+                eps_g = EPS_REL .* (abs.(g) .+ 1.0)
+
+                Xplus_g  = copy(X)
+                Xminus_g = copy(X)
+                @inbounds Xplus_g[REQUIRED_IDX_GFP, :]  .= g .+ eps_g
+                @inbounds Xminus_g[REQUIRED_IDX_GFP, :] .= g .- eps_g
+
+                fplus_g, okpg = eval_tree_array(tree, Xplus_g,  options)
+                fminus_g, okmg = eval_tree_array(tree, Xminus_g, options)
+                if !(okpg && okmg)
+                    return eltype(y)(Inf)
+                end
+
+                delta_g = abs.(fplus_g .- fminus_g)
+                rel_g = delta_g ./ (abs.(f0) .+ 1.0)
+                dep_g = sum(rel_g) / length(rel_g)
+                if dep_g < DEP_TOL
+                    return base + eltype(y)(REDUNDANT_PENALTY)
+                end
+
+                # Rule A: penalise positive slope in roughly-linear p direction
+                slope_p = (fplus .- fminus) ./ (2 .* eps)
+                fmid_p = 0.5 .* (fplus .+ fminus)
+                lin_err_p = abs.(f0 .- fmid_p)
+                scale_p = abs.(f0) .+ abs.(fmid_p) .+ 1.0
+                linearish_p = lin_err_p .<= (LIN_TOL_REL .* scale_p)
+
+                pen_p = 0.0
+                nlin_p = count(linearish_p)
+                if nlin_p > 0
+                    pos_mass = sum(relu_pos.(slope_p[linearish_p])) / nlin_p
+                    pen_p = WRONGSIGN_P_LINEAR * pos_mass
+                end
+
+                # Rule B: penalise negative slope in roughly-linear 1/p direction
+                q0     = 1.0 ./ p
+                qplus  = 1.0 ./ (p .+ eps)
+                qminus = 1.0 ./ (p .- eps)
+                dq = qplus .- qminus
+
+                safe = isfinite.(q0) .& isfinite.(qplus) .& isfinite.(qminus) .& (abs.(dq) .> 1e-12)
+
+                slope_q = similar(slope_p)
+                @inbounds slope_q .= 0.0
+                @inbounds slope_q[safe] .= (fplus[safe] .- fminus[safe]) ./ dq[safe]
+
+                fhat_q = similar(f0)
+                @inbounds fhat_q .= f0
+                @inbounds fhat_q[safe] .= fminus[safe] .+ (fplus[safe] .- fminus[safe]) .* ((q0[safe] .- qminus[safe]) ./ dq[safe])
+
+                lin_err_q = abs.(f0 .- fhat_q)
+                scale_q = abs.(f0) .+ abs.(fhat_q) .+ 1.0
+                linearish_q = safe .& (lin_err_q .<= (LIN_TOL_REL .* scale_q))
+
+                pen_q = 0.0
+                nlin_q = count(linearish_q)
+                if nlin_q > 0
+                    neg_mass = sum(relu_neg.(slope_q[linearish_q])) / nlin_q
+                    pen_q = WRONGSIGN_INV_LINEAR * neg_mass
+                end
+
+                return base + eltype(y)(pen_p + pen_q)
             end
 
-            # Same but for mini-batches
+            function loss_with_required_pERK(tree, dataset::Dataset{T,L}, options)::L where {T,L}
+                return L(_loss_core(tree, dataset.X, dataset.y, options))
+            end
+
             function loss_with_required_pERK(tree, dataset::Dataset{T,L}, options, idx)::L where {T,L}
                 X = idx === nothing ? dataset.X : dataset.X[:, idx]
                 y = idx === nothing ? dataset.y : view(dataset.y, idx)
-
-                prediction, complete = eval_tree_array(tree, X, options)
-                if !complete
-                    return L(Inf)
-                end
-
-                base = sum((prediction .- y).^2) / length(y)
-
-                has_required = any(n ->
-                    n.degree == 0 && !n.constant && n.feature == REQUIRED_IDX,
-                    tree,
-                )
-
-                return has_required ? base : base + L(1000)
+                return L(_loss_core(tree, X, y, options))
             end
             """
 
@@ -941,6 +1125,11 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 "annealing": args.annealing,
                 "verbosity": args.verbosity,
                 "random_state": args.random_state,
+                # Force deterministic evolution (single-process, no multithreading).
+                "deterministic": True,
+                # PySR >=0.16: prefer explicit serial execution to avoid nondeterminism.
+                "parallelism": "serial",
+                "procs": 0,
 
                 # 👇 New bits
                 "loss_function": """println(">>> Custom loss LOADED")""" + loss_required_pERK,
@@ -1043,9 +1232,20 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         # Persist trajectories per mode after processing feature modes
         if trajectories_by_mode.get(run_mode):
             traj_df = pd.DataFrame(trajectories_by_mode[run_mode])
-            traj_out = metrics_dir / f"predicted_trajectories_{run_mode}.csv"
-            traj_df.to_csv(traj_out, index=False)
-            LOGGER.info("Saved predicted trajectories to %s", traj_out)
+            traj_filename = f"predicted_trajectories_{run_mode}.csv"
+            traj_out = trajectories_dir / traj_filename
+            legacy_traj_out = metrics_dir / traj_filename
+            # Skip emitting snapshot trajectories to keep PySR snapshot outputs minimal.
+            if run_mode != "snapshot":
+                traj_df.to_csv(traj_out, index=False)
+                if legacy_traj_out != traj_out:
+                    try:
+                        shutil.copy(traj_out, legacy_traj_out)
+                    except Exception:
+                        traj_df.to_csv(legacy_traj_out, index=False)
+                LOGGER.info("Saved predicted trajectories to %s", traj_out)
+            else:
+                LOGGER.info("Skipping predicted trajectories export for snapshot mode.")
 
     if not all_results:
         LOGGER.error("No successful symbolic regressions were produced")
@@ -1094,9 +1294,17 @@ def run_pipeline(args: argparse.Namespace) -> Path:
 
     # Integration metrics + trajectories per dataset mode (feeds aggregated metrics)
     for run_mode, dataset_path in dataset_by_mode.items():
+        if run_mode == "snapshot":
+            LOGGER.info("Skipping integration metrics/trajectories for snapshot mode.")
+            continue
         metrics_out = metrics_dir / f"marker_integration_metrics_{run_mode}.csv"
-        traj_out = metrics_dir / f"marker_integration_trajectories_{run_mode}.csv"
-        sr_traj = metrics_dir / f"predicted_trajectories_{run_mode}.csv"
+        traj_filename = f"marker_integration_trajectories_{run_mode}.csv"
+        traj_out = trajectories_dir / traj_filename
+        legacy_traj_out = metrics_dir / traj_filename
+        sr_traj = trajectories_dir / f"predicted_trajectories_{run_mode}.csv"
+        sr_traj_legacy = metrics_dir / f"predicted_trajectories_{run_mode}.csv"
+        if not sr_traj.exists() and sr_traj_legacy.exists():
+            sr_traj = sr_traj_legacy
         cmd = [
             sys.executable,
             "-m",
@@ -1123,6 +1331,11 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         if sr_traj.exists():
             cmd.extend(["--sr-trajectories", str(sr_traj)])
         _run_module(cmd, f"integration metrics ({run_mode})")
+        if traj_out.exists() and legacy_traj_out != traj_out:
+            try:
+                shutil.copy(traj_out, legacy_traj_out)
+            except Exception:
+                pass
 
         # Per-seed overlay plots per model
         if not sr_traj.exists():
@@ -1170,11 +1383,13 @@ def main() -> None:
     aggregated_formulas_dir = aggregated_reports / "formulas"
     aggregated_metrics_dir = aggregated_root / "metrics"
     aggregated_plots_dir = aggregated_root / "plots"
+    aggregated_trajectories_dir = aggregated_root / "trajectories"
     seeds_root.mkdir(parents=True, exist_ok=True)
     aggregated_summary_dir.mkdir(parents=True, exist_ok=True)
     aggregated_formulas_dir.mkdir(parents=True, exist_ok=True)
     aggregated_metrics_dir.mkdir(parents=True, exist_ok=True)
     aggregated_plots_dir.mkdir(parents=True, exist_ok=True)
+    aggregated_trajectories_dir.mkdir(parents=True, exist_ok=True)
     summary_paths: List[Path] = []
     for seed in seeds:
         seed_dir = seeds_root / f"seed_{seed}"

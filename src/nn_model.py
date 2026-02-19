@@ -333,6 +333,17 @@ def train_model(train_data, val_data, output_path, verbose=False, retrain=True, 
 
     return model
 
+
+def load_model_checkpoint(checkpoint_path, input_dim, device_override=None):
+    resolved_device = device_override or device
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"NN checkpoint not found: {checkpoint_path}")
+    model = NeuralNet(input_dim=input_dim, output_dim=1, dropout_rate=DROPOUT_RATE).to(resolved_device)
+    state_dict = torch.load(checkpoint_path, map_location=resolved_device)
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model
+
 def evaluate_model(model, full_data):
     """
     Evaluate model on full dataset (in original space), return MAE and predictions.
