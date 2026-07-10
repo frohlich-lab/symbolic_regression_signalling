@@ -1,8 +1,11 @@
 data_type: dynamic
-enzyme_model: experimental
+enzyme_model: two_step_enzyme
 enable_sr_sweeps: false
 models:
+- aifeynman
+- kan
 - pysr
+- dso
 output_extension:
   pysindy: txt
   aifeynman: txt

@@ -116,8 +116,8 @@ def load_dataset(file_path, dataset_size=None, features=None, seed=None):
 def run_dso_training(temp_file: str) -> None:
     """Runs DSO model training and logs the best equations to a specified file."""
     model = DeepSymbolicRegressor(CONFIG_FILE_PATH)
-    model.setup()
-
+    # DeepSymbolicOptimizer.train() calls setup() itself (tf.reset_default_graph
+    # + new session); calling setup() here as well would build the graph twice.
     model.train()
     best_program = getattr(model.trainer, "p_r_best", None)
     if best_program is None:

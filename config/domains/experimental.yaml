@@ -1,0 +1,3 @@
+experimental:
+  output_prefix: markers
+  marker_metadata_csv: data/experimental/processed/markers.csv

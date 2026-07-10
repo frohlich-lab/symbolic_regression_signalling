@@ -4,7 +4,10 @@ channels:
   - defaults
 dependencies:
   - python=3.10
-  - numpy
+  # aifeynman builds Fortran extensions with numpy.distutils and calls several
+  # numpy 1.x-only APIs; numpy 2.x removes distutils and breaks the search
+  # (empty Pareto set / build failures). Pin to the last 1.x series.
+  - numpy>=1.22,<2
   - pandas
   - tqdm
   - matplotlib

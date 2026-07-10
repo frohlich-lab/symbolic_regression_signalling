@@ -1,0 +1,6 @@
+includes:
+  - config/base.yaml
+  - config/domains/experimental.yaml
+  - config/domains/regimes.yaml
+  - config/domains/sr_comparison.yaml
+  - config/profiles/default_static_two_step.yaml

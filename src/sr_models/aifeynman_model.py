@@ -4,6 +4,20 @@ It allows for dataset sampling, feature selection, and saves intermediate result
 
 Usage:
     python aifeynman_model.py --dataset <path_to_dataset> --dataset_size <size> --features <feature_list> --temp_file <path_to_temp_file>
+
+Notes on robustness (see run_feynman):
+  * AI-Feynman writes all of its scratch output to a ``results/`` directory
+    *relative to the current working directory* (not to the dataset dir), and the
+    final Pareto front lands in ``results/solution_<filename>``.
+  * The generalized-symmetry / gradient-decomposition stage runs UNGUARDED inside
+    ``run_AI_all`` whenever the data has more than three columns. On several
+    numpy/torch combinations it raises ``'int' object is not callable`` and aborts
+    the whole search before any solution file is saved. We neutralize that stage
+    (and the equally heavy compositionality stage) so the brute-force / polyfit /
+    symmetry Pareto front is still produced and saved.
+  * The native solution file is a space-separated table, not the ``Formula:`` /
+    ``Error:`` block the downstream parser expects, so we normalize it on the way
+    out to ``temp_file``.
 """
 
 import argparse
@@ -42,6 +56,9 @@ DATA_PATHDIR = './data/aifeynman/'  # Directory for dataset
 TEST_PERCENTAGE = 20  # Percentage of data for testing
 FILENAME = 'mystery.txt'  # Dataset file name
 
+# AI-Feynman writes here (relative to the CWD), regardless of DATA_PATHDIR.
+RESULTS_DIR = 'results'
+
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -69,6 +86,118 @@ def load_dataset(file_path, dataset_size=None, features=None, seed=None):
         data.loc[:, input_cols] = np.exp(data.loc[:, input_cols])
     return data
 
+
+def neutralize_structural_stages() -> None:
+    """Make AI-Feynman's NN-gradient structural-discovery stages non-fatal.
+
+    ``run_AI_all`` calls ``identify_decompositions`` / ``brute_force_gen_sym``
+    (generalized symmetry) and, when the NN gradients evaluate successfully,
+    ``brute_force_comp`` (compositionality) *without* any try/except. Any error in
+    those stages aborts the whole search before a solution file is written. The
+    gradient-decomposition path in particular raises ``'int' object is not
+    callable`` on several numpy/torch versions.
+
+    We replace those hooks with cheap no-ops so the brute-force, polyfit,
+    symmetry and separability results (the bulk of AI-Feynman's power for a
+    low-dimensional problem) still get computed and persisted. This is a
+    deliberate robustness trade-off applied entirely from our own code, so no
+    site-packages files are edited.
+    """
+    if AI_FEYNMAN_IMPORT_ERROR is not None:
+        return
+    srun = S_run_aifeynman
+
+    # Generalized-symmetry stage: return an empty decomposition and write an
+    # empty gradients file so the subsequent np.loadtxt yields zero rows and the
+    # follow-up loop is skipped cleanly.
+    srun.identify_decompositions = lambda *args, **kwargs: np.array([], dtype=int)
+
+    def _skip_brute_force_gen_sym(*args, **kwargs):
+        try:
+            open("results_gen_sym.dat", "w").close()
+        except OSError:
+            pass
+
+    srun.brute_force_gen_sym = _skip_brute_force_gen_sym
+
+    # Compositionality stage: report "no usable gradients" so run_AI_all skips the
+    # unguarded 600s brute_force_comp step entirely.
+    srun.evaluate_derivatives = lambda *args, **kwargs: 0
+
+
+def _parse_solution_line(line):
+    """Parse one AI-Feynman solution line into ``(error, formula)`` or None.
+
+    The solution table is whitespace-separated with a variable number of leading
+    numeric columns followed by the (possibly space-containing) symbolic formula:
+      * final file with a held-out test split:
+        ``test_error log_err log_err_all complexity fit_error <formula>``
+      * final file without a test split:
+        ``log_err log_err_all complexity fit_error <formula>``
+      * intermediate (pre/first snap) files:
+        ``complexity fit_error <formula>``
+
+    We treat the held-out test error (column 0) as the ranking error when at least
+    five numeric columns are present, otherwise the trailing fit error.
+    """
+    tokens = line.split()
+    numeric = []
+    for tok in tokens:
+        try:
+            numeric.append(float(tok))
+        except ValueError:
+            break
+    formula = " ".join(tokens[len(numeric):]).strip()
+    if not formula or not numeric:
+        return None
+    error = numeric[0] if len(numeric) >= 5 else numeric[-1]
+    if not np.isfinite(error):
+        return None
+    return error, formula
+
+
+def normalize_solution_file(solution_path, temp_file):
+    """Rewrite an AI-Feynman solution table as ``Formula:`` / ``Error:`` blocks.
+
+    Returns True if at least one valid formula was written.
+    """
+    if not (os.path.exists(solution_path) and os.path.getsize(solution_path) > 0):
+        return False
+    entries = []
+    with open(solution_path, "r") as handle:
+        for line in handle:
+            parsed = _parse_solution_line(line)
+            if parsed is not None:
+                entries.append(parsed)
+    if not entries:
+        return False
+    os.makedirs(os.path.dirname(os.path.abspath(temp_file)), exist_ok=True)
+    with open(temp_file, "w") as handle:
+        for error, formula in entries:
+            handle.write(f"Formula: {formula}\n")
+            handle.write(f"Error: {error}\n")
+    print(f"Normalized {len(entries)} AI Feynman solution(s) into {temp_file}")
+    return True
+
+
+def find_solution_file(results_dir=RESULTS_DIR, base_filename=FILENAME):
+    """Return the best available AI-Feynman solution file, or None.
+
+    Prefers the fully snapped/gradient-descended final solution, then the
+    intermediate snapshots that are written earlier in the run, so that a crash
+    late in ``run_aifeynman`` still salvages usable results.
+    """
+    candidates = [
+        os.path.join(results_dir, f"solution_{base_filename}"),
+        os.path.join(results_dir, f"solution_first_snap_{base_filename}.txt"),
+        os.path.join(results_dir, f"solution_before_snap_{base_filename}.txt"),
+    ]
+    for path in candidates:
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            return path
+    return None
+
+
 def run_feynman(
     data,
     temp_file,
@@ -84,13 +213,20 @@ def run_feynman(
     np.savetxt(os.path.join(DATA_PATHDIR, FILENAME), data_array)
     np.savetxt(os.path.join(DATA_PATHDIR, '7ops.txt'), [OPERATORS], fmt='%s')
 
+    # Clear stale scratch/output so a previous run's NN checkpoint (trained on a
+    # different data shape) cannot trigger a shape mismatch on reload.
+    shutil.rmtree(RESULTS_DIR, ignore_errors=True)
+
+    # Make the crash-prone / heavy structural-discovery stages non-fatal.
+    neutralize_structural_stages()
+
+    variable_names = (
+        [name.strip() for name in features.split(',')]
+        if features
+        else [f"x_{idx}" for idx in range(X.shape[1])]
+    )
+
     try:
-        # Run AI Feynman with specified parameters
-        variable_names = (
-            [name.strip() for name in features.split(',')]
-            if features
-            else [f"x_{idx}" for idx in range(X.shape[1])]
-        )
         S_run_aifeynman.run_aifeynman(
             pathdir=DATA_PATHDIR,
             filename=FILENAME,
@@ -101,24 +237,17 @@ def run_feynman(
             vars_name=variable_names,
             test_percentage=TEST_PERCENTAGE,
         )
-        copy_solution_to_temp(os.path.join(DATA_PATHDIR, 'results', f'solution_{FILENAME}'), temp_file)
-
     except TimeoutError:
-        print("AI Feynman process timed out.")
-    except FileNotFoundError:
-        print("Solution file not found. Check if AI Feynman completed successfully.")
-    except Exception as e:
-        print(f"Unexpected error during AI Feynman execution: {e}")
+        print("AI Feynman process timed out; attempting to salvage partial results.")
+    except Exception as e:  # noqa: BLE001 - salvage whatever was produced
+        print(f"AI Feynman execution raised an error ({e}); attempting to salvage partial results.")
+    finally:
+        solution_file = find_solution_file()
+        if solution_file is None:
+            print("No AI Feynman solution file was produced.")
+        elif not normalize_solution_file(solution_file, temp_file):
+            print(f"AI Feynman solution file {solution_file} contained no parseable formula.")
 
-def copy_solution_to_temp(solution_file, temp_file):
-    """Copies solution file to the specified temp file if it exists."""
-    try:
-        shutil.copy(solution_file, temp_file)
-        print(f"Solution saved to {temp_file}")
-    except FileNotFoundError:
-        print(f"Solution file {solution_file} not found.")
-    except Exception as e:
-        print(f"Error copying solution file: {e}")
 
 def main():
     parser = argparse.ArgumentParser(description='Run AI Feynman for symbolic regression')
