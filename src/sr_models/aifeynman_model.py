@@ -25,6 +25,7 @@ import random
 import pandas as pd
 import os
 import shutil
+import signal
 import sys
 from pathlib import Path
 import tempfile
@@ -58,6 +59,27 @@ FILENAME = 'mystery.txt'  # Dataset file name
 
 # AI-Feynman writes here (relative to the CWD), regardless of DATA_PATHDIR.
 RESULTS_DIR = 'results'
+
+class _TimeoutReached(Exception):
+    """Raised from the SIGTERM handler so run_feynman's finally can salvage."""
+
+
+def _install_sigterm_salvage():
+    """Turn an external `timeout` SIGTERM into an exception.
+
+    The pipeline wraps this script in `timeout <N> python ...`. By default
+    SIGTERM terminates the process immediately, skipping the finally block that
+    salvages the Pareto solutions written so far. Converting it to an exception
+    lets that salvage run, so a run that exceeds the wall-clock budget still
+    reports whatever AI-Feynman had found.
+    """
+    def _handler(signum, frame):
+        raise _TimeoutReached(f"received signal {signum}")
+    try:
+        signal.signal(signal.SIGTERM, _handler)
+    except (ValueError, OSError):  # pragma: no cover - not in main thread
+        pass
+
 
 def seed_everything(seed: int) -> None:
     random.seed(seed)
@@ -271,6 +293,7 @@ def main():
             f"Original error: {AI_FEYNMAN_IMPORT_ERROR}"
         )
 
+    _install_sigterm_salvage()
     if args.seed is not None:
         seed_everything(args.seed)
     data = load_dataset(args.dataset, args.dataset_size, args.features, args.seed)
