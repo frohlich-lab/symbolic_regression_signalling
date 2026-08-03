@@ -50,11 +50,13 @@ TARGET_COLUMN = 'kcat_cg'
 
 # Hyperparameters for AI Feynman
 OPERATORS = '+*-D~ILEA'  # Operators used in symbolic regression
-BF_TRY_TIME = 60  # Max time (seconds) for brute-force search step
+BF_TRY_TIME = 30  # Max time (seconds) per brute-force search step
 POLYFIT_DEGREE = 4  # Degree for polynomial fitting
-NN_EPOCHS = 800  # Training epochs for neural network stage (the symmetry /
-# separability / compositionality checks all rely on a well-fit NN; 40 was far
-# too few for those stages to be meaningful).
+# NN epochs feed the symmetry/separability checks, so more than the original 40
+# helps; but the symmetry recursion re-trains the NN at every level and each
+# level also runs BF_TRY_TIME * ~10 Fortran brute forces, so 800 made a single
+# run exceed an hour. 100 is a practical middle ground that still completes.
+NN_EPOCHS = 100  # Training epochs for neural network stage
 DATA_PATHDIR = './data/aifeynman/'  # Directory for dataset
 TEST_PERCENTAGE = 20  # Percentage of data for testing
 FILENAME = 'mystery.txt'  # Dataset file name
@@ -62,21 +64,32 @@ FILENAME = 'mystery.txt'  # Dataset file name
 # AI-Feynman writes here (relative to the CWD), regardless of DATA_PATHDIR.
 RESULTS_DIR = 'results'
 
-class _TimeoutReached(Exception):
-    """Raised from the SIGTERM handler so run_feynman's finally can salvage."""
+_SALVAGE_TEMP_FILE = None
 
 
-def _install_sigterm_salvage():
-    """Turn an external `timeout` SIGTERM into an exception.
+def _install_sigterm_salvage(temp_file):
+    """Salvage the best-so-far Pareto front on a wall-clock SIGTERM, then exit.
 
-    The pipeline wraps this script in `timeout <N> python ...`. By default
-    SIGTERM terminates the process immediately, skipping the finally block that
-    salvages the Pareto solutions written so far. Converting it to an exception
-    lets that salvage run, so a run that exceeds the wall-clock budget still
-    reports whatever AI-Feynman had found.
+    The pipeline wraps this script in `timeout <N> python ...`. We do the salvage
+    *inside* the signal handler and then hard-exit with os._exit, because
+    AI-Feynman is riddled with bare `except:` clauses that would otherwise swallow
+    an exception raised from the handler (so the run would neither salvage nor
+    stop). This guarantees temp_file is populated from whatever solution files
+    exist on disk, and that the process actually terminates at the deadline.
     """
+    global _SALVAGE_TEMP_FILE
+    _SALVAGE_TEMP_FILE = temp_file
+
     def _handler(signum, frame):
-        raise _TimeoutReached(f"received signal {signum}")
+        print(f"Received signal {signum}; salvaging best-so-far AI Feynman solution and exiting.")
+        try:
+            solution_file = find_solution_file()
+            if solution_file is not None and _SALVAGE_TEMP_FILE:
+                normalize_solution_file(solution_file, _SALVAGE_TEMP_FILE)
+        except Exception as exc:  # noqa: BLE001 - best effort in a signal handler
+            print(f"Salvage on timeout failed: {exc}")
+        os._exit(0)
+
     try:
         signal.signal(signal.SIGTERM, _handler)
     except (ValueError, OSError):  # pragma: no cover - not in main thread
@@ -291,7 +304,7 @@ def main():
             f"Original error: {AI_FEYNMAN_IMPORT_ERROR}"
         )
 
-    _install_sigterm_salvage()
+    _install_sigterm_salvage(args.temp_file)
     if args.seed is not None:
         seed_everything(args.seed)
     data = load_dataset(args.dataset, args.dataset_size, args.features, args.seed)
