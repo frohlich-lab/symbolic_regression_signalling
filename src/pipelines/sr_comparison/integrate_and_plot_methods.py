@@ -428,7 +428,7 @@ def integrate_and_calculate_loss(data, formulas, discovery_scales, output_path, 
                 loss_df.append(loss_ls)
 
         print("Loss DataFrame contents", loss_df)
-        valid_losses = [loss[2] for loss in loss_df if loss and loss[2] is not None]
+        valid_losses = [loss[2] for loss in loss_df if loss is not None and loss[2] is not None]
         if valid_losses:
             average_log_MAE = float(np.nanmean(valid_losses))
         else:
