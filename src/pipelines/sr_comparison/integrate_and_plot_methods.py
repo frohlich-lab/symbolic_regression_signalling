@@ -338,8 +338,14 @@ def integrate_and_calculate_loss(data, formulas, discovery_scales, output_path, 
 
         scale = discovery_scales.get(base_key, discovery_scales.get(method, 'linear'))
         if scale == 'log':
-            log_subs = {arg: sympy.log(arg) for arg in arguments}
-            transformed_expression = sympy.exp(expression.subs(log_subs))
+            # The log-scale methods (aifeynman/kan/dso) are trained on LINEAR
+            # inputs (their load_dataset exps the inputs) but predict the LOG
+            # target. So evaluate the formula on the linear ODE inputs directly
+            # and exp() the result to recover kcat_cg. (Previously this also
+            # substituted arg -> log(arg), re-logging already-linear inputs,
+            # which produced nested logs -> complex/NaN -> diffrax rejected the
+            # ODE term.)
+            transformed_expression = sympy.exp(expression)
             ode_function = sympy.lambdify(args=arguments, expr=transformed_expression)
         elif scale == 'linear':
             ode_function = sympy.lambdify(args=arguments, expr=expression)
