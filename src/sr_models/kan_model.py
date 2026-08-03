@@ -30,12 +30,14 @@ SEED = 1  # Random seed for reproducibility
 # a compact, human-readable formula on small architectures. The previous default
 # ([n,7,5,1], grid 40) was so over-parameterised that auto_symbolic fell back to a
 # ~18-term sum of exponentials with poor loss - technically valid but useless.
-N_ITERATIONS = 4  # Number of grid-refinement rounds before symbolic extraction
-# One hidden layer ([n, 5, 1]) so KAN can compose interactions between inputs
-# (a single [n, 1] layer is too weak to represent the multiplicative/rational
-# Michaelis-Menten structure of the target); still far smaller than the
-# over-parameterised [n,7,5,1]/grid40 that produced ~18-term garbage.
-WIDTH = [1, 5, 1]  # first entry replaced with input dim -> [n, 5, 1]
+N_ITERATIONS = 3  # Number of grid-refinement rounds before symbolic extraction
+# MultKAN width: an int is a layer of addition nodes; [n_add, n_mult] adds
+# multiplication nodes that form cross-variable products. Two hidden layers with
+# mult nodes let KAN build a Michaelis-Menten rational k*s/(K+s): one layer forms
+# the sum (K+s), a 1/x edge inverts it, and a mult node in the next layer
+# multiplies k, s and 1/(K+s). Sums of univariate functions ([n,1] / [n,5,1])
+# cannot express that cross-variable product/quotient at all.
+WIDTH = [1, [4, 2], [2, 2], 1]  # -> [n, (4 add,2 mult), (2 add,2 mult), 1]
 GRID = 10  # Grid size for KAN (refined across rounds)
 K = 3  # Spline order
 THRESHOLD = 0.02  # Pruning threshold (lower -> keeps more structure for accuracy)
