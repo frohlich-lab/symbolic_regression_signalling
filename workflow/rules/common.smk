@@ -2831,8 +2831,16 @@ if enzyme_model != "experimental":
         separator = ";" if install_command else ""
         variant_flag = f" --variant {variant}" if variant else ""
         seed_flag = " --seed 42" if model == "pysr" else ""
+        # Force the activated conda env's bin to the front of PATH. snakemake
+        # --use-conda logs "Activating conda environment ..." and sets
+        # CONDA_PREFIX, but on some nodes the loaded Anaconda *module* python
+        # still shadows the env's python/pip (pip then does a user-site install
+        # into the wrong interpreter and the build/import fails). Prepending
+        # $CONDA_PREFIX/bin is a no-op when activation already worked and a fix
+        # when it didn't.
+        env_path_fix = '[ -n "$CONDA_PREFIX" ] && export PATH="$CONDA_PREFIX/bin:$PATH";'
         return f"""
-            {install_command}{separator} timeout {config["timeout_duration"]} python src/sr_models/{model}_model.py --dataset {dataset} --dataset_size {dataset_size} --features {features} --temp_file {temp_file}{variant_flag}{seed_flag} || test -s {temp_file}
+            {env_path_fix} {install_command}{separator} timeout {config["timeout_duration"]} python src/sr_models/{model}_model.py --dataset {dataset} --dataset_size {dataset_size} --features {features} --temp_file {temp_file}{variant_flag}{seed_flag} || test -s {temp_file}
         """
 
     # Rules for symbolic regression for each model
