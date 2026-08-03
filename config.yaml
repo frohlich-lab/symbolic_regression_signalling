@@ -21,7 +21,7 @@ discovery_scales: '{"pysindy": "linear", "aifeynman": "log", "dso": "log", "kan"
   "log", "pysr": "linear"}'
 dataset_sizes:
   pysindy: 10000
-  aifeynman: 5000
+  aifeynman: 1500
   dso: 5000
   kan: 4000
   pysr: 3000
