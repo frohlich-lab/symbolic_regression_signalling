@@ -111,33 +111,25 @@ def load_dataset(file_path, dataset_size=None, features=None, seed=None):
     return data
 
 
-def guard_structural_stages() -> None:
-    """Run AI-Feynman's structural-discovery stages, but make them non-fatal.
+def neutralize_structural_stages() -> None:
+    """Skip AI-Feynman's two NN-gradient structural-discovery stages.
 
-    ``run_AI_all`` calls ``identify_decompositions`` / ``brute_force_gen_sym``
-    (generalized symmetry) and, when the NN gradients evaluate, ``brute_force_comp``
-    (compositionality) *without* any try/except, so a single error in those stages
-    aborts the whole search before any solution is written (the gradient
-    decomposition historically raised ``'int' object is not callable``).
-
-    Rather than disable those stages, we wrap each in a guard: it runs the real
-    implementation and, only if that raises, falls back to a benign result that
-    lets ``run_AI_all`` continue. This keeps AI-Feynman's full search power when
-    the stages work while preserving robustness when they don't. Applied entirely
-    from our own code; no site-packages files are edited.
+    ``run_AI_all`` runs the generalized-symmetry (``identify_decompositions`` +
+    ``brute_force_gen_sym``) and compositionality (``brute_force_comp``) stages
+    *unguarded*, so a crash there aborts the whole search before any solution is
+    written. We tried running them for real behind guards, but each does a 600s
+    Fortran brute force per recursion level, which made a single run exceed an
+    hour without finishing, and AI-Feynman's own bare ``except:`` clauses swallow
+    the wall-clock SIGTERM so it won't salvage-and-exit. They are the least
+    valuable stages for this low-dimensional target, so we replace them with cheap
+    no-ops. The retained stages (brute force, polyfit, translational symmetries,
+    separabilities) all rely on the trained NN - which is why NN_EPOCHS was raised
+    to 800 - and complete quickly. Applied from our own code; no site-packages
+    files are edited.
     """
     if AI_FEYNMAN_IMPORT_ERROR is not None:
         return
     srun = S_run_aifeynman
-
-    def _guard(real_fn, fallback, label):
-        def wrapper(*args, **kwargs):
-            try:
-                return real_fn(*args, **kwargs)
-            except Exception as exc:  # noqa: BLE001 - degrade, don't abort the run
-                print(f"[aifeynman] {label} failed ({type(exc).__name__}: {exc}); continuing without it.")
-                return fallback(*args, **kwargs)
-        return wrapper
 
     def _empty_file(name):
         def _fb(*args, **kwargs):
@@ -147,14 +139,10 @@ def guard_structural_stages() -> None:
                 pass
         return _fb
 
-    srun.identify_decompositions = _guard(
-        srun.identify_decompositions, lambda *a, **k: np.array([], dtype=int), "gen-sym decomposition")
-    srun.brute_force_gen_sym = _guard(
-        srun.brute_force_gen_sym, _empty_file("results_gen_sym.dat"), "gen-sym brute force")
-    srun.brute_force_comp = _guard(
-        srun.brute_force_comp, _empty_file("results_comp.dat"), "compositionality brute force")
-    srun.evaluate_derivatives = _guard(
-        srun.evaluate_derivatives, lambda *a, **k: 0, "compositionality gradients")
+    srun.identify_decompositions = lambda *a, **k: np.array([], dtype=int)
+    srun.brute_force_gen_sym = _empty_file("results_gen_sym.dat")
+    srun.brute_force_comp = _empty_file("results_comp.dat")
+    srun.evaluate_derivatives = lambda *a, **k: 0  # -> skip compositionality
 
 
 def _parse_solution_line(line):
@@ -249,8 +237,8 @@ def run_feynman(
     # different data shape) cannot trigger a shape mismatch on reload.
     shutil.rmtree(RESULTS_DIR, ignore_errors=True)
 
-    # Run the structural-discovery stages, but guarded so a crash there is not fatal.
-    guard_structural_stages()
+    # Skip the crash-prone / very slow NN-gradient structural stages (see docstring).
+    neutralize_structural_stages()
 
     variable_names = (
         [name.strip() for name in features.split(',')]
