@@ -35,6 +35,23 @@ N_TIME_STEPS = 22
 solver = Kvaerno3()
 apply_cell_systems_style()
 
+# The formula becomes the vector field of a diffrax ODE, which is traced and
+# (for the implicit solver) autodifferentiated by JAX. sympy.lambdify's default
+# numpy backend produces transcendental calls (exp/sin/log/...) that break under
+# JAX tracing -> "Terms are not compatible with solver!". Map those functions to
+# their jax.numpy equivalents so any formula stays JAX-traceable. (Pure-arithmetic
+# formulas worked already; this fixes the ones with exp/sin/log of variables.)
+_JAX_LAMBDIFY_MODULES = [
+    {
+        "exp": jnp.exp, "log": jnp.log, "sqrt": jnp.sqrt,
+        "sin": jnp.sin, "cos": jnp.cos, "tan": jnp.tan,
+        "asin": jnp.arcsin, "acos": jnp.arccos, "atan": jnp.arctan,
+        "sinh": jnp.sinh, "cosh": jnp.cosh, "tanh": jnp.tanh,
+        "Abs": jnp.abs, "sign": jnp.sign, "Max": jnp.maximum, "Min": jnp.minimum,
+    },
+    "math",
+]
+
 BASE_METHOD_LABELS = {
     'pysr': 'PySR',
     'aifeynman': 'AI Feynman',
@@ -346,9 +363,9 @@ def integrate_and_calculate_loss(data, formulas, discovery_scales, output_path, 
             # which produced nested logs -> complex/NaN -> diffrax rejected the
             # ODE term.)
             transformed_expression = sympy.exp(expression)
-            ode_function = sympy.lambdify(args=arguments, expr=transformed_expression)
+            ode_function = sympy.lambdify(args=arguments, expr=transformed_expression, modules=_JAX_LAMBDIFY_MODULES)
         elif scale == 'linear':
-            ode_function = sympy.lambdify(args=arguments, expr=expression)
+            ode_function = sympy.lambdify(args=arguments, expr=expression, modules=_JAX_LAMBDIFY_MODULES)
         else:
             raise ValueError(f"Unsupported discovery scale for {display_name}: {scale}")
 
