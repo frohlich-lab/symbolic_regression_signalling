@@ -52,11 +52,13 @@ TARGET_COLUMN = 'kcat_cg'
 OPERATORS = '+*-D~ILEA'  # Operators used in symbolic regression
 BF_TRY_TIME = 30  # Max time (seconds) per brute-force search step
 POLYFIT_DEGREE = 4  # Degree for polynomial fitting
-# NN epochs feed the symmetry/separability checks, so more than the original 40
-# helps; but the symmetry recursion re-trains the NN at every level and each
-# level also runs BF_TRY_TIME * ~10 Fortran brute forces, so 800 made a single
-# run exceed an hour. 100 is a practical middle ground that still completes.
-NN_EPOCHS = 100  # Training epochs for neural network stage
+# AI-Feynman's symmetry/separability recursion re-runs the ENTIRE search (NN
+# training + ~10 Fortran brute forces) at every level, so NN cost is multiplied
+# by the recursion depth. Empirically NN_EPOCHS=100 never finished a single pass
+# within the 60-min budget (nothing to salvage), while NN_EPOCHS=40 completes and
+# writes a solution. So keep it low - a non-completing run is strictly worse than
+# a completing one. The robust SIGTERM salvage above is the backstop, not the plan.
+NN_EPOCHS = 40  # Training epochs for neural network stage
 DATA_PATHDIR = './data/aifeynman/'  # Directory for dataset
 TEST_PERCENTAGE = 20  # Percentage of data for testing
 FILENAME = 'mystery.txt'  # Dataset file name
