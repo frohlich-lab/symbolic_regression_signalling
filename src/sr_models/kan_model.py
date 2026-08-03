@@ -38,13 +38,15 @@ N_ITERATIONS = 3  # Number of grid-refinement rounds before symbolic extraction
 # log(K+s). Keep a single moderate hidden layer; the earlier 18-term-exp result
 # came from an over-large net + weak training, not from missing capacity.
 WIDTH = [1, 6, 1]  # first entry replaced with input dim -> [n, 6, 1]
-GRID = 10  # Grid size for KAN (refined across rounds)
+# Keep the grid modest: refinement doubles it each round (grids = [5, 10, 20]),
+# and grid 40+ with LBFGS is very slow for little accuracy gain here.
+GRID = 5  # Grid size for KAN (refined across rounds)
 K = 3  # Spline order
 THRESHOLD = 0.02  # Pruning threshold (lower -> keeps more structure for accuracy)
 
 # Training Configuration
 OPTIMIZER = "LBFGS"  # LBFGS is pykan's recommended optimiser for SR fitting
-STEPS = 100  # Optimizer steps per refinement round
+STEPS = 60  # Optimizer steps per refinement round
 LAMB = 0.001  # Regularization parameter
 LAMB_ENTROPY = 2.0  # Entropy regularization (encourages sparse activations)
 
