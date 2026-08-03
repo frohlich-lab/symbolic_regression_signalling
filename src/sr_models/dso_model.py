@@ -2,10 +2,25 @@ import argparse
 import json
 import os
 import random
+import signal
 import sys
 from pathlib import Path
 import numpy as np
 import pandas as pd
+
+
+class _TimeoutReached(Exception):
+    """Raised from the SIGTERM handler so training can save its best-so-far."""
+
+
+def _install_sigterm_salvage():
+    """Turn an external `timeout` SIGTERM into an exception so best-so-far is kept."""
+    def _handler(signum, frame):
+        raise _TimeoutReached(f"received signal {signum}")
+    try:
+        signal.signal(signal.SIGTERM, _handler)
+    except (ValueError, OSError):  # pragma: no cover - not in main thread
+        pass
 
 DSO_IMPORT_ERROR = None
 try:
@@ -24,7 +39,10 @@ import tensorflow as tf
 tf.keras.backend.clear_session()  # Clears TensorFlow state
 
 # Hyperparameters for DSO (Deep Symbolic Optimization)
-DEFAULT_N_ITERATIONS = 100
+# The RL policy needs thousands of iterations to converge; 100 barely leaves
+# random initialisation. Combined with the SIGTERM salvage below (best-so-far is
+# written if the wall-clock timeout fires), a large value is safe.
+DEFAULT_N_ITERATIONS = 2000
 DEFAULT_BATCH_SIZE = 128
 DEFAULT_LEARNING_RATE = 0.0005
 DEFAULT_ENTROPY_WEIGHT = 0.03
@@ -113,18 +131,11 @@ def load_dataset(file_path, dataset_size=None, features=None, seed=None):
         raise ValueError("DSO received an empty dataset after cleaning.")
     return data
 
-def run_dso_training(temp_file: str) -> None:
-    """Runs DSO model training and logs the best equations to a specified file."""
-    model = DeepSymbolicRegressor(CONFIG_FILE_PATH)
-    # DeepSymbolicOptimizer.train() calls setup() itself (tf.reset_default_graph
-    # + new session); calling setup() here as well would build the graph twice.
-    model.train()
-    best_program = getattr(model.trainer, "p_r_best", None)
+def _write_best_program(best_program, temp_file: str) -> None:
     if best_program is None:
         Path(temp_file).write_text("")
-        print("DSO training completed without discovering a valid expression.")
+        print("DSO produced no valid expression.")
         return
-
     with open(temp_file, 'w') as f:
         f.write("Equation\tScore\n")
         best_equation = repr(best_program.sympy_expr)
@@ -132,6 +143,20 @@ def run_dso_training(temp_file: str) -> None:
         score = best_program.r
         f.write(f"{best_equation}\t{score:.6f}\n")
 
+
+def run_dso_training(temp_file: str) -> None:
+    """Runs DSO model training and logs the best equations to a specified file."""
+    model = DeepSymbolicRegressor(CONFIG_FILE_PATH)
+    # DeepSymbolicOptimizer.train() calls setup() itself (tf.reset_default_graph
+    # + new session); calling setup() here as well would build the graph twice.
+    try:
+        model.train()
+    except _TimeoutReached as exc:
+        # `timeout <N>` fired; keep the best expression discovered so far instead
+        # of losing the whole (now much longer) run.
+        print(f"DSO training interrupted ({exc}); saving best-so-far expression.")
+    best_program = getattr(getattr(model, "trainer", None), "p_r_best", None)
+    _write_best_program(best_program, temp_file)
     print("DSO model training completed. Results saved.")
 
 def main():
@@ -155,6 +180,7 @@ def main():
             f"Original error: {DSO_IMPORT_ERROR}"
         )
 
+    _install_sigterm_salvage()
     if args.seed is not None:
         seed_everything(args.seed)
     data = load_dataset(args.dataset, args.dataset_size, args.features, args.seed)

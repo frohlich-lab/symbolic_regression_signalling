@@ -26,20 +26,29 @@ TRAIN_SIZE = 0.8  # Training set size as a percentage of the dataset
 SEED = 1  # Random seed for reproducibility
 
 # Model Settings
-N_ITERATIONS = 3  # Number of KAN model iterations
-WIDTH = [5, 7, 5, 1]  # Default width pattern (first entry is replaced with input dim)
-GRID = 40  # Grid size for KAN
-K = 3  # Degree of polynomial features
-THRESHOLD = 0.01  # Pruning threshold
+# A shallow, narrow network is deliberate: KAN's symbolic extraction only yields
+# a compact, human-readable formula on small architectures. The previous default
+# ([n,7,5,1], grid 40) was so over-parameterised that auto_symbolic fell back to a
+# ~18-term sum of exponentials with poor loss - technically valid but useless.
+N_ITERATIONS = 4  # Number of grid-refinement rounds before symbolic extraction
+# One hidden layer ([n, 5, 1]) so KAN can compose interactions between inputs
+# (a single [n, 1] layer is too weak to represent the multiplicative/rational
+# Michaelis-Menten structure of the target); still far smaller than the
+# over-parameterised [n,7,5,1]/grid40 that produced ~18-term garbage.
+WIDTH = [1, 5, 1]  # first entry replaced with input dim -> [n, 5, 1]
+GRID = 10  # Grid size for KAN (refined across rounds)
+K = 3  # Spline order
+THRESHOLD = 0.02  # Pruning threshold (lower -> keeps more structure for accuracy)
 
 # Training Configuration
-OPTIMIZER = "Adam"  # Optimizer for KAN training
-STEPS = 150  # Optimization steps per iteration
+OPTIMIZER = "LBFGS"  # LBFGS is pykan's recommended optimiser for SR fitting
+STEPS = 100  # Optimizer steps per refinement round
 LAMB = 0.001  # Regularization parameter
-LAMB_ENTROPY = 1.0  # Entropy regularization
+LAMB_ENTROPY = 2.0  # Entropy regularization (encourages sparse activations)
 
-# Function Library for Symbolic Representation
-LIBRARY = ['x', 'x^2', 'x^3', 'exp', 'log', 'abs']  # KAN function library
+# Function Library for Symbolic Representation. Include 1/x and sqrt so KAN can
+# express rational / Michaelis-Menten-like forms (k/(K+s)), not just poly/exp/log.
+LIBRARY = ['x', 'x^2', 'x^3', '1/x', 'sqrt', 'exp', 'log', 'abs']  # KAN function library
 
 def seed_everything(seed: int) -> None:
     random.seed(seed)
@@ -134,35 +143,58 @@ def find_best_formula(
     # Ensure temp file is reset before appending results
     Path(temp_file).write_text("")
 
-    with tqdm(total=n_iterations, desc="KAN Model Training") as pbar:
-        for iteration in range(n_iterations):
+    import traceback
+
+    # Stage 1: fit the spline network, refining the grid across rounds. Grid
+    # refinement (coarse -> fine) is pykan's recommended recipe: fit a coarse
+    # model, then progressively `refine` to a finer grid. Crucially we do NOT
+    # call auto_symbolic here - fixing edges to symbolic functions and then
+    # re-fitting raises "stack expects a non-empty TensorList" in pykan >=0.2.
+    last_loss = float("nan")
+    grids = [grid_value * (2 ** i) for i in range(max(1, n_iterations))]
+    with tqdm(total=len(grids), desc="KAN grid refinement") as pbar:
+        for round_idx, grid in enumerate(grids):
             try:
-                # Train model
+                if round_idx > 0:
+                    model = model.refine(grid)
                 results = model.fit(
                     dataset_dict,
                     opt=OPTIMIZER,
                     steps=steps,
                     lamb=LAMB,
-                    lamb_entropy=LAMB_ENTROPY
+                    lamb_entropy=LAMB_ENTROPY,
                 )
-            
-                # Prune the model and extract the formula
-                model.prune(edge_th=threshold)
-                model.auto_symbolic(lib=LIBRARY)
-                current_formula = model.symbolic_formula()[0][0]
-                loss_value = results['test_loss'][-1]
-                
-                # Save progress
-                with open(temp_file, 'a') as f:
-                    f.write(f"Iteration {iteration + 1}:\n")
-                    f.write(f"Formula: {current_formula}\n")
-                    f.write(f"Loss: {loss_value}\n\n")
-                
-                pbar.update(1)
-
+                last_loss = float(results["test_loss"][-1])
             except Exception as e:
-                print(f"Error in iteration {iteration + 1}: {e}")
-                continue
+                print(f"Error in refinement round {round_idx + 1}: {e}")
+                traceback.print_exc()
+            pbar.update(1)
+
+    # Stage 2: prune, then convert the trained splines to a symbolic formula.
+    # In pykan >=0.2 ``prune`` returns a *new* compacted model, so reassign it;
+    # otherwise auto_symbolic runs on the full-width network and yields an
+    # unusable, bloated formula.
+    best_formula = None
+    try:
+        pruned = model.prune(edge_th=threshold)
+        if pruned is not None:
+            model = pruned
+        model.auto_symbolic(lib=LIBRARY)
+        best_formula = model.symbolic_formula()[0][0]
+    except Exception as e:
+        print(f"KAN symbolic extraction failed: {e}")
+        traceback.print_exc()
+
+    # Guarantee a parseable block so downstream extraction never silently drops
+    # KAN from the comparison.
+    if best_formula is not None:
+        with open(temp_file, "w") as f:
+            f.write("Best:\n")
+            f.write(f"Formula: {best_formula}\n")
+            f.write(f"Loss: {last_loss}\n\n")
+        print(f"KAN best formula (test_loss={last_loss}): {best_formula}")
+    else:
+        print("KAN produced no valid symbolic formula.")
 
 def main():
     parser = argparse.ArgumentParser(description='Run KAN for Symbolic Regression')

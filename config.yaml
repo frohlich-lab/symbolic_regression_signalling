@@ -16,13 +16,13 @@ features:
   static: P_u,k_off,k_D,k_cat,tK,kcat_cg
   dynamic: P_u,k_off,k_D,k_cat,tK,k_inact,kcat_cg
 target_feature: kcat_cg
-timeout_duration: 1800
+timeout_duration: 3600
 discovery_scales: '{"pysindy": "linear", "aifeynman": "log", "dso": "log", "kan":
   "log", "pysr": "linear"}'
 dataset_sizes:
   pysindy: 10000
   aifeynman: 5000
-  dso: 10000
+  dso: 5000
   kan: 4000
   pysr: 3000
   nn: 10000
