@@ -50,9 +50,11 @@ TARGET_COLUMN = 'kcat_cg'
 
 # Hyperparameters for AI Feynman
 OPERATORS = '+*-D~ILEA'  # Operators used in symbolic regression
-BF_TRY_TIME = 15  # Max time (seconds) per brute-force search step (kept short:
-# AI-Feynman runs ~10 of these per world transform and re-does them at every
-# symmetry-recursion level, so the total is BF_TRY_TIME * ~10 * depth).
+BF_TRY_TIME = 30  # Max time (seconds) per brute-force search step. AI-Feynman
+# runs ~10 of these per world transform and re-does them at every symmetry
+# level, so the total is BF_TRY_TIME * ~10 * depth. Combined with the full 5000
+# sample this can take well over an hour, which is why timeout_duration is 3h -
+# a shorter sample/BF completes fast but returns an empty Pareto set.
 POLYFIT_DEGREE = 4  # Degree for polynomial fitting
 # AI-Feynman's symmetry/separability recursion re-runs the ENTIRE search (NN
 # training + ~10 Fortran brute forces) at every level, so NN cost is multiplied
