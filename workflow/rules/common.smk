@@ -2945,7 +2945,7 @@ if enzyme_model != "experimental":
         shell:
             """
             echo "Extracting best formulas for methods: {params.methods}"
-            PYTHONPATH=src python src/pipelines/sr_comparison/get_best_formula.py --methods {params.methods} --hall_of_fame {input.temp_files} --save {output.formula_files} --features {params.features}
+            [ -n "$CONDA_PREFIX" ] && export PATH="$CONDA_PREFIX/bin:$PATH"; PYTHONPATH=src python src/pipelines/sr_comparison/get_best_formula.py --methods {params.methods} --hall_of_fame {input.temp_files} --save {output.formula_files} --features {params.features}
             echo "Best formulas saved to: {output.formula_files}"
             """
 
@@ -2968,7 +2968,7 @@ if enzyme_model != "experimental":
         shell:
             """
             echo "Integrating and plotting results for methods: {params.methods}"
-            PYTHONPATH=src python src/pipelines/sr_comparison/integrate_and_plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --methods {params.methods}  --discovery-scales {params.discovery_scales} --data-proportion {params.data_proportion} --trajectory-column {params.trajectory_column} --output {output.csv} --plot {output.plot}
+            [ -n "$CONDA_PREFIX" ] && export PATH="$CONDA_PREFIX/bin:$PATH"; PYTHONPATH=src python src/pipelines/sr_comparison/integrate_and_plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --methods {params.methods}  --discovery-scales {params.discovery_scales} --data-proportion {params.data_proportion} --trajectory-column {params.trajectory_column} --output {output.csv} --plot {output.plot}
             echo "Integrated results saved to {output.csv}, plot saved to {output.plot}"
             """
 
@@ -2986,7 +2986,7 @@ if enzyme_model != "experimental":
         shell:
             """
             echo "Generating comparison plot for all methods."
-            PYTHONPATH=src python src/pipelines/sr_comparison/plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --output {output} --discovery-scales {params.discovery_scales}
+            [ -n "$CONDA_PREFIX" ] && export PATH="$CONDA_PREFIX/bin:$PATH"; PYTHONPATH=src python src/pipelines/sr_comparison/plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --output {output} --discovery-scales {params.discovery_scales}
             echo "Comparison plot saved to {output}"
             """
 
@@ -3011,7 +3011,7 @@ if enzyme_model != "experimental":
             seed=42
         shell:
             """
-            PYTHONPATH=src python src/pipelines/sr_comparison/plot_sr_timepoint_lineplot.py \
+            [ -n "$CONDA_PREFIX" ] && export PATH="$CONDA_PREFIX/bin:$PATH"; PYTHONPATH=src python src/pipelines/sr_comparison/plot_sr_timepoint_lineplot.py \
                 --dataset {input.dataset} \
                 --train-dataset {input.train} \
                 --features {params.features} \
