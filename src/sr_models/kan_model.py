@@ -83,9 +83,14 @@ def load_dataset(file_path, dataset_size=None, features=None, seed=None):
     if dataset_size:
         data = data.sample(n=min(dataset_size, len(data)), random_state=seed)
 
-    if not data.empty:
-        input_cols = data.columns[:-1]
-        data.loc[:, input_cols] = np.exp(data.loc[:, input_cols])
+    # KAN-specific: keep the inputs on the CSV's native LOG scale (do NOT exp them
+    # to linear like the other methods). KAN approximates each edge with a local
+    # spline over the input's range; linear inputs here are exp() of log-scale
+    # features and span ~5e-5..150, so the splines can't resolve them and KAN
+    # collapses to predicting a near-constant. Log inputs are well-bounded, and
+    # since the target is log(kcat_cg), log(MM)=log(k)+log(s)-log(K+s) is nearly
+    # linear in log inputs -> easy for KAN. (The formula is therefore expressed in
+    # terms of the LOG features; downstream evaluation must feed log inputs.)
     return data
 
 def _parse_width(width_spec: str) -> List[int]:

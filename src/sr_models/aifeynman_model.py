@@ -143,8 +143,8 @@ def neutralize_structural_stages() -> None:
     valuable stages for this low-dimensional target, so we replace them with cheap
     no-ops. The retained stages (brute force, polyfit, translational symmetries,
     separabilities) all rely on the trained NN - which is why NN_EPOCHS was raised
-    to 800 - and complete quickly. Applied from our own code; no site-packages
-    files are edited.
+    above the original 40 - and complete quickly. Applied from our own code; no
+    site-packages files are edited.
     """
     if AI_FEYNMAN_IMPORT_ERROR is not None:
         return
@@ -162,6 +162,23 @@ def neutralize_structural_stages() -> None:
     srun.brute_force_gen_sym = _empty_file("results_gen_sym.dat")
     srun.brute_force_comp = _empty_file("results_comp.dat")
     srun.evaluate_derivatives = lambda *a, **k: 0  # -> skip compositionality
+
+    # Disable the bounded-output "world" transforms (asin/acos/sin/cos/atan/tan).
+    # These assume the target is a trig function of the discovered expression, so
+    # the recovered formula is e.g. asin(...) whose output is capped to +-pi/2.
+    # kcat_cg is a positive rate whose log spans a wide range, so a trig-capped
+    # form fits the sampled data but generalises terribly (range mismatch). Keep
+    # the unbounded transforms (exp/log/sqrt/squared/inverse). Each get_* takes
+    # the running ParetoSet and returns it, so the no-op just passes it through.
+    def _skip_world(*args, **kwargs):
+        for obj in args:
+            if hasattr(obj, "get_pareto_points"):
+                return obj
+        return args[5] if len(args) > 5 else None
+
+    for _world in ("get_asin", "get_acos", "get_sin", "get_cos", "get_atan", "get_tan"):
+        if hasattr(srun, _world):
+            setattr(srun, _world, _skip_world)
 
 
 def _parse_solution_line(line):
