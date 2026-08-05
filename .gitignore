@@ -2,6 +2,10 @@ amici_env/
 amici_models/
 data/
 data_old/
+# Superseded run outputs moved out of the gitignored data/ tree by
+# scripts/migrate_v5_layout.py. Multi-GB and not used by the manuscript; the
+# manifest at archive/superseded/README.md says what each directory was.
+archive/superseded/
 .snakemake/
 model/
 src/dso
@@ -17,6 +21,8 @@ results.dat
 qaz.dat
 wandb/
 .DS_Store
+# Word lock files, created whenever a manuscript draft is open
+~$*.docx
 simulation_venv/
 **/__pycache__/
 outputs/
