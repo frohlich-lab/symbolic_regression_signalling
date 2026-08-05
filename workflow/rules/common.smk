@@ -288,7 +288,14 @@ integration_per_minute_metrics_all_seeds = f"{exp_metrics_root}/marker_integrati
 integration_snapshot_metrics_all_seeds_mean = f"{exp_metrics_root}/marker_integration_metrics_snapshot_all_seeds_mean.csv"
 integration_per_minute_metrics_all_seeds_mean = f"{exp_metrics_root}/marker_integration_metrics_per_minute_all_seeds_mean.csv"
 
-select_k_dir = f"{exp_runs_root}/select_k"
+# Linear-regression reference model, trained and scored on the SAME top-GFP
+# out-of-distribution split as PySR. The directory name records the split, because an
+# in-distribution version of this baseline reverses the manuscript's conclusion: on
+# random GFP bins linreg solves 10/32 contexts at k=10 and PySR holds no advantage
+# (p = 0.455), against 3/32 and p = 0.035 under dose extrapolation. Any comparison
+# against SR must use this one.
+select_k_dir = f"{exp_runs_root}/linreg_ood"
+select_k_split_policy = "top_gfp_bins"
 select_k_metrics = f"{select_k_dir}/select_k_metrics.csv"
 select_k_metrics_agg = f"{select_k_dir}/select_k_metrics_agg.csv"
 select_k_importance = f"{select_k_dir}/select_k_importance.csv"
@@ -329,12 +336,6 @@ neural_ode_dir = f"{exp_runs_root}/neural_ode"
 neural_ode_full_dir = f"{neural_ode_dir}/full"
 neural_ode_matched_dir = f"{neural_ode_dir}/matched"
 
-neural_ode_metrics_full = f"{neural_ode_full_dir}/neural_ode_metrics.csv"
-neural_ode_metrics_agg_full = f"{neural_ode_full_dir}/neural_ode_metrics_agg.csv"
-neural_ode_boxplot_dt_full = f"{neural_ode_full_dir}/boxplot_dt_r2.png"
-neural_ode_boxplot_integ_full = f"{neural_ode_full_dir}/boxplot_integ_r2.png"
-neural_ode_boxplot_ode_full = f"{neural_ode_full_dir}/boxplot_ode_r2.png"
-neural_ode_panel_ode_full = f"{neural_ode_full_dir}/pysr_neuralode_panel_ode.png"
 neural_ode_panel_dt_full = f"{neural_ode_full_dir}/pysr_neuralode_panel_dt.png"
 neural_ode_panel_ode_relmae_full = f"{neural_ode_full_dir}/pysr_neuralode_panel_ode_relmae.png"
 neural_ode_panel_dt_relmae_full = f"{neural_ode_full_dir}/pysr_neuralode_panel_dt_relmae.png"
@@ -357,251 +358,125 @@ neural_ode_pysr_k_vs_r2_matched = f"{neural_ode_matched_dir}/pysr_neuralode_pysr
 neural_ode_sweep_matched = f"{neural_ode_matched_dir}/neural_ode_sweep.csv"
 neural_ode_quadrant_bar_matched = f"{neural_ode_matched_dir}/pysr_neuralode_quadrant_bar.png"
 
-# Diffrax true-NeuralODE baseline (trajectory-loss + backprop-through-solver).
-# Sits in parallel with the pipeline NN's `neural_ode/` directory; shares the
-# same plot script. Note: this script does NOT compute rel-MAE columns, so the
-# plotting rule below does not request the rel-MAE panels.
-neural_ode_diffrax_dir = f"{exp_runs_root}/neural_ode_diffrax"
-neural_ode_diffrax_full_dir = f"{neural_ode_diffrax_dir}/full"
-neural_ode_diffrax_metrics_full = f"{neural_ode_diffrax_full_dir}/neural_ode_metrics.csv"
-neural_ode_diffrax_metrics_agg_full = f"{neural_ode_diffrax_full_dir}/neural_ode_metrics_agg.csv"
-neural_ode_diffrax_boxplot_dt_full = f"{neural_ode_diffrax_full_dir}/boxplot_dt_r2.png"
-neural_ode_diffrax_boxplot_integ_full = f"{neural_ode_diffrax_full_dir}/boxplot_integ_r2.png"
-neural_ode_diffrax_boxplot_ode_full = f"{neural_ode_diffrax_full_dir}/boxplot_ode_r2.png"
-neural_ode_diffrax_panel_ode_full = f"{neural_ode_diffrax_full_dir}/pysr_neuralode_panel_ode.png"
-neural_ode_diffrax_panel_dt_full = f"{neural_ode_diffrax_full_dir}/pysr_neuralode_panel_dt.png"
-neural_ode_diffrax_baseline_full = f"{neural_ode_diffrax_full_dir}/pysr_neuralode_baseline.png"
-neural_ode_diffrax_pysr_k_vs_r2_full = f"{neural_ode_diffrax_full_dir}/pysr_neuralode_pysr_k_vs_r2.png"
-neural_ode_diffrax_quadrant_bar_full = f"{neural_ode_diffrax_full_dir}/pysr_neuralode_quadrant_bar.png"
+# Sparse Neural ODE baseline (Draft SR-MM v5). A small MLP right-hand side is
+# integrated by an adaptive Dopri5 solver and trained on a trajectory-level loss by
+# backpropagation through the solver, with a group-sparsity (L21) penalty on the
+# columns of the input Jacobian. The penalty is what makes the participation ratio
+# readable as a count of the variables the learned field actually uses, which is what
+# puts the network and PySR on comparable footing.
+#
+# All three variants are trained under the top_gfp_bins split, so their held-out score
+# is dose extrapolation rather than dose interpolation. L21 at lambda_jac = 3.0 is the
+# main-text "Neural ODE"; L1 and the path-regularised (C-NODE) variant are the SI
+# robustness check (Fig. S3A, Table S8) showing held-out accuracy is insensitive to the
+# choice of penalty.
+sparse_node_dir = f"{exp_runs_root}/sparse_neural_ode"
+sparse_node_l21_dir   = f"{sparse_node_dir}/l21_lam3"
+sparse_node_l1_dir    = f"{sparse_node_dir}/l1"
+sparse_node_cnode_dir = f"{sparse_node_dir}/pathreg"
+sparse_node_seeds = [42, 43, 44]
 
-# Causal analysis (Jacobian-mass driver/brake split + PR distribution + Hessian
-# gating heatmaps). Reads per-(seed, marker) checkpoints from the baseline's
-# `_seeds/` staging dir — those only exist when the baseline was run with
-# `--save-models`.
-neural_ode_diffrax_causal_dir = f"{neural_ode_diffrax_dir}/causal"
-neural_ode_diffrax_causal_summary = f"{neural_ode_diffrax_causal_dir}/causal_summary.csv"
-neural_ode_diffrax_causal_pr_csv = f"{neural_ode_diffrax_causal_dir}/participation_ratio_per_seed.csv"
-neural_ode_diffrax_causal_pr_plot = f"{neural_ode_diffrax_causal_dir}/participation_ratio.png"
 
-# Jacobian-sparsity regularisation sweep: trains a handful of markers under a
-# log-spaced ladder of L1 strengths so we can pick the elbow at which the test
-# trajectory R² starts dropping but participation ratio has collapsed.
-neural_ode_diffrax_lambda_sweep_dir = f"{neural_ode_diffrax_dir}/lambda_sweep"
-neural_ode_diffrax_lambda_sweep_csv = f"{neural_ode_diffrax_lambda_sweep_dir}/lambda_sweep.csv"
+def _sparse_node_metrics(variant_dir):
+    """The real per-seed outputs of a variant, rather than a .done sentinel.
 
-# OOD variant: same trainer + same λ, but the GFP-bin split policy is
-# top_gfp_bins -> the highest-dose bins are held out as test, so generalisation
-# is genuine extrapolation rather than dose-interpolation. Outputs mirror the
-# random-bins structure under a _ood suffix.
-neural_ode_diffrax_full_ood_dir = f"{neural_ode_diffrax_dir}/full_ood"
-neural_ode_diffrax_metrics_full_ood = f"{neural_ode_diffrax_full_ood_dir}/neural_ode_metrics.csv"
-neural_ode_diffrax_metrics_agg_full_ood = f"{neural_ode_diffrax_full_ood_dir}/neural_ode_metrics_agg.csv"
-neural_ode_diffrax_boxplot_dt_full_ood = f"{neural_ode_diffrax_full_ood_dir}/boxplot_dt_r2.png"
-neural_ode_diffrax_boxplot_integ_full_ood = f"{neural_ode_diffrax_full_ood_dir}/boxplot_integ_r2.png"
-neural_ode_diffrax_boxplot_ode_full_ood = f"{neural_ode_diffrax_full_ood_dir}/boxplot_ode_r2.png"
-neural_ode_diffrax_panel_ode_full_ood = f"{neural_ode_diffrax_full_ood_dir}/pysr_neuralode_panel_ode.png"
-neural_ode_diffrax_panel_dt_full_ood = f"{neural_ode_diffrax_full_ood_dir}/pysr_neuralode_panel_dt.png"
-neural_ode_diffrax_baseline_full_ood = f"{neural_ode_diffrax_full_ood_dir}/pysr_neuralode_baseline.png"
-neural_ode_diffrax_pysr_k_vs_r2_full_ood = f"{neural_ode_diffrax_full_ood_dir}/pysr_neuralode_pysr_k_vs_r2.png"
-neural_ode_diffrax_quadrant_bar_full_ood = f"{neural_ode_diffrax_full_ood_dir}/pysr_neuralode_quadrant_bar.png"
-neural_ode_diffrax_causal_ood_dir = f"{neural_ode_diffrax_dir}/causal_ood"
-neural_ode_diffrax_causal_ood_summary = f"{neural_ode_diffrax_causal_ood_dir}/causal_summary.csv"
-neural_ode_diffrax_causal_ood_pr_csv = f"{neural_ode_diffrax_causal_ood_dir}/participation_ratio_per_seed.csv"
-neural_ode_diffrax_causal_ood_pr_plot = f"{neural_ode_diffrax_causal_ood_dir}/participation_ratio.png"
+    A sentinel would let a completed run look unbuilt (and a half-finished one look
+    complete). These runs were staged from the cluster, where no sentinel was ever
+    written, so naming the actual metrics files is both more honest and what makes the
+    downstream figure rules depend on something real.
+    """
+    return [
+        f"{variant_dir}/seed_{seed}/neural_ode_diffrax_metrics.csv"
+        for seed in sparse_node_seeds
+    ]
 
-# Paper-figure sweeps: three OOD regulariser variants used in main text + appendix.
-# In the main text "Neural ODE" refers to L21 (λ_jac = 3.0, group-sparse). L1 and
-# C-NODE are reported in the appendix.
-neural_ode_diffrax_l1_seeds_dir    = f"{neural_ode_diffrax_dir}/_seeds_ood_l1_archive"
-neural_ode_diffrax_l21_seeds_dir   = f"{neural_ode_diffrax_dir}/_seeds_ood_l21j_only"
-neural_ode_diffrax_cnode_seeds_dir = f"{neural_ode_diffrax_dir}/_seeds_ood_pathreg"
-neural_ode_diffrax_l1_done    = f"{neural_ode_diffrax_l1_seeds_dir}/.done"
-neural_ode_diffrax_l21_done   = f"{neural_ode_diffrax_l21_seeds_dir}/.done"
-neural_ode_diffrax_cnode_done = f"{neural_ode_diffrax_cnode_seeds_dir}/.done"
 
-# Main-text + appendix paper figures.
+sparse_node_l21_done   = _sparse_node_metrics(sparse_node_l21_dir)
+sparse_node_l1_done    = _sparse_node_metrics(sparse_node_l1_dir)
+sparse_node_cnode_done = _sparse_node_metrics(sparse_node_cnode_dir)
+
+# ---------------------------------------------------------------------
+# Draft SR-MM v5 experimental stages. The rules that build these live in
+# workflow/rules/experimental.smk; the paths are here so that `rule all`
+# below can reference them.
+# ---------------------------------------------------------------------
+
+pysr_sweep_dir      = f"{exp_runs_root}/pysr_config_sweep"
+pysr_sweep_screen   = f"{pysr_sweep_dir}/metrics/screen_final.csv"
+pysr_sweep_table    = f"{pysr_sweep_dir}/metrics/table_s10_config_sweep.csv"
+pysr_sweep_config   = f"{pysr_sweep_dir}/selected_config.tsv"
+
+# The six-context development set. Fixed here rather than derived, because the
+# configuration was chosen on exactly these and Table S10 is only meaningful for
+# them; a silently widened set would not be the reported sweep.
+pysr_sweep_dev_contexts = ["AKT3", "ALPK2", "DYRK2", "ERBB2", "PIP5K3", "PTPN7"]
+
+pysr_final_dir       = f"{exp_runs_root}/pysr_ood_final"
+pysr_final_seeds     = [42, 43, 44]
+pysr_final_formulas  = [
+    f"{pysr_final_dir}/seeds/seed_{s}/formulas/all_per_minute.txt"
+    for s in pysr_final_seeds
+]
+pysr_final_metrics   = [
+    f"{pysr_final_dir}/seeds/seed_{s}/metrics/"
+    f"marker_integration_metrics_per_minute.csv"
+    for s in pysr_final_seeds
+]
+pysr_final_per_fit   = f"{pysr_final_dir}/metrics/integrated_r2_per_fit.csv"
+pysr_final_summary   = f"{pysr_final_dir}/metrics/success_rate_summary.csv"
+pysr_final_exemplars = f"{pysr_final_dir}/metrics/exemplar_ranking.csv"
+
+# R2 >= 0.6 is the satisfactory-model criterion: trajectories up to this cutoff
+# still reproduce the main qualitative features of the measured dynamics on
+# integration (Fig. S2).
+exp_r2_threshold = 0.6
+
+# Control contexts carry no overexpression construct, so they have no GFP
+# dose-response and "extrapolating to an unseen dose" reduces to predicting the same
+# trajectory again. They score a median 0.85 and are excluded from the comparison
+# panels; including them would lift the headline rate from 8/32 to 15/40 with no
+# dose-response biology behind it. untransfected1 is already excluded by default.
+exp_control_contexts = [
+    "untransfected2", "untransfected3", "untransfected4",
+    "FLAG-GFP1", "FLAG-GFP2", "FLAG-GFP3", "FLAG-GFP4",
+]
+exp_exclude_flags = " ".join(
+    f"--exclude-marker {m}" for m in exp_control_contexts
+)
+
 paper_fig_dir = f"{exp_runs_root}/paper_figures"
 paper_fig_parsimony_tradeoff = f"{paper_fig_dir}/scatter_parsimony_tradeoff.png"
 paper_fig_cutoff_robustness  = f"{paper_fig_dir}/cutoff_robustness.png"
 paper_fig_nn_appendix        = f"{paper_fig_dir}/nn_appendix_comparison.png"
+paper_fig_sr_vs_linreg       = f"{paper_fig_dir}/sr_vs_linreg_ood_scatter.png"
+paper_fig_sr_vs_linreg_k4    = f"{paper_fig_dir}/sr_vs_linreg_ood_scatter_k4.png"
 
-random_forest_dir = f"{exp_runs_root}/random_forest"
-random_forest_full_dir = f"{random_forest_dir}/full"
-random_forest_matched_dir = f"{random_forest_dir}/matched"
+# PySR's solved equations use a median of four variables, so k=4 is the
+# complexity-matched baseline (Fig. S4) and k=10 the full-pool one (Fig. 4D). The
+# match is on the NUMBER of inputs, not their identity: the baseline picks its k by
+# univariate F-test while PySR picks its own subset by search.
+linreg_k_full = 10
+linreg_k_matched = 4
 
-random_forest_metrics_full = f"{random_forest_full_dir}/random_forest_metrics.csv"
-random_forest_metrics_agg_full = f"{random_forest_full_dir}/random_forest_metrics_agg.csv"
-random_forest_boxplot_r2_full = f"{random_forest_full_dir}/boxplot_state_r2.png"
-random_forest_boxplot_relmae_full = f"{random_forest_full_dir}/boxplot_state_relmae.png"
-random_forest_panel_r2_full = f"{random_forest_full_dir}/pysr_randomforest_panel_r2.png"
-random_forest_panel_r2_full_svg = f"{random_forest_full_dir}/pysr_randomforest_panel_r2.svg"
-random_forest_panel_relmae_full = f"{random_forest_full_dir}/pysr_randomforest_panel_relmae.png"
-random_forest_panel_relmae_full_svg = f"{random_forest_full_dir}/pysr_randomforest_panel_relmae.svg"
+# Fig. S3B: the lambda_jac elbow sweep. One subdirectory per lambda, all markers.
+sparse_node_lambda_sweep_dir = f"{sparse_node_dir}/lambda_sweep"
+sparse_node_lambda_sweep_csv = f"{sparse_node_dir}/lambda_sweep_summary.csv"
+sparse_node_lambda_values = [1.0, 2.0, 3.0, 5.0, 8.0, 15.0, 30.0]
 
-random_forest_metrics_matched = f"{random_forest_matched_dir}/random_forest_metrics.csv"
-random_forest_metrics_agg_matched = f"{random_forest_matched_dir}/random_forest_metrics_agg.csv"
-random_forest_boxplot_r2_matched = f"{random_forest_matched_dir}/boxplot_state_r2.png"
-random_forest_boxplot_relmae_matched = f"{random_forest_matched_dir}/boxplot_state_relmae.png"
-random_forest_panel_r2_matched = f"{random_forest_matched_dir}/pysr_randomforest_panel_r2.png"
-random_forest_panel_r2_matched_svg = f"{random_forest_matched_dir}/pysr_randomforest_panel_r2.svg"
-random_forest_panel_relmae_matched = f"{random_forest_matched_dir}/pysr_randomforest_panel_relmae.png"
-random_forest_panel_relmae_matched_svg = f"{random_forest_matched_dir}/pysr_randomforest_panel_relmae.svg"
+# Table S9 / Fig. S3C: architecture + optimisation grid, scored on in-distribution
+# validation R2 only, so the held-out highest-dose bins play no part in the choice.
+sparse_node_arch_grid_csv = f"{sparse_node_dir}/arch_grid.csv"
 
-random_forest_dt_dir = f"{exp_runs_root}/random_forest_dt_top_gfp_ood"
-random_forest_dt_direct_dir = f"{random_forest_dt_dir}/direct"
-random_forest_dt_minus_erk_dir = f"{random_forest_dt_dir}/minus_erk"
+# Aliases kept because the surviving rules and helper below were written against the
+# older names.
+neural_ode_diffrax_dir = sparse_node_dir
+neural_ode_diffrax_l1_seeds_dir    = sparse_node_l1_dir
+neural_ode_diffrax_l21_seeds_dir   = sparse_node_l21_dir
+neural_ode_diffrax_cnode_seeds_dir = sparse_node_cnode_dir
+neural_ode_diffrax_l1_done    = sparse_node_l1_done
+neural_ode_diffrax_l21_done   = sparse_node_l21_done
+neural_ode_diffrax_cnode_done = sparse_node_cnode_done
 
-random_forest_dt_metrics_direct = f"{random_forest_dt_direct_dir}/random_forest_dt_metrics.csv"
-random_forest_dt_metrics_agg_direct = f"{random_forest_dt_direct_dir}/random_forest_dt_metrics_agg.csv"
-random_forest_dt_boxplot_dt_direct = f"{random_forest_dt_direct_dir}/boxplot_dt_r2.png"
-random_forest_dt_boxplot_integ_direct = f"{random_forest_dt_direct_dir}/boxplot_integ_r2.png"
-random_forest_dt_boxplot_ode_direct = f"{random_forest_dt_direct_dir}/boxplot_ode_r2.png"
-random_forest_dt_importance_direct = f"{random_forest_dt_direct_dir}/random_forest_dt_feature_importance.csv"
-random_forest_dt_importance_agg_direct = f"{random_forest_dt_direct_dir}/random_forest_dt_feature_importance_agg.csv"
-random_forest_dt_importance_by_marker_direct = f"{random_forest_dt_direct_dir}/feature_importance_by_marker.png"
-
-random_forest_dt_metrics_minus_erk = f"{random_forest_dt_minus_erk_dir}/random_forest_dt_metrics.csv"
-random_forest_dt_metrics_agg_minus_erk = f"{random_forest_dt_minus_erk_dir}/random_forest_dt_metrics_agg.csv"
-random_forest_dt_boxplot_dt_minus_erk = f"{random_forest_dt_minus_erk_dir}/boxplot_dt_r2.png"
-random_forest_dt_boxplot_integ_minus_erk = f"{random_forest_dt_minus_erk_dir}/boxplot_integ_r2.png"
-random_forest_dt_boxplot_ode_minus_erk = f"{random_forest_dt_minus_erk_dir}/boxplot_ode_r2.png"
-random_forest_dt_importance_minus_erk = f"{random_forest_dt_minus_erk_dir}/random_forest_dt_feature_importance.csv"
-random_forest_dt_importance_agg_minus_erk = f"{random_forest_dt_minus_erk_dir}/random_forest_dt_feature_importance_agg.csv"
-random_forest_dt_importance_by_marker_minus_erk = f"{random_forest_dt_minus_erk_dir}/feature_importance_by_marker.png"
-random_forest_dt_pysr_feature_usage_dir = f"{random_forest_dt_minus_erk_dir}/feature_usage_comparison"
-random_forest_dt_pysr_feature_usage_csv = f"{random_forest_dt_pysr_feature_usage_dir}/rf_vs_pysr_feature_usage_by_marker.csv"
-random_forest_dt_pysr_feature_usage_heatmap = f"{random_forest_dt_pysr_feature_usage_dir}/rf_vs_pysr_feature_usage_heatmap.png"
-random_forest_dt_pysr_feature_usage_heatmap_svg = f"{random_forest_dt_pysr_feature_usage_dir}/rf_vs_pysr_feature_usage_heatmap.svg"
-random_forest_dt_pysr_feature_overlap = f"{random_forest_dt_pysr_feature_usage_dir}/rf_vs_pysr_feature_overlap_by_marker.png"
-random_forest_dt_pysr_feature_overlap_svg = f"{random_forest_dt_pysr_feature_usage_dir}/rf_vs_pysr_feature_overlap_by_marker.svg"
-random_forest_dt_pysr_threshold_feature_usage_heatmap = f"{random_forest_dt_pysr_feature_usage_dir}/rf_vs_pysr_threshold_feature_usage_heatmap.png"
-random_forest_dt_pysr_threshold_feature_usage_heatmap_svg = f"{random_forest_dt_pysr_feature_usage_dir}/rf_vs_pysr_threshold_feature_usage_heatmap.svg"
-random_forest_dt_pysr_threshold_feature_overlap = f"{random_forest_dt_pysr_feature_usage_dir}/rf_vs_pysr_threshold_feature_overlap_by_marker.png"
-random_forest_dt_pysr_threshold_feature_overlap_svg = f"{random_forest_dt_pysr_feature_usage_dir}/rf_vs_pysr_threshold_feature_overlap_by_marker.svg"
-random_forest_dt_rf_r2_by_pysr_perk_dependence = f"{random_forest_dt_pysr_feature_usage_dir}/rf_ood_r2_by_pysr_perk_dependence.png"
-random_forest_dt_rf_r2_by_pysr_perk_dependence_svg = f"{random_forest_dt_pysr_feature_usage_dir}/rf_ood_r2_by_pysr_perk_dependence.svg"
-random_forest_dt_rf_r2_by_pysr_perk_dependence_csv = f"{random_forest_dt_pysr_feature_usage_dir}/rf_ood_r2_by_pysr_perk_dependence.csv"
-random_forest_dt_rf_r2_by_pysr_perk_dependence_stats_csv = f"{random_forest_dt_pysr_feature_usage_dir}/rf_ood_r2_by_pysr_perk_dependence_stats.csv"
-random_forest_dt_rf_r2_by_pysr_perk_dependence_high_r2 = f"{random_forest_dt_pysr_feature_usage_dir}/rf_ood_r2_by_pysr_perk_dependence_pysr_gt_0p6.png"
-random_forest_dt_rf_r2_by_pysr_perk_dependence_high_r2_svg = f"{random_forest_dt_pysr_feature_usage_dir}/rf_ood_r2_by_pysr_perk_dependence_pysr_gt_0p6.svg"
-random_forest_dt_rf_r2_by_pysr_perk_dependence_high_r2_csv = f"{random_forest_dt_pysr_feature_usage_dir}/rf_ood_r2_by_pysr_perk_dependence_pysr_gt_0p6.csv"
-random_forest_dt_rf_r2_by_pysr_perk_dependence_high_r2_stats_csv = f"{random_forest_dt_pysr_feature_usage_dir}/rf_ood_r2_by_pysr_perk_dependence_pysr_gt_0p6_stats.csv"
-random_forest_dt_best_seed_rf_vs_pysr_r2 = f"{random_forest_dt_pysr_feature_usage_dir}/best_seed_rf_vs_pysr_ood_r2_by_perk_dependence.png"
-random_forest_dt_best_seed_rf_vs_pysr_r2_svg = f"{random_forest_dt_pysr_feature_usage_dir}/best_seed_rf_vs_pysr_ood_r2_by_perk_dependence.svg"
-random_forest_dt_minus_erk_analysis_dir = f"{random_forest_dt_minus_erk_dir}/trajectory_analysis"
-random_forest_dt_minus_erk_analysis_summary_dir = f"{random_forest_dt_minus_erk_analysis_dir}/summary"
-random_forest_dt_minus_erk_analysis_perk_dir = f"{random_forest_dt_minus_erk_analysis_dir}/plots/perk"
-random_forest_dt_minus_erk_analysis_target_dir = f"{random_forest_dt_minus_erk_analysis_dir}/plots/target"
-random_forest_dt_minus_erk_analysis_branch_dir = f"{random_forest_dt_minus_erk_analysis_dir}/plots/branch_panels"
-
-random_forest_dt_perk_nn_minus_erk_csv = f"{random_forest_dt_minus_erk_analysis_summary_dir}/perk_trajectory_nn_vs_seedavg_ode_r2.csv"
-random_forest_dt_perk_nn_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_nn_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_nn_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_nn_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_nn_median_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_median_nn_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_nn_median_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_median_nn_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_nn_p90_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_p90_nn_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_nn_p90_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_p90_nn_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_quantile_band_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_quantile_band_positive_mean_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_quantile_band_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_quantile_band_positive_mean_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_mean_train_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_mean_train_distance_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_mean_train_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_mean_train_distance_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_dist_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_distribution_distance_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_dist_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_distribution_distance_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_variance_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_variance_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_variance_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_variance_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_top20_variance_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top20_gfp_variance_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_top20_variance_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top20_gfp_variance_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_top15_variance_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top15_gfp_variance_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_top15_variance_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top15_gfp_variance_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_amplitude_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_amplitude_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_amplitude_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_amplitude_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_top20_amplitude_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top20_gfp_amplitude_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_top20_amplitude_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top20_gfp_amplitude_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_top15_amplitude_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top15_gfp_amplitude_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_top15_amplitude_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top15_gfp_amplitude_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_amplitude_ratio_sum_top15_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_amplitude_ratio_plus_top15_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_amplitude_ratio_sum_top15_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_amplitude_ratio_plus_top15_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_amplitude_ratio_top15_over_full_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_amplitude_ratio_top15_over_full_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_amplitude_ratio_top15_over_full_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_amplitude_ratio_top15_over_full_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_top20_trace_cov_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top20_gfp_trace_cov_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_top20_trace_cov_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top20_gfp_trace_cov_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_top15_trace_cov_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top15_gfp_trace_cov_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_top15_trace_cov_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top15_gfp_trace_cov_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_top20_pairwise_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top20_gfp_pairwise_sq_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_top20_pairwise_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top20_gfp_pairwise_sq_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_top15_pairwise_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top15_gfp_pairwise_sq_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_top15_pairwise_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_top15_gfp_pairwise_sq_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_tail_shape_continuation_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_tail_shape_continuation_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_tail_shape_continuation_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_tail_shape_continuation_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_tail_envelope_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_tail_envelope_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_tail_envelope_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_tail_envelope_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_tail_raw_continuation_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_tail_raw_continuation_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_tail_raw_continuation_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_tail_raw_continuation_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_tail_local_pca_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_tail_local_pca_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_tail_local_pca_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_tail_local_pca_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_boundary_jump_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_boundary_jump_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_boundary_jump_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_boundary_jump_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_tail_convex_hull_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_tail_convex_hull_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_tail_convex_hull_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_tail_convex_hull_vs_seedavg_ode_r2.svg"
-random_forest_dt_perk_tail_timepoint_continuation_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_tail_timepoint_continuation_vs_seedavg_ode_r2.png"
-random_forest_dt_perk_tail_timepoint_continuation_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_perk_dir}/perk_trajectory_tail_timepoint_continuation_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_nn_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_nn_vs_seedavg_ode_r2.png"
-random_forest_dt_target_nn_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_nn_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_nn_median_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_median_nn_vs_seedavg_ode_r2.png"
-random_forest_dt_target_nn_median_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_median_nn_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_nn_p90_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_p90_nn_vs_seedavg_ode_r2.png"
-random_forest_dt_target_nn_p90_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_p90_nn_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_quantile_band_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_quantile_band_positive_mean_vs_seedavg_ode_r2.png"
-random_forest_dt_target_quantile_band_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_quantile_band_positive_mean_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_mean_train_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_mean_train_distance_vs_seedavg_ode_r2.png"
-random_forest_dt_target_mean_train_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_mean_train_distance_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_dist_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_distribution_distance_vs_seedavg_ode_r2.png"
-random_forest_dt_target_dist_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_distribution_distance_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_variance_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_variance_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_target_variance_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_variance_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_top20_variance_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top20_gfp_variance_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_target_top20_variance_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top20_gfp_variance_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_top15_variance_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top15_gfp_variance_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_target_top15_variance_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top15_gfp_variance_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_amplitude_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_amplitude_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_target_amplitude_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_amplitude_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_top20_amplitude_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top20_gfp_amplitude_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_target_top20_amplitude_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top20_gfp_amplitude_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_top15_amplitude_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top15_gfp_amplitude_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_target_top15_amplitude_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top15_gfp_amplitude_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_amplitude_ratio_sum_top15_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_amplitude_ratio_plus_top15_vs_seedavg_ode_r2.png"
-random_forest_dt_target_amplitude_ratio_sum_top15_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_amplitude_ratio_plus_top15_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_amplitude_ratio_top15_over_full_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_amplitude_ratio_top15_over_full_vs_seedavg_ode_r2.png"
-random_forest_dt_target_amplitude_ratio_top15_over_full_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_amplitude_ratio_top15_over_full_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_top20_trace_cov_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top20_gfp_trace_cov_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_target_top20_trace_cov_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top20_gfp_trace_cov_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_top15_trace_cov_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top15_gfp_trace_cov_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_target_top15_trace_cov_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top15_gfp_trace_cov_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_top20_pairwise_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top20_gfp_pairwise_sq_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_target_top20_pairwise_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top20_gfp_pairwise_sq_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_top15_pairwise_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top15_gfp_pairwise_sq_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_target_top15_pairwise_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_top15_gfp_pairwise_sq_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_tail_shape_continuation_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_tail_shape_continuation_vs_seedavg_ode_r2.png"
-random_forest_dt_target_tail_shape_continuation_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_tail_shape_continuation_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_tail_envelope_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_tail_envelope_vs_seedavg_ode_r2.png"
-random_forest_dt_target_tail_envelope_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_tail_envelope_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_tail_raw_continuation_ratio_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_tail_raw_continuation_ratio_vs_seedavg_ode_r2.png"
-random_forest_dt_target_tail_raw_continuation_ratio_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_tail_raw_continuation_ratio_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_tail_local_pca_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_tail_local_pca_vs_seedavg_ode_r2.png"
-random_forest_dt_target_tail_local_pca_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_tail_local_pca_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_boundary_jump_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_boundary_jump_vs_seedavg_ode_r2.png"
-random_forest_dt_target_boundary_jump_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_boundary_jump_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_tail_convex_hull_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_tail_convex_hull_vs_seedavg_ode_r2.png"
-random_forest_dt_target_tail_convex_hull_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_tail_convex_hull_vs_seedavg_ode_r2.svg"
-random_forest_dt_target_tail_timepoint_continuation_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_tail_timepoint_continuation_vs_seedavg_ode_r2.png"
-random_forest_dt_target_tail_timepoint_continuation_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/perk_dt_trajectory_tail_timepoint_continuation_vs_seedavg_ode_r2.svg"
-random_forest_dt_tail_timepoint_worstcase_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/tail_timepoint_continuation_worstcase_vs_seedavg_ode_r2.png"
-random_forest_dt_tail_timepoint_worstcase_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/tail_timepoint_continuation_worstcase_vs_seedavg_ode_r2.svg"
-random_forest_dt_branch_break_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_target_dir}/tail_branch_break_score_vs_seedavg_ode_r2.png"
-random_forest_dt_branch_break_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_target_dir}/tail_branch_break_score_vs_seedavg_ode_r2.svg"
-random_forest_dt_tail_branch_panels_minus_erk_plot = f"{random_forest_dt_minus_erk_analysis_branch_dir}/rf_minus_erk_tail_branch_panels.png"
-random_forest_dt_tail_branch_panels_minus_erk_plot_svg = f"{random_forest_dt_minus_erk_analysis_branch_dir}/rf_minus_erk_tail_branch_panels.svg"
-random_forest_dt_tail_branch_panels_minus_erk_csv = f"{random_forest_dt_minus_erk_analysis_summary_dir}/rf_minus_erk_tail_branch_panels.csv"
 
 # Metrics scatter outputs
 metrics_models_r2 = f"{plots_metrics_scatter_dir}/dt/metrics_models_scatter_r2.png"
@@ -755,24 +630,11 @@ if enzyme_model == "experimental":
         select_k_boxplot_ode,
         select_k_ribbon_coef,
         select_k_ribbon_variance,
-        select_k_panel_a_box,
-        select_k_panel_a,
-        select_k_panel_b,
-        select_k_panel_a_dt,
-        select_k_panel_b_dt,
-        select_k_panel_a_box_dt,
-        select_k_panel_a_linreg_bar,
-        select_k_panel_a_relmae,
-        select_k_panel_b_relmae,
-        select_k_panel_a_box_relmae,
-        select_k_panel_a_relmae_dt,
-        select_k_panel_b_relmae_dt,
-        select_k_panel_a_box_relmae_dt,
-        select_k_panel_a_linreg_bar_relmae,
-        select_k_variability_dt,
-        select_k_variability_perk,
-        select_k_pysr_k_vs_r2,
-        select_k_heatmap,
+        # The `select_k_panel_*` artefacts used to be requested here too. They came from
+        # `experimental_plot_pysr_vs_selectk`, an in-distribution PySR-vs-linreg
+        # comparison that v5 does not use; the OOD comparison is
+        # `experimental_paper_fig_sr_vs_linreg`. The rule is gone, so requesting its
+        # outputs would leave the default target unbuildable.
         metrics_models_r2,
         metrics_models_r2_svg,
         metrics_models_relmae,
@@ -798,6 +660,30 @@ if enzyme_model == "experimental":
             ]
         )
 
+    # The v5 manuscript outputs. Rules that build them are in experimental.smk; their
+    # paths are defined above so this target can name them.
+    experimental_rule_all_inputs.extend([
+        pysr_sweep_table,
+        pysr_sweep_config,
+        pysr_final_per_fit,
+        pysr_final_summary,
+        pysr_final_exemplars,
+        paper_fig_parsimony_tradeoff,
+        paper_fig_sr_vs_linreg,
+        paper_fig_sr_vs_linreg_k4,
+        paper_fig_nn_appendix,
+        paper_fig_cutoff_robustness,
+    ])
+
+    # Must stay the FIRST rule in the workflow: Snakemake takes the first rule it parses
+    # as the default target, and the `default_target: True` directive is not honoured
+    # from inside a conditional block. Moving this below `experimental_marker_inputs`
+    # silently reduces a bare `snakemake` to building only the data-prep stage.
+    #
+    # Note this requests `marker_summary_output` and the snapshot/per-minute integration
+    # metrics -- the in-distribution PySR run, whose outputs are archived as superseded,
+    # so building `all` from scratch re-runs it. For the manuscript outputs alone use
+    # `experimental_v5_all`; for just the numbers, `experimental_v5_tables`.
     rule all:
         input:
             experimental_rule_all_inputs
@@ -960,6 +846,7 @@ if enzyme_model == "experimental":
             late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
             late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
             seeds="42 43 44",
+            split_policy=select_k_split_policy,
         shell:
             """
             mkdir -p {params.out_dir}
@@ -971,746 +858,10 @@ if enzyme_model == "experimental":
                 --late-sample-window {params.late_window_start} {params.late_window_end} \
                 --late-sample-points {params.late_points} \
                 --seeds {params.seeds} \
+                --test-split-policy {params.split_policy} \
                 --measured-timepoints {params.measured}
             """
 
-    rule experimental_neural_ode_baseline:
-        input:
-            per_minute=marker_per_minute_csv
-        output:
-            metrics=neural_ode_metrics_full,
-            metrics_agg=neural_ode_metrics_agg_full,
-            boxplot_dt=neural_ode_boxplot_dt_full,
-            boxplot_integ=neural_ode_boxplot_integ_full,
-            boxplot_ode=neural_ode_boxplot_ode_full
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=neural_ode_full_dir,
-            measured=" ".join(str(t) for t in exp_measured_timepoints),
-            max_time=exp_per_minute_max_time,
-            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
-            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
-            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
-            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
-            seeds="42 43 44",
-        shell:
-            """
-            mkdir -p {params.out_dir}
-            python src/pipelines/experimental/sr_pipeline/neural_ode_baseline_per_minute.py \
-                --dataset {input.per_minute} \
-                --output-dir {params.out_dir} \
-                --per-minute-max-time {params.max_time} \
-                --per-minute-sampling-strategy {params.strategy} \
-                --late-sample-window {params.late_window_start} {params.late_window_end} \
-                --late-sample-points {params.late_points} \
-                --seeds {params.seeds} \
-                --measured-timepoints {params.measured} \
-                --sweep-output {neural_ode_sweep_full}
-            """
-
-    rule experimental_neural_ode_sweep:
-        input:
-            per_minute=marker_per_minute_csv
-        output:
-            sweep=neural_ode_sweep_full
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=neural_ode_full_dir,
-            measured=" ".join(str(t) for t in exp_measured_timepoints),
-            max_time=exp_per_minute_max_time,
-            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
-            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
-            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
-            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
-            seeds="42 43 44",
-        shell:
-            """
-            mkdir -p {params.out_dir}
-            python src/pipelines/experimental/sr_pipeline/neural_ode_baseline_per_minute.py \
-                --dataset {input.per_minute} \
-                --output-dir {params.out_dir} \
-                --per-minute-max-time {params.max_time} \
-                --per-minute-sampling-strategy {params.strategy} \
-                --late-sample-window {params.late_window_start} {params.late_window_end} \
-                --late-sample-points {params.late_points} \
-                --seeds {params.seeds} \
-                --measured-timepoints {params.measured} \
-                --sweep-output {output.sweep} \
-                --sweep-only
-            """
-
-    rule experimental_neural_ode_baseline_matched:
-        input:
-            per_minute=marker_per_minute_csv,
-            pysr=integration_per_minute_metrics
-        output:
-            metrics=neural_ode_metrics_matched,
-            metrics_agg=neural_ode_metrics_agg_matched,
-            boxplot_dt=neural_ode_boxplot_dt_matched,
-            boxplot_integ=neural_ode_boxplot_integ_matched,
-            boxplot_ode=neural_ode_boxplot_ode_matched
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=neural_ode_matched_dir,
-            measured=" ".join(str(t) for t in exp_measured_timepoints),
-            max_time=exp_per_minute_max_time,
-            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
-            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
-            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
-            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
-            seeds="42 43 44",
-        shell:
-            """
-            mkdir -p {params.out_dir}
-            python src/pipelines/experimental/sr_pipeline/neural_ode_baseline_per_minute.py \
-                --dataset {input.per_minute} \
-                --output-dir {params.out_dir} \
-                --per-minute-max-time {params.max_time} \
-                --per-minute-sampling-strategy {params.strategy} \
-                --late-sample-window {params.late_window_start} {params.late_window_end} \
-                --late-sample-points {params.late_points} \
-                --seeds {params.seeds} \
-                --measured-timepoints {params.measured} \
-                --sweep-output {neural_ode_sweep_matched} \
-                --pysr-metrics {input.pysr} \
-                --tag matched_k
-            """
-
-    rule experimental_neural_ode_sweep_matched:
-        input:
-            per_minute=marker_per_minute_csv,
-            pysr=integration_per_minute_metrics
-        output:
-            sweep=neural_ode_sweep_matched
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=neural_ode_matched_dir,
-            measured=" ".join(str(t) for t in exp_measured_timepoints),
-            max_time=exp_per_minute_max_time,
-            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
-            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
-            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
-            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
-            seeds="42 43 44",
-        shell:
-            """
-            mkdir -p {params.out_dir}
-            python src/pipelines/experimental/sr_pipeline/neural_ode_baseline_per_minute.py \
-                --dataset {input.per_minute} \
-                --output-dir {params.out_dir} \
-                --per-minute-max-time {params.max_time} \
-                --per-minute-sampling-strategy {params.strategy} \
-                --late-sample-window {params.late_window_start} {params.late_window_end} \
-                --late-sample-points {params.late_points} \
-                --seeds {params.seeds} \
-                --measured-timepoints {params.measured} \
-                --sweep-output {output.sweep} \
-                --pysr-metrics {input.pysr} \
-                --tag matched_k \
-                --sweep-only
-            """
-
-    rule experimental_random_forest_baseline:
-        input:
-            per_minute=marker_per_minute_csv
-        output:
-            metrics=random_forest_metrics_full,
-            metrics_agg=random_forest_metrics_agg_full,
-            boxplot_r2=random_forest_boxplot_r2_full,
-            boxplot_relmae=random_forest_boxplot_relmae_full
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=random_forest_full_dir,
-            measured=" ".join(str(t) for t in exp_measured_timepoints),
-            max_time=exp_per_minute_max_time,
-            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
-            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
-            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
-            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
-            seeds="42 43 44",
-        shell:
-            """
-            mkdir -p {params.out_dir}
-            python src/pipelines/experimental/sr_pipeline/random_forest_baseline_per_minute.py \
-                --dataset {input.per_minute} \
-                --output-dir {params.out_dir} \
-                --per-minute-max-time {params.max_time} \
-                --per-minute-sampling-strategy {params.strategy} \
-                --late-sample-window {params.late_window_start} {params.late_window_end} \
-                --late-sample-points {params.late_points} \
-                --seeds {params.seeds} \
-                --measured-timepoints {params.measured}
-            """
-
-    rule experimental_random_forest_baseline_matched:
-        input:
-            per_minute=marker_per_minute_csv
-        output:
-            metrics=random_forest_metrics_matched,
-            metrics_agg=random_forest_metrics_agg_matched,
-            boxplot_r2=random_forest_boxplot_r2_matched,
-            boxplot_relmae=random_forest_boxplot_relmae_matched
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=random_forest_matched_dir,
-            measured=" ".join(str(t) for t in exp_measured_timepoints),
-            max_time=exp_per_minute_max_time,
-            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
-            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
-            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
-            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
-            seeds="42 43 44",
-            pysr_metrics=integration_per_minute_metrics,
-        shell:
-            """
-            mkdir -p {params.out_dir}
-            python src/pipelines/experimental/sr_pipeline/random_forest_baseline_per_minute.py \
-                --dataset {input.per_minute} \
-                --output-dir {params.out_dir} \
-                --per-minute-max-time {params.max_time} \
-                --per-minute-sampling-strategy {params.strategy} \
-                --late-sample-window {params.late_window_start} {params.late_window_end} \
-                --late-sample-points {params.late_points} \
-                --seeds {params.seeds} \
-                --measured-timepoints {params.measured} \
-                --pysr-metrics {params.pysr_metrics} \
-                --tag matched_k
-            """
-
-    rule experimental_random_forest_all:
-        input:
-            random_forest_metrics_agg_full,
-            random_forest_metrics_agg_matched,
-            random_forest_panel_r2_full,
-            random_forest_panel_r2_matched
-        run:
-            pass
-
-    rule experimental_random_forest_dt_baseline:
-        input:
-            per_minute=marker_per_minute_csv
-        output:
-            metrics=random_forest_dt_metrics_direct,
-            metrics_agg=random_forest_dt_metrics_agg_direct,
-            boxplot_dt=random_forest_dt_boxplot_dt_direct,
-            boxplot_integ=random_forest_dt_boxplot_integ_direct,
-            boxplot_ode=random_forest_dt_boxplot_ode_direct,
-            importance=random_forest_dt_importance_direct,
-            importance_agg=random_forest_dt_importance_agg_direct,
-            importance_by_marker=random_forest_dt_importance_by_marker_direct
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=random_forest_dt_direct_dir,
-            measured=" ".join(str(t) for t in exp_measured_timepoints),
-            max_time=exp_per_minute_max_time,
-            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
-            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
-            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
-            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
-            seeds="42 43 44",
-        shell:
-            """
-            mkdir -p {params.out_dir}
-            python src/pipelines/experimental/sr_pipeline/random_forest_dt_baseline_per_minute.py \
-                --dataset {input.per_minute} \
-                --output-dir {params.out_dir} \
-                --dt-model-variant rf_dt \
-                --test-split-policy top_gfp_bins \
-                --per-minute-max-time {params.max_time} \
-                --per-minute-sampling-strategy {params.strategy} \
-                --late-sample-window {params.late_window_start} {params.late_window_end} \
-                --late-sample-points {params.late_points} \
-                --seeds {params.seeds} \
-                --measured-timepoints {params.measured}
-            """
-
-    rule experimental_random_forest_dt_baseline_minus_erk:
-        input:
-            per_minute=marker_per_minute_csv
-        output:
-            metrics=random_forest_dt_metrics_minus_erk,
-            metrics_agg=random_forest_dt_metrics_agg_minus_erk,
-            boxplot_dt=random_forest_dt_boxplot_dt_minus_erk,
-            boxplot_integ=random_forest_dt_boxplot_integ_minus_erk,
-            boxplot_ode=random_forest_dt_boxplot_ode_minus_erk,
-            importance=random_forest_dt_importance_minus_erk,
-            importance_agg=random_forest_dt_importance_agg_minus_erk,
-            importance_by_marker=random_forest_dt_importance_by_marker_minus_erk
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=random_forest_dt_minus_erk_dir,
-            measured=" ".join(str(t) for t in exp_measured_timepoints),
-            max_time=exp_per_minute_max_time,
-            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
-            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
-            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
-            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
-            seeds="42 43 44",
-        shell:
-            """
-            mkdir -p {params.out_dir}
-            python src/pipelines/experimental/sr_pipeline/random_forest_dt_baseline_per_minute.py \
-                --dataset {input.per_minute} \
-                --output-dir {params.out_dir} \
-                --dt-model-variant minus_erk_plus_rf \
-                --test-split-policy top_gfp_bins \
-                --per-minute-max-time {params.max_time} \
-                --per-minute-sampling-strategy {params.strategy} \
-                --late-sample-window {params.late_window_start} {params.late_window_end} \
-                --late-sample-points {params.late_points} \
-                --seeds {params.seeds} \
-                --measured-timepoints {params.measured}
-            """
-
-    rule experimental_random_forest_dt_minus_erk_perk_trajectory_nn:
-        input:
-            per_minute=marker_per_minute_csv,
-            rf_metrics=random_forest_dt_metrics_minus_erk
-        output:
-            summary=random_forest_dt_perk_nn_minus_erk_csv,
-            plot=random_forest_dt_perk_nn_minus_erk_plot,
-            plot_svg=random_forest_dt_perk_nn_minus_erk_plot_svg,
-            median_nn_plot=random_forest_dt_perk_nn_median_minus_erk_plot,
-            median_nn_plot_svg=random_forest_dt_perk_nn_median_minus_erk_plot_svg,
-            p90_nn_plot=random_forest_dt_perk_nn_p90_minus_erk_plot,
-            p90_nn_plot_svg=random_forest_dt_perk_nn_p90_minus_erk_plot_svg,
-            quantile_band_plot=random_forest_dt_perk_quantile_band_minus_erk_plot,
-            quantile_band_plot_svg=random_forest_dt_perk_quantile_band_minus_erk_plot_svg,
-            mean_train_plot=random_forest_dt_perk_mean_train_minus_erk_plot,
-            mean_train_plot_svg=random_forest_dt_perk_mean_train_minus_erk_plot_svg,
-            distribution_plot=random_forest_dt_perk_dist_minus_erk_plot,
-            distribution_plot_svg=random_forest_dt_perk_dist_minus_erk_plot_svg,
-            variance_ratio_plot=random_forest_dt_perk_variance_ratio_minus_erk_plot,
-            variance_ratio_plot_svg=random_forest_dt_perk_variance_ratio_minus_erk_plot_svg,
-            top20_variance_ratio_plot=random_forest_dt_perk_top20_variance_ratio_minus_erk_plot,
-            top20_variance_ratio_plot_svg=random_forest_dt_perk_top20_variance_ratio_minus_erk_plot_svg,
-            top15_variance_ratio_plot=random_forest_dt_perk_top15_variance_ratio_minus_erk_plot,
-            top15_variance_ratio_plot_svg=random_forest_dt_perk_top15_variance_ratio_minus_erk_plot_svg,
-            amplitude_ratio_plot=random_forest_dt_perk_amplitude_ratio_minus_erk_plot,
-            amplitude_ratio_plot_svg=random_forest_dt_perk_amplitude_ratio_minus_erk_plot_svg,
-            top20_amplitude_ratio_plot=random_forest_dt_perk_top20_amplitude_ratio_minus_erk_plot,
-            top20_amplitude_ratio_plot_svg=random_forest_dt_perk_top20_amplitude_ratio_minus_erk_plot_svg,
-            top15_amplitude_ratio_plot=random_forest_dt_perk_top15_amplitude_ratio_minus_erk_plot,
-            top15_amplitude_ratio_plot_svg=random_forest_dt_perk_top15_amplitude_ratio_minus_erk_plot_svg,
-            amplitude_ratio_sum_top15_plot=random_forest_dt_perk_amplitude_ratio_sum_top15_minus_erk_plot,
-            amplitude_ratio_sum_top15_plot_svg=random_forest_dt_perk_amplitude_ratio_sum_top15_minus_erk_plot_svg,
-            amplitude_ratio_top15_over_full_plot=random_forest_dt_perk_amplitude_ratio_top15_over_full_minus_erk_plot,
-            amplitude_ratio_top15_over_full_plot_svg=random_forest_dt_perk_amplitude_ratio_top15_over_full_minus_erk_plot_svg,
-            top20_trace_cov_ratio_plot=random_forest_dt_perk_top20_trace_cov_ratio_minus_erk_plot,
-            top20_trace_cov_ratio_plot_svg=random_forest_dt_perk_top20_trace_cov_ratio_minus_erk_plot_svg,
-            top15_trace_cov_ratio_plot=random_forest_dt_perk_top15_trace_cov_ratio_minus_erk_plot,
-            top15_trace_cov_ratio_plot_svg=random_forest_dt_perk_top15_trace_cov_ratio_minus_erk_plot_svg,
-            top20_pairwise_ratio_plot=random_forest_dt_perk_top20_pairwise_ratio_minus_erk_plot,
-            top20_pairwise_ratio_plot_svg=random_forest_dt_perk_top20_pairwise_ratio_minus_erk_plot_svg,
-            top15_pairwise_ratio_plot=random_forest_dt_perk_top15_pairwise_ratio_minus_erk_plot,
-            top15_pairwise_ratio_plot_svg=random_forest_dt_perk_top15_pairwise_ratio_minus_erk_plot_svg,
-            tail_shape_continuation_plot=random_forest_dt_perk_tail_shape_continuation_minus_erk_plot,
-            tail_shape_continuation_plot_svg=random_forest_dt_perk_tail_shape_continuation_minus_erk_plot_svg,
-            tail_envelope_plot=random_forest_dt_perk_tail_envelope_minus_erk_plot,
-            tail_envelope_plot_svg=random_forest_dt_perk_tail_envelope_minus_erk_plot_svg,
-            tail_raw_continuation_ratio_plot=random_forest_dt_perk_tail_raw_continuation_ratio_minus_erk_plot,
-            tail_raw_continuation_ratio_plot_svg=random_forest_dt_perk_tail_raw_continuation_ratio_minus_erk_plot_svg,
-            tail_local_pca_plot=random_forest_dt_perk_tail_local_pca_minus_erk_plot,
-            tail_local_pca_plot_svg=random_forest_dt_perk_tail_local_pca_minus_erk_plot_svg,
-            boundary_jump_plot=random_forest_dt_perk_boundary_jump_minus_erk_plot,
-            boundary_jump_plot_svg=random_forest_dt_perk_boundary_jump_minus_erk_plot_svg,
-            tail_convex_hull_plot=random_forest_dt_perk_tail_convex_hull_minus_erk_plot,
-            tail_convex_hull_plot_svg=random_forest_dt_perk_tail_convex_hull_minus_erk_plot_svg,
-            tail_timepoint_continuation_plot=random_forest_dt_perk_tail_timepoint_continuation_minus_erk_plot,
-            tail_timepoint_continuation_plot_svg=random_forest_dt_perk_tail_timepoint_continuation_minus_erk_plot_svg,
-            target_plot=random_forest_dt_target_nn_minus_erk_plot,
-            target_plot_svg=random_forest_dt_target_nn_minus_erk_plot_svg,
-            target_median_nn_plot=random_forest_dt_target_nn_median_minus_erk_plot,
-            target_median_nn_plot_svg=random_forest_dt_target_nn_median_minus_erk_plot_svg,
-            target_p90_nn_plot=random_forest_dt_target_nn_p90_minus_erk_plot,
-            target_p90_nn_plot_svg=random_forest_dt_target_nn_p90_minus_erk_plot_svg,
-            target_quantile_band_plot=random_forest_dt_target_quantile_band_minus_erk_plot,
-            target_quantile_band_plot_svg=random_forest_dt_target_quantile_band_minus_erk_plot_svg,
-            target_mean_train_plot=random_forest_dt_target_mean_train_minus_erk_plot,
-            target_mean_train_plot_svg=random_forest_dt_target_mean_train_minus_erk_plot_svg,
-            target_distribution_plot=random_forest_dt_target_dist_minus_erk_plot,
-            target_distribution_plot_svg=random_forest_dt_target_dist_minus_erk_plot_svg,
-            target_variance_ratio_plot=random_forest_dt_target_variance_ratio_minus_erk_plot,
-            target_variance_ratio_plot_svg=random_forest_dt_target_variance_ratio_minus_erk_plot_svg,
-            target_top20_variance_ratio_plot=random_forest_dt_target_top20_variance_ratio_minus_erk_plot,
-            target_top20_variance_ratio_plot_svg=random_forest_dt_target_top20_variance_ratio_minus_erk_plot_svg,
-            target_top15_variance_ratio_plot=random_forest_dt_target_top15_variance_ratio_minus_erk_plot,
-            target_top15_variance_ratio_plot_svg=random_forest_dt_target_top15_variance_ratio_minus_erk_plot_svg,
-            target_amplitude_ratio_plot=random_forest_dt_target_amplitude_ratio_minus_erk_plot,
-            target_amplitude_ratio_plot_svg=random_forest_dt_target_amplitude_ratio_minus_erk_plot_svg,
-            target_top20_amplitude_ratio_plot=random_forest_dt_target_top20_amplitude_ratio_minus_erk_plot,
-            target_top20_amplitude_ratio_plot_svg=random_forest_dt_target_top20_amplitude_ratio_minus_erk_plot_svg,
-            target_top15_amplitude_ratio_plot=random_forest_dt_target_top15_amplitude_ratio_minus_erk_plot,
-            target_top15_amplitude_ratio_plot_svg=random_forest_dt_target_top15_amplitude_ratio_minus_erk_plot_svg,
-            target_amplitude_ratio_sum_top15_plot=random_forest_dt_target_amplitude_ratio_sum_top15_minus_erk_plot,
-            target_amplitude_ratio_sum_top15_plot_svg=random_forest_dt_target_amplitude_ratio_sum_top15_minus_erk_plot_svg,
-            target_amplitude_ratio_top15_over_full_plot=random_forest_dt_target_amplitude_ratio_top15_over_full_minus_erk_plot,
-            target_amplitude_ratio_top15_over_full_plot_svg=random_forest_dt_target_amplitude_ratio_top15_over_full_minus_erk_plot_svg,
-            target_top20_trace_cov_ratio_plot=random_forest_dt_target_top20_trace_cov_ratio_minus_erk_plot,
-            target_top20_trace_cov_ratio_plot_svg=random_forest_dt_target_top20_trace_cov_ratio_minus_erk_plot_svg,
-            target_top15_trace_cov_ratio_plot=random_forest_dt_target_top15_trace_cov_ratio_minus_erk_plot,
-            target_top15_trace_cov_ratio_plot_svg=random_forest_dt_target_top15_trace_cov_ratio_minus_erk_plot_svg,
-            target_top20_pairwise_ratio_plot=random_forest_dt_target_top20_pairwise_ratio_minus_erk_plot,
-            target_top20_pairwise_ratio_plot_svg=random_forest_dt_target_top20_pairwise_ratio_minus_erk_plot_svg,
-            target_top15_pairwise_ratio_plot=random_forest_dt_target_top15_pairwise_ratio_minus_erk_plot,
-            target_top15_pairwise_ratio_plot_svg=random_forest_dt_target_top15_pairwise_ratio_minus_erk_plot_svg,
-            target_tail_shape_continuation_plot=random_forest_dt_target_tail_shape_continuation_minus_erk_plot,
-            target_tail_shape_continuation_plot_svg=random_forest_dt_target_tail_shape_continuation_minus_erk_plot_svg,
-            target_tail_envelope_plot=random_forest_dt_target_tail_envelope_minus_erk_plot,
-            target_tail_envelope_plot_svg=random_forest_dt_target_tail_envelope_minus_erk_plot_svg,
-            target_tail_raw_continuation_ratio_plot=random_forest_dt_target_tail_raw_continuation_ratio_minus_erk_plot,
-            target_tail_raw_continuation_ratio_plot_svg=random_forest_dt_target_tail_raw_continuation_ratio_minus_erk_plot_svg,
-            target_tail_local_pca_plot=random_forest_dt_target_tail_local_pca_minus_erk_plot,
-            target_tail_local_pca_plot_svg=random_forest_dt_target_tail_local_pca_minus_erk_plot_svg,
-            target_boundary_jump_plot=random_forest_dt_target_boundary_jump_minus_erk_plot,
-            target_boundary_jump_plot_svg=random_forest_dt_target_boundary_jump_minus_erk_plot_svg,
-            target_tail_convex_hull_plot=random_forest_dt_target_tail_convex_hull_minus_erk_plot,
-            target_tail_convex_hull_plot_svg=random_forest_dt_target_tail_convex_hull_minus_erk_plot_svg,
-            target_tail_timepoint_continuation_plot=random_forest_dt_target_tail_timepoint_continuation_minus_erk_plot,
-            target_tail_timepoint_continuation_plot_svg=random_forest_dt_target_tail_timepoint_continuation_minus_erk_plot_svg,
-            tail_timepoint_worstcase_plot=random_forest_dt_tail_timepoint_worstcase_minus_erk_plot,
-            tail_timepoint_worstcase_plot_svg=random_forest_dt_tail_timepoint_worstcase_minus_erk_plot_svg,
-            branch_break_plot=random_forest_dt_branch_break_minus_erk_plot,
-            branch_break_plot_svg=random_forest_dt_branch_break_minus_erk_plot_svg
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=random_forest_dt_minus_erk_dir
-        shell:
-            """
-            mkdir -p {params.out_dir}
-            MPLCONFIGDIR={params.out_dir}/.mplcache conda run -n pysr_env python src/pipelines/experimental/sr_pipeline/analyze_rf_perk_trajectory_nn.py \
-                --dataset {input.per_minute} \
-                --rf-metrics {input.rf_metrics} \
-                --output-csv {output.summary} \
-                --output-plot {output.plot} \
-                --output-median-nn-plot {output.median_nn_plot} \
-                --output-p90-nn-plot {output.p90_nn_plot} \
-                --output-quantile-band-plot {output.quantile_band_plot} \
-                --output-mean-train-plot {output.mean_train_plot} \
-                --output-distribution-plot {output.distribution_plot} \
-                --output-variance-ratio-plot {output.variance_ratio_plot} \
-                --output-top20-variance-ratio-plot {output.top20_variance_ratio_plot} \
-                --output-top15-variance-ratio-plot {output.top15_variance_ratio_plot} \
-                --output-amplitude-ratio-plot {output.amplitude_ratio_plot} \
-                --output-top20-amplitude-ratio-plot {output.top20_amplitude_ratio_plot} \
-                --output-top15-amplitude-ratio-plot {output.top15_amplitude_ratio_plot} \
-                --output-amplitude-ratio-sum-top15-plot {output.amplitude_ratio_sum_top15_plot} \
-                --output-amplitude-ratio-top15-over-full-plot {output.amplitude_ratio_top15_over_full_plot} \
-                --output-top20-trace-cov-ratio-plot {output.top20_trace_cov_ratio_plot} \
-                --output-top15-trace-cov-ratio-plot {output.top15_trace_cov_ratio_plot} \
-                --output-top20-pairwise-ratio-plot {output.top20_pairwise_ratio_plot} \
-                --output-top15-pairwise-ratio-plot {output.top15_pairwise_ratio_plot} \
-                --output-tail-shape-continuation-plot {output.tail_shape_continuation_plot} \
-                --output-tail-envelope-plot {output.tail_envelope_plot} \
-                --output-tail-raw-continuation-ratio-plot {output.tail_raw_continuation_ratio_plot} \
-                --output-tail-local-pca-plot {output.tail_local_pca_plot} \
-                --output-boundary-jump-plot {output.boundary_jump_plot} \
-                --output-tail-convex-hull-plot {output.tail_convex_hull_plot} \
-                --output-tail-timepoint-continuation-plot {output.tail_timepoint_continuation_plot} \
-                --output-target-plot {output.target_plot} \
-                --output-target-median-nn-plot {output.target_median_nn_plot} \
-                --output-target-p90-nn-plot {output.target_p90_nn_plot} \
-                --output-target-quantile-band-plot {output.target_quantile_band_plot} \
-                --output-target-mean-train-plot {output.target_mean_train_plot} \
-                --output-target-distribution-plot {output.target_distribution_plot} \
-                --output-target-variance-ratio-plot {output.target_variance_ratio_plot} \
-                --output-target-top20-variance-ratio-plot {output.target_top20_variance_ratio_plot} \
-                --output-target-top15-variance-ratio-plot {output.target_top15_variance_ratio_plot} \
-                --output-target-amplitude-ratio-plot {output.target_amplitude_ratio_plot} \
-                --output-target-top20-amplitude-ratio-plot {output.target_top20_amplitude_ratio_plot} \
-                --output-target-top15-amplitude-ratio-plot {output.target_top15_amplitude_ratio_plot} \
-                --output-target-amplitude-ratio-sum-top15-plot {output.target_amplitude_ratio_sum_top15_plot} \
-                --output-target-amplitude-ratio-top15-over-full-plot {output.target_amplitude_ratio_top15_over_full_plot} \
-                --output-target-top20-trace-cov-ratio-plot {output.target_top20_trace_cov_ratio_plot} \
-                --output-target-top15-trace-cov-ratio-plot {output.target_top15_trace_cov_ratio_plot} \
-                --output-target-top20-pairwise-ratio-plot {output.target_top20_pairwise_ratio_plot} \
-                --output-target-top15-pairwise-ratio-plot {output.target_top15_pairwise_ratio_plot} \
-                --output-target-tail-shape-continuation-plot {output.target_tail_shape_continuation_plot} \
-                --output-target-tail-envelope-plot {output.target_tail_envelope_plot} \
-                --output-target-tail-raw-continuation-ratio-plot {output.target_tail_raw_continuation_ratio_plot} \
-                --output-target-tail-local-pca-plot {output.target_tail_local_pca_plot} \
-                --output-target-boundary-jump-plot {output.target_boundary_jump_plot} \
-                --output-target-tail-convex-hull-plot {output.target_tail_convex_hull_plot} \
-                --output-target-tail-timepoint-continuation-plot {output.target_tail_timepoint_continuation_plot} \
-                --output-tail-timepoint-worstcase-plot {output.tail_timepoint_worstcase_plot} \
-                --output-branch-break-plot {output.branch_break_plot} \
-                --test-split-policy top_gfp_bins
-            """
-
-    rule experimental_random_forest_dt_all:
-        input:
-            random_forest_dt_metrics_agg_direct,
-            random_forest_dt_metrics_agg_minus_erk,
-            random_forest_dt_importance_agg_direct,
-            random_forest_dt_importance_agg_minus_erk,
-            random_forest_dt_pysr_feature_usage_csv,
-            random_forest_dt_pysr_feature_usage_heatmap,
-            random_forest_dt_pysr_feature_overlap,
-            random_forest_dt_pysr_threshold_feature_usage_heatmap,
-            random_forest_dt_pysr_threshold_feature_overlap,
-            random_forest_dt_rf_r2_by_pysr_perk_dependence,
-            random_forest_dt_rf_r2_by_pysr_perk_dependence_csv,
-            random_forest_dt_rf_r2_by_pysr_perk_dependence_stats_csv,
-            random_forest_dt_rf_r2_by_pysr_perk_dependence_high_r2,
-            random_forest_dt_rf_r2_by_pysr_perk_dependence_high_r2_csv,
-            random_forest_dt_rf_r2_by_pysr_perk_dependence_high_r2_stats_csv,
-            random_forest_dt_best_seed_rf_vs_pysr_r2
-        run:
-            pass
-
-    rule experimental_random_forest_dt_minus_erk_vs_ood_pysr_feature_usage:
-        input:
-            rf_importance=random_forest_dt_importance_minus_erk,
-            rf_metrics=random_forest_dt_metrics_minus_erk,
-            pysr_metrics=[
-                f"{exp_runs_root}/top_gfp_ood_pysr/seeds/seed_42/metrics/marker_integration_metrics_per_minute.csv",
-                f"{exp_runs_root}/top_gfp_ood_pysr/seeds/seed_43/metrics/marker_integration_metrics_per_minute.csv",
-                f"{exp_runs_root}/top_gfp_ood_pysr/seeds/seed_44/metrics/marker_integration_metrics_per_minute.csv",
-            ]
-        output:
-            csv=random_forest_dt_pysr_feature_usage_csv,
-            heatmap=random_forest_dt_pysr_feature_usage_heatmap,
-            heatmap_svg=random_forest_dt_pysr_feature_usage_heatmap_svg,
-            overlap=random_forest_dt_pysr_feature_overlap,
-            overlap_svg=random_forest_dt_pysr_feature_overlap_svg,
-            threshold_heatmap=random_forest_dt_pysr_threshold_feature_usage_heatmap,
-            threshold_heatmap_svg=random_forest_dt_pysr_threshold_feature_usage_heatmap_svg,
-            threshold_overlap=random_forest_dt_pysr_threshold_feature_overlap,
-            threshold_overlap_svg=random_forest_dt_pysr_threshold_feature_overlap_svg,
-            perk_dependence_plot=random_forest_dt_rf_r2_by_pysr_perk_dependence,
-            perk_dependence_plot_svg=random_forest_dt_rf_r2_by_pysr_perk_dependence_svg,
-            perk_dependence_csv=random_forest_dt_rf_r2_by_pysr_perk_dependence_csv,
-            perk_dependence_stats_csv=random_forest_dt_rf_r2_by_pysr_perk_dependence_stats_csv,
-            perk_dependence_high_r2_plot=random_forest_dt_rf_r2_by_pysr_perk_dependence_high_r2,
-            perk_dependence_high_r2_plot_svg=random_forest_dt_rf_r2_by_pysr_perk_dependence_high_r2_svg,
-            perk_dependence_high_r2_csv=random_forest_dt_rf_r2_by_pysr_perk_dependence_high_r2_csv,
-            perk_dependence_high_r2_stats_csv=random_forest_dt_rf_r2_by_pysr_perk_dependence_high_r2_stats_csv,
-            best_seed_scatter=random_forest_dt_best_seed_rf_vs_pysr_r2,
-            best_seed_scatter_svg=random_forest_dt_best_seed_rf_vs_pysr_r2_svg
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=random_forest_dt_pysr_feature_usage_dir,
-            mpl_cache=f"{random_forest_dt_pysr_feature_usage_dir}/.mplcache"
-        shell:
-            """
-            mkdir -p {params.out_dir}
-            MPLCONFIGDIR={params.mpl_cache} PYTHONPATH=src python src/pipelines/experimental/sr_pipeline/compare_rf_pysr_feature_usage.py \
-                --rf-importance {input.rf_importance} \
-                --rf-metrics {input.rf_metrics} \
-                --pysr-metrics {input.pysr_metrics} \
-                --output-dir {params.out_dir} \
-                --importance-threshold 0.20 \
-                --rf-best-metric ode_integ_r2_median
-            """
-
-    rule experimental_random_forest_dt_minus_erk_tail_branch_panels:
-        input:
-            per_minute=marker_per_minute_csv,
-            rf_metrics=random_forest_dt_metrics_minus_erk
-        output:
-            png=random_forest_dt_tail_branch_panels_minus_erk_plot,
-            svg=random_forest_dt_tail_branch_panels_minus_erk_plot_svg,
-            csv=random_forest_dt_tail_branch_panels_minus_erk_csv
-        params:
-            markers="MAPK1 MAPK3 PTPN7 MAP2K2 PIP5K3 TBK1 ERBB2 DUSP16",
-            out_dir=random_forest_dt_minus_erk_dir
-        shell:
-            """
-            mkdir -p {params.out_dir}
-            MPLCONFIGDIR={params.out_dir}/.mplcache conda run -n pysr_env python src/pipelines/experimental/sr_pipeline/plot_rf_tail_branch_panels.py \
-                --dataset {input.per_minute} \
-                --rf-metrics {input.rf_metrics} \
-                --output-png {output.png} \
-                --output-svg {output.svg} \
-                --output-csv {output.csv} \
-                --markers {params.markers}
-            """
-
-    rule experimental_plot_pysr_vs_random_forest:
-        input:
-            baseline=random_forest_metrics_agg_full
-        output:
-            panel_r2=random_forest_panel_r2_full,
-            panel_r2_svg=random_forest_panel_r2_full_svg,
-            panel_relmae=random_forest_panel_relmae_full,
-            panel_relmae_svg=random_forest_panel_relmae_full_svg
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            pysr_metrics=integration_per_minute_metrics
-        shell:
-            """
-            python src/pipelines/experimental/sr_pipeline/plot_pysr_vs_random_forest.py \
-                --baseline-metrics {input.baseline} \
-                --pysr-metrics {params.pysr_metrics} \
-                --output-r2 {output.panel_r2} \
-                --output-relmae {output.panel_relmae}
-            """
-
-    rule experimental_plot_pysr_vs_random_forest_matched:
-        input:
-            baseline=random_forest_metrics_agg_matched
-        output:
-            panel_r2=random_forest_panel_r2_matched,
-            panel_r2_svg=random_forest_panel_r2_matched_svg,
-            panel_relmae=random_forest_panel_relmae_matched,
-            panel_relmae_svg=random_forest_panel_relmae_matched_svg
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            pysr_metrics=integration_per_minute_metrics
-        shell:
-            """
-            python src/pipelines/experimental/sr_pipeline/plot_pysr_vs_random_forest.py \
-                --baseline-metrics {input.baseline} \
-                --pysr-metrics {params.pysr_metrics} \
-                --output-r2 {output.panel_r2} \
-                --output-relmae {output.panel_relmae}
-            """
-
-    rule experimental_neural_ode_all:
-        input:
-            neural_ode_metrics_agg_full,
-            neural_ode_metrics_agg_matched,
-            neural_ode_diffrax_metrics_agg_full
-
-    # True Neural ODE baseline (diffrax, trajectory loss + backprop-through-solver).
-    # Trains one model per (marker, seed) with diffrax + Dopri5 and writes
-    # outputs in the same canonical schema as the pipeline NN baseline so the
-    # PySR comparison plot script can be reused unchanged. Resumes from CSV
-    # per (seed, marker) — re-running is cheap when artifacts already exist.
-    rule experimental_neural_ode_diffrax_baseline:
-        input:
-            per_minute=marker_per_minute_csv
-        output:
-            metrics=neural_ode_diffrax_metrics_full,
-            metrics_agg=neural_ode_diffrax_metrics_agg_full,
-            boxplot_dt=neural_ode_diffrax_boxplot_dt_full,
-            boxplot_integ=neural_ode_diffrax_boxplot_integ_full,
-            boxplot_ode=neural_ode_diffrax_boxplot_ode_full
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=neural_ode_diffrax_full_dir,
-            seeds_dir=f"{exp_runs_root}/neural_ode_diffrax/_seeds",
-            runs_root=exp_runs_root,
-            seeds="42 43 44",
-            measured=" ".join(str(t) for t in exp_measured_timepoints),
-            max_time=exp_per_minute_max_time,
-            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
-            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
-            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
-            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
-        shell:
-            """
-            mkdir -p {params.out_dir} {params.seeds_dir}
-            for seed in {params.seeds}; do
-                mkdir -p {params.seeds_dir}/seed_${{seed}}
-                python src/pipelines/experimental/sr_pipeline/neural_ode_diffrax_baseline.py \
-                    --dataset {input.per_minute} \
-                    --output-dir {params.seeds_dir}/seed_${{seed}} \
-                    --seeds ${{seed}} \
-                    --epochs 200 --patience 20 \
-                    --per-minute-max-time {params.max_time} \
-                    --per-minute-sampling-strategy {params.strategy} \
-                    --late-sample-window {params.late_window_start} {params.late_window_end} \
-                    --late-sample-points {params.late_points} \
-                    --measured-timepoints {params.measured} \
-                    --save-models \
-                    --jac-reg 1.0 \
-                    --tag diffrax_seed${{seed}}_jac1
-            done
-            python src/pipelines/experimental/sr_pipeline/neural_ode_diffrax_promote.py \
-                --source-dir {params.seeds_dir} \
-                --runs-root {params.runs_root} \
-                --seeds {params.seeds}
-            """
-
-    rule experimental_neural_ode_diffrax_baseline_ood:
-        # Same trainer as `experimental_neural_ode_diffrax_baseline` but with
-        # --test-split-policy top_gfp_bins: the highest-GFP-dose bins are held
-        # out so generalisation is genuine extrapolation rather than dose
-        # interpolation. Models + per-seed CSVs stage to _seeds_ood/.
-        input:
-            per_minute=marker_per_minute_csv
-        output:
-            metrics=neural_ode_diffrax_metrics_full_ood,
-            metrics_agg=neural_ode_diffrax_metrics_agg_full_ood,
-            boxplot_dt=neural_ode_diffrax_boxplot_dt_full_ood,
-            boxplot_integ=neural_ode_diffrax_boxplot_integ_full_ood,
-            boxplot_ode=neural_ode_diffrax_boxplot_ode_full_ood
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=neural_ode_diffrax_full_ood_dir,
-            seeds_dir=f"{exp_runs_root}/neural_ode_diffrax/_seeds_ood",
-            runs_root=exp_runs_root,
-            seeds="42 43 44",
-            measured=" ".join(str(t) for t in exp_measured_timepoints),
-            max_time=exp_per_minute_max_time,
-            strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
-            late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
-            late_window_end=exp_late_sample_window[1] if 'exp_late_sample_window' in globals() else 60.0,
-            late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
-        shell:
-            """
-            mkdir -p {params.out_dir} {params.seeds_dir}
-            for seed in {params.seeds}; do
-                mkdir -p {params.seeds_dir}/seed_${{seed}}
-                python src/pipelines/experimental/sr_pipeline/neural_ode_diffrax_baseline.py \
-                    --dataset {input.per_minute} \
-                    --output-dir {params.seeds_dir}/seed_${{seed}} \
-                    --seeds ${{seed}} \
-                    --epochs 200 --patience 20 \
-                    --per-minute-max-time {params.max_time} \
-                    --per-minute-sampling-strategy {params.strategy} \
-                    --late-sample-window {params.late_window_start} {params.late_window_end} \
-                    --late-sample-points {params.late_points} \
-                    --measured-timepoints {params.measured} \
-                    --save-models \
-                    --jac-reg 1.0 \
-                    --test-split-policy top_gfp_bins \
-                    --tag diffrax_seed${{seed}}_jac1_ood
-            done
-            python src/pipelines/experimental/sr_pipeline/neural_ode_diffrax_promote.py \
-                --source-dir {params.seeds_dir} \
-                --runs-root {params.runs_root} \
-                --out-subdir neural_ode_diffrax/full_ood \
-                --seeds {params.seeds}
-            """
-
-    rule experimental_neural_ode_diffrax_causal_ood:
-        input:
-            metrics_agg=neural_ode_diffrax_metrics_agg_full_ood
-        output:
-            summary=neural_ode_diffrax_causal_ood_summary,
-            pr_csv=neural_ode_diffrax_causal_ood_pr_csv,
-            pr_plot=neural_ode_diffrax_causal_ood_pr_plot
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            seeds_dir=f"{exp_runs_root}/neural_ode_diffrax/_seeds_ood",
-            out_dir=neural_ode_diffrax_causal_ood_dir,
-            seeds="42 43 44",
-        shell:
-            """
-            mkdir -p {params.out_dir}
-            python src/pipelines/experimental/sr_pipeline/neural_ode_diffrax_causal.py \
-                --source-dir {params.seeds_dir} \
-                --output-dir {params.out_dir} \
-                --seeds {params.seeds} \
-                --consensus-only
-            """
 
     # ---------------------------------------------------------------------
     # Paper figures: three OOD regulariser sweeps + plotting rules.
@@ -1738,7 +889,6 @@ if enzyme_model == "experimental":
                 {extra_flags} \\
                 --tag {tag}_seed${{{{seed}}}}
         done
-        touch {{output.done}}
         """
 
     _diffrax_sweep_params = dict(
@@ -1808,305 +958,6 @@ if enzyme_model == "experimental":
                 "--path-reg 0.01",
             )
 
-    rule experimental_paper_fig_parsimony_tradeoff:
-        # Main-text figure 1: PySR vs Neural ODE (L21) OOD R² scatter + PR boxplot.
-        input:
-            nn_done=neural_ode_diffrax_l21_done,
-            dataset=marker_per_minute_csv
-        output:
-            fig=paper_fig_parsimony_tradeoff
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            nn_dir=neural_ode_diffrax_l21_seeds_dir,
-            pysr_dir=f"{exp_runs_root}/top_gfp_ood_pysr/seeds",
-        shell:
-            """
-            python src/pipelines/experimental/sr_pipeline/paper_figures/plot_parsimony_tradeoff.py \
-                --nn-dir {params.nn_dir} \
-                --pysr-dir {params.pysr_dir} \
-                --dataset {input.dataset} \
-                --output {output.fig}
-            """
-
-    rule experimental_paper_fig_cutoff_robustness:
-        # Main-text figure 2: top-X% mass cutoff sweep — seed robustness +
-        # between-method agreement (L21 vs PySR) + driver set size vs cutoff.
-        input:
-            nn_done=neural_ode_diffrax_l21_done,
-            dataset=marker_per_minute_csv
-        output:
-            fig=paper_fig_cutoff_robustness
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            nn_dir=neural_ode_diffrax_l21_seeds_dir,
-            pysr_dir=f"{exp_runs_root}/top_gfp_ood_pysr/seeds",
-        shell:
-            """
-            python src/pipelines/experimental/sr_pipeline/paper_figures/plot_cutoff_robustness.py \
-                --nn-dir {params.nn_dir} \
-                --pysr-dir {params.pysr_dir} \
-                --dataset {input.dataset} \
-                --output {output.fig}
-            """
-
-    rule experimental_paper_fig_nn_appendix:
-        # Appendix figure: L1 vs L21 vs C-NODE accuracy + parsimony comparison.
-        input:
-            l1=neural_ode_diffrax_l1_done,
-            l21=neural_ode_diffrax_l21_done,
-            cnode=neural_ode_diffrax_cnode_done
-        output:
-            fig=paper_fig_nn_appendix
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            l1_dir=neural_ode_diffrax_l1_seeds_dir,
-            l21_dir=neural_ode_diffrax_l21_seeds_dir,
-            cnode_dir=neural_ode_diffrax_cnode_seeds_dir,
-        shell:
-            """
-            python src/pipelines/experimental/sr_pipeline/paper_figures/plot_nn_appendix_comparison.py \
-                --l1-dir {params.l1_dir} \
-                --l21-dir {params.l21_dir} \
-                --cnode-dir {params.cnode_dir} \
-                --output {output.fig}
-            """
-
-    rule experimental_paper_figures_all:
-        # Aggregator: build everything for the manuscript (main text + appendix).
-        # Run with:  snakemake -j 1 experimental_paper_figures_all
-        input:
-            paper_fig_parsimony_tradeoff,
-            paper_fig_cutoff_robustness,
-            paper_fig_nn_appendix,
-
-    rule experimental_plot_pysr_vs_neural_ode_diffrax_ood:
-        input:
-            baseline=neural_ode_diffrax_metrics_agg_full_ood,
-            pysr=integration_per_minute_metrics
-        output:
-            panel_ode=neural_ode_diffrax_panel_ode_full_ood,
-            panel_dt=neural_ode_diffrax_panel_dt_full_ood,
-            baseline=neural_ode_diffrax_baseline_full_ood,
-            pysr_k_vs_r2=neural_ode_diffrax_pysr_k_vs_r2_full_ood,
-            quadrant_bar=neural_ode_diffrax_quadrant_bar_full_ood
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            measured=" ".join(str(t) for t in exp_measured_timepoints)
-        shell:
-            """
-            python src/pipelines/experimental/sr_pipeline/plot_pysr_vs_neural_ode.py \
-                --baseline-metrics {input.baseline} \
-                --pysr-metrics {input.pysr} \
-                --output-panel-ode {output.panel_ode} \
-                --output-panel-dt {output.panel_dt} \
-                --output-baseline {output.baseline} \
-                --output-pysr-k-vs-r2 {output.pysr_k_vs_r2} \
-                --output-quadrant-bar {output.quadrant_bar} \
-                --measured-timepoints {params.measured}
-            """
-
-    rule experimental_neural_ode_diffrax_lambda_sweep:
-        # Calibration sweep for the Jacobian L1 regulariser (`--jac-reg`) on a
-        # few representative markers. Produces a CSV + per-marker plots; the
-        # full causal analysis can then be re-run with the chosen lambda.
-        input:
-            per_minute=marker_per_minute_csv
-        output:
-            sweep_csv=neural_ode_diffrax_lambda_sweep_csv
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=neural_ode_diffrax_lambda_sweep_dir,
-            markers="ABL1 AKT3 ALPK2 MAPK1",
-            lambdas="0 0.001 0.01 0.1 1.0",
-            seeds="42",
-        shell:
-            """
-            python src/pipelines/experimental/sr_pipeline/neural_ode_diffrax_lambda_sweep.py \
-                --output-base {params.out_dir} \
-                --dataset {input.per_minute} \
-                --markers {params.markers} \
-                --lambdas {params.lambdas} \
-                --seeds {params.seeds}
-            """
-
-    rule experimental_neural_ode_diffrax_causal:
-        # Reads the per-(seed, marker) model checkpoints staged under
-        # `_seeds/seed_{42,43,44}/models/` by the baseline rule when run with
-        # --save-models. If checkpoints are absent the script errors with a
-        # helpful message; rerun the baseline rule to repopulate them.
-        input:
-            metrics_agg=neural_ode_diffrax_metrics_agg_full
-        output:
-            summary=neural_ode_diffrax_causal_summary,
-            pr_csv=neural_ode_diffrax_causal_pr_csv,
-            pr_plot=neural_ode_diffrax_causal_pr_plot
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            seeds_dir=f"{exp_runs_root}/neural_ode_diffrax/_seeds",
-            out_dir=neural_ode_diffrax_causal_dir,
-            seeds="42 43 44",
-        shell:
-            """
-            mkdir -p {params.out_dir}
-            python src/pipelines/experimental/sr_pipeline/neural_ode_diffrax_causal.py \
-                --source-dir {params.seeds_dir} \
-                --output-dir {params.out_dir} \
-                --seeds {params.seeds} \
-                --consensus-only
-            """
-
-    rule experimental_plot_pysr_vs_neural_ode_diffrax:
-        input:
-            baseline=neural_ode_diffrax_metrics_agg_full,
-            pysr=integration_per_minute_metrics
-        output:
-            panel_ode=neural_ode_diffrax_panel_ode_full,
-            panel_dt=neural_ode_diffrax_panel_dt_full,
-            baseline=neural_ode_diffrax_baseline_full,
-            pysr_k_vs_r2=neural_ode_diffrax_pysr_k_vs_r2_full,
-            quadrant_bar=neural_ode_diffrax_quadrant_bar_full
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            measured=" ".join(str(t) for t in exp_measured_timepoints)
-        shell:
-            """
-            python src/pipelines/experimental/sr_pipeline/plot_pysr_vs_neural_ode.py \
-                --baseline-metrics {input.baseline} \
-                --pysr-metrics {input.pysr} \
-                --output-panel-ode {output.panel_ode} \
-                --output-panel-dt {output.panel_dt} \
-                --output-baseline {output.baseline} \
-                --output-pysr-k-vs-r2 {output.pysr_k_vs_r2} \
-                --output-quadrant-bar {output.quadrant_bar} \
-                --measured-timepoints {params.measured}
-            """
-
-    rule experimental_plot_pysr_vs_selectk:
-        input:
-            selectk=select_k_metrics_agg,
-            pysr=integration_per_minute_metrics
-        output:
-            panel_a_box=select_k_panel_a_box,
-            panel_a=select_k_panel_a,
-            panel_b=select_k_panel_b,
-            panel_a_dt=select_k_panel_a_dt,
-            panel_b_dt=select_k_panel_b_dt,
-            panel_a_box_dt=select_k_panel_a_box_dt,
-            linreg_bar=select_k_panel_a_linreg_bar,
-            panel_a_relmae=select_k_panel_a_relmae,
-            panel_b_relmae=select_k_panel_b_relmae,
-            panel_a_box_relmae=select_k_panel_a_box_relmae,
-            panel_a_relmae_dt=select_k_panel_a_relmae_dt,
-            panel_b_relmae_dt=select_k_panel_b_relmae_dt,
-            panel_a_box_relmae_dt=select_k_panel_a_box_relmae_dt,
-            linreg_bar_relmae=select_k_panel_a_linreg_bar_relmae,
-            variability_dt=select_k_variability_dt,
-            variability_perk=select_k_variability_perk,
-            pysr_k_vs_r2=select_k_pysr_k_vs_r2,
-            trajectory_all_k=select_k_trajectory_all_k,
-            baseline=select_k_baseline_pysr_vs_linreg,
-            heatmap=select_k_heatmap
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            measured=" ".join(str(t) for t in exp_measured_timepoints)
-        shell:
-            """
-            python src/pipelines/experimental/sr_pipeline/plot_pysr_vs_selectk.py \
-                --selectk-metrics {input.selectk} \
-                --pysr-metrics {input.pysr} \
-                --output-panel-a {output.panel_a} \
-                --output-panel-a-box {output.panel_a_box} \
-                --output-panel-b {output.panel_b} \
-                --output-panel-a-dt {output.panel_a_dt} \
-                --output-panel-a-dt-box {output.panel_a_box_dt} \
-                --output-panel-b-dt {output.panel_b_dt} \
-                --output-linreg-compare-bar {output.linreg_bar} \
-                --output-panel-a-relmae {output.panel_a_relmae} \
-                --output-panel-a-relmae-box {output.panel_a_box_relmae} \
-                --output-panel-b-relmae {output.panel_b_relmae} \
-                --output-panel-a-relmae-dt {output.panel_a_relmae_dt} \
-                --output-panel-a-relmae-dt-box {output.panel_a_box_relmae_dt} \
-                --output-panel-b-relmae-dt {output.panel_b_relmae_dt} \
-                --output-linreg-compare-bar-relmae {output.linreg_bar_relmae} \
-                --variability-dt-output {output.variability_dt} \
-                --variability-perk-output {output.variability_perk} \
-                --output-pysr-k-vs-r2 {output.pysr_k_vs_r2} \
-                --output-trajectory-all-k {output.trajectory_all_k} \
-                --output-baseline-pysr-vs-linreg {output.baseline} \
-                --trajectories {integration_per_minute_traj} \
-                --heatmap-output {output.heatmap} \
-                --measured-timepoints {params.measured}
-            """
-
-    rule experimental_plot_pysr_vs_neural_ode:
-        input:
-            baseline=neural_ode_metrics_agg_full,
-            pysr=integration_per_minute_metrics
-        output:
-            panel_ode=neural_ode_panel_ode_full,
-            panel_dt=neural_ode_panel_dt_full,
-            panel_ode_relmae=neural_ode_panel_ode_relmae_full,
-            panel_dt_relmae=neural_ode_panel_dt_relmae_full,
-            baseline=neural_ode_baseline_full,
-            pysr_k_vs_r2=neural_ode_pysr_k_vs_r2_full,
-            quadrant_bar=neural_ode_quadrant_bar_full
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            measured=" ".join(str(t) for t in exp_measured_timepoints)
-        shell:
-            """
-            python src/pipelines/experimental/sr_pipeline/plot_pysr_vs_neural_ode.py \
-                --baseline-metrics {input.baseline} \
-                --pysr-metrics {input.pysr} \
-                --output-panel-ode {output.panel_ode} \
-                --output-panel-dt {output.panel_dt} \
-                --output-panel-ode-relmae {output.panel_ode_relmae} \
-                --output-panel-dt-relmae {output.panel_dt_relmae} \
-                --output-baseline {output.baseline} \
-                --output-pysr-k-vs-r2 {output.pysr_k_vs_r2} \
-                --output-quadrant-bar {output.quadrant_bar} \
-                --measured-timepoints {params.measured}
-            """
-
-    rule experimental_plot_pysr_vs_neural_ode_matched:
-        input:
-            baseline=neural_ode_metrics_agg_matched,
-            pysr=integration_per_minute_metrics
-        output:
-            panel_ode=neural_ode_panel_ode_matched,
-            panel_dt=neural_ode_panel_dt_matched,
-            panel_ode_relmae=neural_ode_panel_ode_relmae_matched,
-            panel_dt_relmae=neural_ode_panel_dt_relmae_matched,
-            baseline=neural_ode_baseline_matched,
-            pysr_k_vs_r2=neural_ode_pysr_k_vs_r2_matched,
-            quadrant_bar=neural_ode_quadrant_bar_matched
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            measured=" ".join(str(t) for t in exp_measured_timepoints)
-        shell:
-            """
-            python src/pipelines/experimental/sr_pipeline/plot_pysr_vs_neural_ode.py \
-                --baseline-metrics {input.baseline} \
-                --pysr-metrics {input.pysr} \
-                --output-panel-ode {output.panel_ode} \
-                --output-panel-dt {output.panel_dt} \
-                --output-panel-ode-relmae {output.panel_ode_relmae} \
-                --output-panel-dt-relmae {output.panel_dt_relmae} \
-                --output-baseline {output.baseline} \
-                --output-pysr-k-vs-r2 {output.pysr_k_vs_r2} \
-                --output-quadrant-bar {output.quadrant_bar} \
-                --measured-timepoints {params.measured}
-            """
 
     rule experimental_marker_integration:
         input:
@@ -2517,44 +1368,13 @@ if enzyme_model == "experimental":
             """
 
 if run_pysr:
-        rule experimental_marker_pysr_grid:
-            input:
-                summary=marker_summary_output,
-                dataset=marker_fit_snapshot_csv,
-                groups=exp_group_definitions_csv
-            output:
-                results=pysr_grid_results_csv
-            conda:
-                "../../envs/pysr.yaml"
-            params:
-                output_dir=pysr_grid_output_dir,
-                seed=pysr_grid_seed,
-                base_niterations=pysr_grid_base_niterations,
-                base_population_size=pysr_grid_base_population_size,
-                base_populations=pysr_grid_base_populations,
-                lower_scale=pysr_grid_lower_scale,
-                upper_scale=pysr_grid_upper_scale,
-                min_bin=pysr_grid_min_bin_samples,
-                max_bin=pysr_grid_max_bin_samples,
-                log10_cutoff=exp_log10_cutoff
-            shell:
-                """
-                mkdir -p {params.output_dir}
-                python src/pipelines/experimental/experiments/pysr_hyperparam_grid.py \
-                    --summary {input.summary} \
-                    --dataset {input.dataset} \
-                    --group-definitions-csv {input.groups} \
-                    --output-dir {params.output_dir} \
-                    --seed {params.seed} \
-                    --base-niterations {params.base_niterations} \
-                    --base-population-size {params.base_population_size} \
-                    --base-populations {params.base_populations} \
-                    --lower-scale {params.lower_scale} \
-                    --upper-scale {params.upper_scale} \
-                    --min-bin-samples {params.min_bin} \
-                    --max-bin-samples {params.max_bin} \
-                    --log10-cutoff {params.log10_cutoff}
-            """
+    # `experimental_marker_pysr_grid` used to live here. It ran a small ad hoc
+    # hyperparameter grid off the marker summary; the manuscript's configuration now
+    # comes from the 288-arm sweep plus `select_pysr_config.py` in experimental.smk.
+    # The branch itself is kept because the `else:` below is what declares the
+    # sr_comparison `rule all` -- collapsing the conditional would change which
+    # default target the synthetic workflow gets.
+    pass
 
 else:
 

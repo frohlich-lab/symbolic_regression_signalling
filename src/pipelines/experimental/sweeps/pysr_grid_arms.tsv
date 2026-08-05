@@ -1,0 +1,289 @@
+arm	test_size	extra_flags
+it700_p30_ps30_ms18_par01_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 18 --parsimony 0.1
+it700_p30_ps30_ms18_par01_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 18 --parsimony 0.1 --binary-operators + - *
+it700_p30_ps30_ms18_par01_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 18 --parsimony 0.1 --unary-operators log
+it700_p30_ps30_ms18_par01_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 18 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it700_p30_ps30_ms18_par08_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 18 --parsimony 0.8
+it700_p30_ps30_ms18_par08_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 18 --parsimony 0.8 --binary-operators + - *
+it700_p30_ps30_ms18_par08_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 18 --parsimony 0.8 --unary-operators log
+it700_p30_ps30_ms18_par08_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 18 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it700_p30_ps30_ms18_par30_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 18 --parsimony 3.0
+it700_p30_ps30_ms18_par30_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 18 --parsimony 3.0 --binary-operators + - *
+it700_p30_ps30_ms18_par30_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 18 --parsimony 3.0 --unary-operators log
+it700_p30_ps30_ms18_par30_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 18 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it700_p30_ps30_ms22_par01_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 22 --parsimony 0.1
+it700_p30_ps30_ms22_par01_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 22 --parsimony 0.1 --binary-operators + - *
+it700_p30_ps30_ms22_par01_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 22 --parsimony 0.1 --unary-operators log
+it700_p30_ps30_ms22_par01_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 22 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it700_p30_ps30_ms22_par08_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 22 --parsimony 0.8
+it700_p30_ps30_ms22_par08_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 22 --parsimony 0.8 --binary-operators + - *
+it700_p30_ps30_ms22_par08_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 22 --parsimony 0.8 --unary-operators log
+it700_p30_ps30_ms22_par08_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 22 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it700_p30_ps30_ms22_par30_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 22 --parsimony 3.0
+it700_p30_ps30_ms22_par30_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 22 --parsimony 3.0 --binary-operators + - *
+it700_p30_ps30_ms22_par30_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 22 --parsimony 3.0 --unary-operators log
+it700_p30_ps30_ms22_par30_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 22 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it700_p30_ps30_ms26_par01_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 26 --parsimony 0.1
+it700_p30_ps30_ms26_par01_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 26 --parsimony 0.1 --binary-operators + - *
+it700_p30_ps30_ms26_par01_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 26 --parsimony 0.1 --unary-operators log
+it700_p30_ps30_ms26_par01_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 26 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it700_p30_ps30_ms26_par08_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 26 --parsimony 0.8
+it700_p30_ps30_ms26_par08_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 26 --parsimony 0.8 --binary-operators + - *
+it700_p30_ps30_ms26_par08_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 26 --parsimony 0.8 --unary-operators log
+it700_p30_ps30_ms26_par08_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 26 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it700_p30_ps30_ms26_par30_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 26 --parsimony 3.0
+it700_p30_ps30_ms26_par30_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 26 --parsimony 3.0 --binary-operators + - *
+it700_p30_ps30_ms26_par30_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 26 --parsimony 3.0 --unary-operators log
+it700_p30_ps30_ms26_par30_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 30 --max-size 26 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it700_p30_ps60_ms18_par01_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 18 --parsimony 0.1
+it700_p30_ps60_ms18_par01_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 18 --parsimony 0.1 --binary-operators + - *
+it700_p30_ps60_ms18_par01_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 18 --parsimony 0.1 --unary-operators log
+it700_p30_ps60_ms18_par01_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 18 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it700_p30_ps60_ms18_par08_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 18 --parsimony 0.8
+it700_p30_ps60_ms18_par08_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 18 --parsimony 0.8 --binary-operators + - *
+it700_p30_ps60_ms18_par08_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 18 --parsimony 0.8 --unary-operators log
+it700_p30_ps60_ms18_par08_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 18 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it700_p30_ps60_ms18_par30_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 18 --parsimony 3.0
+it700_p30_ps60_ms18_par30_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 18 --parsimony 3.0 --binary-operators + - *
+it700_p30_ps60_ms18_par30_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 18 --parsimony 3.0 --unary-operators log
+it700_p30_ps60_ms18_par30_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 18 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it700_p30_ps60_ms22_par01_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 22 --parsimony 0.1
+it700_p30_ps60_ms22_par01_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 22 --parsimony 0.1 --binary-operators + - *
+it700_p30_ps60_ms22_par01_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 22 --parsimony 0.1 --unary-operators log
+it700_p30_ps60_ms22_par01_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 22 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it700_p30_ps60_ms22_par08_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 22 --parsimony 0.8
+it700_p30_ps60_ms22_par08_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 22 --parsimony 0.8 --binary-operators + - *
+it700_p30_ps60_ms22_par08_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 22 --parsimony 0.8 --unary-operators log
+it700_p30_ps60_ms22_par08_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 22 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it700_p30_ps60_ms22_par30_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 22 --parsimony 3.0
+it700_p30_ps60_ms22_par30_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 22 --parsimony 3.0 --binary-operators + - *
+it700_p30_ps60_ms22_par30_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 22 --parsimony 3.0 --unary-operators log
+it700_p30_ps60_ms22_par30_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 22 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it700_p30_ps60_ms26_par01_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 26 --parsimony 0.1
+it700_p30_ps60_ms26_par01_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 26 --parsimony 0.1 --binary-operators + - *
+it700_p30_ps60_ms26_par01_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 26 --parsimony 0.1 --unary-operators log
+it700_p30_ps60_ms26_par01_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 26 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it700_p30_ps60_ms26_par08_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 26 --parsimony 0.8
+it700_p30_ps60_ms26_par08_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 26 --parsimony 0.8 --binary-operators + - *
+it700_p30_ps60_ms26_par08_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 26 --parsimony 0.8 --unary-operators log
+it700_p30_ps60_ms26_par08_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 26 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it700_p30_ps60_ms26_par30_unone_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 26 --parsimony 3.0
+it700_p30_ps60_ms26_par30_unone_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 26 --parsimony 3.0 --binary-operators + - *
+it700_p30_ps60_ms26_par30_ulog_bdiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 26 --parsimony 3.0 --unary-operators log
+it700_p30_ps60_ms26_par30_ulog_bnodiv	0.2	--max-iterations 700 --populations 30 --population-size 60 --max-size 26 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it700_p60_ps30_ms18_par01_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 18 --parsimony 0.1
+it700_p60_ps30_ms18_par01_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 18 --parsimony 0.1 --binary-operators + - *
+it700_p60_ps30_ms18_par01_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 18 --parsimony 0.1 --unary-operators log
+it700_p60_ps30_ms18_par01_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 18 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it700_p60_ps30_ms18_par08_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 18 --parsimony 0.8
+it700_p60_ps30_ms18_par08_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 18 --parsimony 0.8 --binary-operators + - *
+it700_p60_ps30_ms18_par08_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 18 --parsimony 0.8 --unary-operators log
+it700_p60_ps30_ms18_par08_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 18 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it700_p60_ps30_ms18_par30_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 18 --parsimony 3.0
+it700_p60_ps30_ms18_par30_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 18 --parsimony 3.0 --binary-operators + - *
+it700_p60_ps30_ms18_par30_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 18 --parsimony 3.0 --unary-operators log
+it700_p60_ps30_ms18_par30_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 18 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it700_p60_ps30_ms22_par01_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 22 --parsimony 0.1
+it700_p60_ps30_ms22_par01_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 22 --parsimony 0.1 --binary-operators + - *
+it700_p60_ps30_ms22_par01_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 22 --parsimony 0.1 --unary-operators log
+it700_p60_ps30_ms22_par01_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 22 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it700_p60_ps30_ms22_par08_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 22 --parsimony 0.8
+it700_p60_ps30_ms22_par08_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 22 --parsimony 0.8 --binary-operators + - *
+it700_p60_ps30_ms22_par08_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 22 --parsimony 0.8 --unary-operators log
+it700_p60_ps30_ms22_par08_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 22 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it700_p60_ps30_ms22_par30_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 22 --parsimony 3.0
+it700_p60_ps30_ms22_par30_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 22 --parsimony 3.0 --binary-operators + - *
+it700_p60_ps30_ms22_par30_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 22 --parsimony 3.0 --unary-operators log
+it700_p60_ps30_ms22_par30_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 22 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it700_p60_ps30_ms26_par01_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 26 --parsimony 0.1
+it700_p60_ps30_ms26_par01_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 26 --parsimony 0.1 --binary-operators + - *
+it700_p60_ps30_ms26_par01_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 26 --parsimony 0.1 --unary-operators log
+it700_p60_ps30_ms26_par01_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 26 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it700_p60_ps30_ms26_par08_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 26 --parsimony 0.8
+it700_p60_ps30_ms26_par08_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 26 --parsimony 0.8 --binary-operators + - *
+it700_p60_ps30_ms26_par08_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 26 --parsimony 0.8 --unary-operators log
+it700_p60_ps30_ms26_par08_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 26 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it700_p60_ps30_ms26_par30_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 26 --parsimony 3.0
+it700_p60_ps30_ms26_par30_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 26 --parsimony 3.0 --binary-operators + - *
+it700_p60_ps30_ms26_par30_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 26 --parsimony 3.0 --unary-operators log
+it700_p60_ps30_ms26_par30_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 30 --max-size 26 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it700_p60_ps60_ms18_par01_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 18 --parsimony 0.1
+it700_p60_ps60_ms18_par01_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 18 --parsimony 0.1 --binary-operators + - *
+it700_p60_ps60_ms18_par01_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 18 --parsimony 0.1 --unary-operators log
+it700_p60_ps60_ms18_par01_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 18 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it700_p60_ps60_ms18_par08_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 18 --parsimony 0.8
+it700_p60_ps60_ms18_par08_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 18 --parsimony 0.8 --binary-operators + - *
+it700_p60_ps60_ms18_par08_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 18 --parsimony 0.8 --unary-operators log
+it700_p60_ps60_ms18_par08_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 18 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it700_p60_ps60_ms18_par30_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 18 --parsimony 3.0
+it700_p60_ps60_ms18_par30_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 18 --parsimony 3.0 --binary-operators + - *
+it700_p60_ps60_ms18_par30_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 18 --parsimony 3.0 --unary-operators log
+it700_p60_ps60_ms18_par30_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 18 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it700_p60_ps60_ms22_par01_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 22 --parsimony 0.1
+it700_p60_ps60_ms22_par01_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 22 --parsimony 0.1 --binary-operators + - *
+it700_p60_ps60_ms22_par01_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 22 --parsimony 0.1 --unary-operators log
+it700_p60_ps60_ms22_par01_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 22 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it700_p60_ps60_ms22_par08_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 22 --parsimony 0.8
+it700_p60_ps60_ms22_par08_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 22 --parsimony 0.8 --binary-operators + - *
+it700_p60_ps60_ms22_par08_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 22 --parsimony 0.8 --unary-operators log
+it700_p60_ps60_ms22_par08_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 22 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it700_p60_ps60_ms22_par30_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 22 --parsimony 3.0
+it700_p60_ps60_ms22_par30_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 22 --parsimony 3.0 --binary-operators + - *
+it700_p60_ps60_ms22_par30_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 22 --parsimony 3.0 --unary-operators log
+it700_p60_ps60_ms22_par30_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 22 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it700_p60_ps60_ms26_par01_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 26 --parsimony 0.1
+it700_p60_ps60_ms26_par01_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 26 --parsimony 0.1 --binary-operators + - *
+it700_p60_ps60_ms26_par01_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 26 --parsimony 0.1 --unary-operators log
+it700_p60_ps60_ms26_par01_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 26 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it700_p60_ps60_ms26_par08_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 26 --parsimony 0.8
+it700_p60_ps60_ms26_par08_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 26 --parsimony 0.8 --binary-operators + - *
+it700_p60_ps60_ms26_par08_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 26 --parsimony 0.8 --unary-operators log
+it700_p60_ps60_ms26_par08_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 26 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it700_p60_ps60_ms26_par30_unone_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 26 --parsimony 3.0
+it700_p60_ps60_ms26_par30_unone_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 26 --parsimony 3.0 --binary-operators + - *
+it700_p60_ps60_ms26_par30_ulog_bdiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 26 --parsimony 3.0 --unary-operators log
+it700_p60_ps60_ms26_par30_ulog_bnodiv	0.2	--max-iterations 700 --populations 60 --population-size 60 --max-size 26 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it1400_p30_ps30_ms18_par01_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 18 --parsimony 0.1
+it1400_p30_ps30_ms18_par01_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 18 --parsimony 0.1 --binary-operators + - *
+it1400_p30_ps30_ms18_par01_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 18 --parsimony 0.1 --unary-operators log
+it1400_p30_ps30_ms18_par01_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 18 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it1400_p30_ps30_ms18_par08_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 18 --parsimony 0.8
+it1400_p30_ps30_ms18_par08_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 18 --parsimony 0.8 --binary-operators + - *
+it1400_p30_ps30_ms18_par08_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 18 --parsimony 0.8 --unary-operators log
+it1400_p30_ps30_ms18_par08_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 18 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it1400_p30_ps30_ms18_par30_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 18 --parsimony 3.0
+it1400_p30_ps30_ms18_par30_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 18 --parsimony 3.0 --binary-operators + - *
+it1400_p30_ps30_ms18_par30_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 18 --parsimony 3.0 --unary-operators log
+it1400_p30_ps30_ms18_par30_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 18 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it1400_p30_ps30_ms22_par01_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 22 --parsimony 0.1
+it1400_p30_ps30_ms22_par01_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 22 --parsimony 0.1 --binary-operators + - *
+it1400_p30_ps30_ms22_par01_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 22 --parsimony 0.1 --unary-operators log
+it1400_p30_ps30_ms22_par01_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 22 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it1400_p30_ps30_ms22_par08_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 22 --parsimony 0.8
+it1400_p30_ps30_ms22_par08_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 22 --parsimony 0.8 --binary-operators + - *
+it1400_p30_ps30_ms22_par08_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 22 --parsimony 0.8 --unary-operators log
+it1400_p30_ps30_ms22_par08_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 22 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it1400_p30_ps30_ms22_par30_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 22 --parsimony 3.0
+it1400_p30_ps30_ms22_par30_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 22 --parsimony 3.0 --binary-operators + - *
+it1400_p30_ps30_ms22_par30_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 22 --parsimony 3.0 --unary-operators log
+it1400_p30_ps30_ms22_par30_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 22 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it1400_p30_ps30_ms26_par01_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 26 --parsimony 0.1
+it1400_p30_ps30_ms26_par01_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 26 --parsimony 0.1 --binary-operators + - *
+it1400_p30_ps30_ms26_par01_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 26 --parsimony 0.1 --unary-operators log
+it1400_p30_ps30_ms26_par01_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 26 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it1400_p30_ps30_ms26_par08_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 26 --parsimony 0.8
+it1400_p30_ps30_ms26_par08_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 26 --parsimony 0.8 --binary-operators + - *
+it1400_p30_ps30_ms26_par08_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 26 --parsimony 0.8 --unary-operators log
+it1400_p30_ps30_ms26_par08_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 26 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it1400_p30_ps30_ms26_par30_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 26 --parsimony 3.0
+it1400_p30_ps30_ms26_par30_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 26 --parsimony 3.0 --binary-operators + - *
+it1400_p30_ps30_ms26_par30_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 26 --parsimony 3.0 --unary-operators log
+it1400_p30_ps30_ms26_par30_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 30 --max-size 26 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it1400_p30_ps60_ms18_par01_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 18 --parsimony 0.1
+it1400_p30_ps60_ms18_par01_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 18 --parsimony 0.1 --binary-operators + - *
+it1400_p30_ps60_ms18_par01_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 18 --parsimony 0.1 --unary-operators log
+it1400_p30_ps60_ms18_par01_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 18 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it1400_p30_ps60_ms18_par08_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 18 --parsimony 0.8
+it1400_p30_ps60_ms18_par08_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 18 --parsimony 0.8 --binary-operators + - *
+it1400_p30_ps60_ms18_par08_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 18 --parsimony 0.8 --unary-operators log
+it1400_p30_ps60_ms18_par08_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 18 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it1400_p30_ps60_ms18_par30_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 18 --parsimony 3.0
+it1400_p30_ps60_ms18_par30_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 18 --parsimony 3.0 --binary-operators + - *
+it1400_p30_ps60_ms18_par30_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 18 --parsimony 3.0 --unary-operators log
+it1400_p30_ps60_ms18_par30_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 18 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it1400_p30_ps60_ms22_par01_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 22 --parsimony 0.1
+it1400_p30_ps60_ms22_par01_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 22 --parsimony 0.1 --binary-operators + - *
+it1400_p30_ps60_ms22_par01_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 22 --parsimony 0.1 --unary-operators log
+it1400_p30_ps60_ms22_par01_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 22 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it1400_p30_ps60_ms22_par08_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 22 --parsimony 0.8
+it1400_p30_ps60_ms22_par08_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 22 --parsimony 0.8 --binary-operators + - *
+it1400_p30_ps60_ms22_par08_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 22 --parsimony 0.8 --unary-operators log
+it1400_p30_ps60_ms22_par08_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 22 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it1400_p30_ps60_ms22_par30_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 22 --parsimony 3.0
+it1400_p30_ps60_ms22_par30_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 22 --parsimony 3.0 --binary-operators + - *
+it1400_p30_ps60_ms22_par30_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 22 --parsimony 3.0 --unary-operators log
+it1400_p30_ps60_ms22_par30_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 22 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it1400_p30_ps60_ms26_par01_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 26 --parsimony 0.1
+it1400_p30_ps60_ms26_par01_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 26 --parsimony 0.1 --binary-operators + - *
+it1400_p30_ps60_ms26_par01_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 26 --parsimony 0.1 --unary-operators log
+it1400_p30_ps60_ms26_par01_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 26 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it1400_p30_ps60_ms26_par08_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 26 --parsimony 0.8
+it1400_p30_ps60_ms26_par08_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 26 --parsimony 0.8 --binary-operators + - *
+it1400_p30_ps60_ms26_par08_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 26 --parsimony 0.8 --unary-operators log
+it1400_p30_ps60_ms26_par08_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 26 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it1400_p30_ps60_ms26_par30_unone_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 26 --parsimony 3.0
+it1400_p30_ps60_ms26_par30_unone_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 26 --parsimony 3.0 --binary-operators + - *
+it1400_p30_ps60_ms26_par30_ulog_bdiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 26 --parsimony 3.0 --unary-operators log
+it1400_p30_ps60_ms26_par30_ulog_bnodiv	0.2	--max-iterations 1400 --populations 30 --population-size 60 --max-size 26 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it1400_p60_ps30_ms18_par01_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 18 --parsimony 0.1
+it1400_p60_ps30_ms18_par01_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 18 --parsimony 0.1 --binary-operators + - *
+it1400_p60_ps30_ms18_par01_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 18 --parsimony 0.1 --unary-operators log
+it1400_p60_ps30_ms18_par01_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 18 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it1400_p60_ps30_ms18_par08_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 18 --parsimony 0.8
+it1400_p60_ps30_ms18_par08_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 18 --parsimony 0.8 --binary-operators + - *
+it1400_p60_ps30_ms18_par08_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 18 --parsimony 0.8 --unary-operators log
+it1400_p60_ps30_ms18_par08_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 18 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it1400_p60_ps30_ms18_par30_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 18 --parsimony 3.0
+it1400_p60_ps30_ms18_par30_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 18 --parsimony 3.0 --binary-operators + - *
+it1400_p60_ps30_ms18_par30_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 18 --parsimony 3.0 --unary-operators log
+it1400_p60_ps30_ms18_par30_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 18 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it1400_p60_ps30_ms22_par01_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 22 --parsimony 0.1
+it1400_p60_ps30_ms22_par01_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 22 --parsimony 0.1 --binary-operators + - *
+it1400_p60_ps30_ms22_par01_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 22 --parsimony 0.1 --unary-operators log
+it1400_p60_ps30_ms22_par01_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 22 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it1400_p60_ps30_ms22_par08_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 22 --parsimony 0.8
+it1400_p60_ps30_ms22_par08_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 22 --parsimony 0.8 --binary-operators + - *
+it1400_p60_ps30_ms22_par08_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 22 --parsimony 0.8 --unary-operators log
+it1400_p60_ps30_ms22_par08_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 22 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it1400_p60_ps30_ms22_par30_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 22 --parsimony 3.0
+it1400_p60_ps30_ms22_par30_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 22 --parsimony 3.0 --binary-operators + - *
+it1400_p60_ps30_ms22_par30_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 22 --parsimony 3.0 --unary-operators log
+it1400_p60_ps30_ms22_par30_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 22 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it1400_p60_ps30_ms26_par01_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 26 --parsimony 0.1
+it1400_p60_ps30_ms26_par01_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 26 --parsimony 0.1 --binary-operators + - *
+it1400_p60_ps30_ms26_par01_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 26 --parsimony 0.1 --unary-operators log
+it1400_p60_ps30_ms26_par01_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 26 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it1400_p60_ps30_ms26_par08_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 26 --parsimony 0.8
+it1400_p60_ps30_ms26_par08_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 26 --parsimony 0.8 --binary-operators + - *
+it1400_p60_ps30_ms26_par08_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 26 --parsimony 0.8 --unary-operators log
+it1400_p60_ps30_ms26_par08_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 26 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it1400_p60_ps30_ms26_par30_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 26 --parsimony 3.0
+it1400_p60_ps30_ms26_par30_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 26 --parsimony 3.0 --binary-operators + - *
+it1400_p60_ps30_ms26_par30_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 26 --parsimony 3.0 --unary-operators log
+it1400_p60_ps30_ms26_par30_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 30 --max-size 26 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it1400_p60_ps60_ms18_par01_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 18 --parsimony 0.1
+it1400_p60_ps60_ms18_par01_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 18 --parsimony 0.1 --binary-operators + - *
+it1400_p60_ps60_ms18_par01_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 18 --parsimony 0.1 --unary-operators log
+it1400_p60_ps60_ms18_par01_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 18 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it1400_p60_ps60_ms18_par08_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 18 --parsimony 0.8
+it1400_p60_ps60_ms18_par08_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 18 --parsimony 0.8 --binary-operators + - *
+it1400_p60_ps60_ms18_par08_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 18 --parsimony 0.8 --unary-operators log
+it1400_p60_ps60_ms18_par08_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 18 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it1400_p60_ps60_ms18_par30_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 18 --parsimony 3.0
+it1400_p60_ps60_ms18_par30_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 18 --parsimony 3.0 --binary-operators + - *
+it1400_p60_ps60_ms18_par30_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 18 --parsimony 3.0 --unary-operators log
+it1400_p60_ps60_ms18_par30_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 18 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it1400_p60_ps60_ms22_par01_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 22 --parsimony 0.1
+it1400_p60_ps60_ms22_par01_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 22 --parsimony 0.1 --binary-operators + - *
+it1400_p60_ps60_ms22_par01_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 22 --parsimony 0.1 --unary-operators log
+it1400_p60_ps60_ms22_par01_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 22 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it1400_p60_ps60_ms22_par08_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 22 --parsimony 0.8
+it1400_p60_ps60_ms22_par08_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 22 --parsimony 0.8 --binary-operators + - *
+it1400_p60_ps60_ms22_par08_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 22 --parsimony 0.8 --unary-operators log
+it1400_p60_ps60_ms22_par08_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 22 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it1400_p60_ps60_ms22_par30_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 22 --parsimony 3.0
+it1400_p60_ps60_ms22_par30_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 22 --parsimony 3.0 --binary-operators + - *
+it1400_p60_ps60_ms22_par30_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 22 --parsimony 3.0 --unary-operators log
+it1400_p60_ps60_ms22_par30_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 22 --parsimony 3.0 --unary-operators log --binary-operators + - *
+it1400_p60_ps60_ms26_par01_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 26 --parsimony 0.1
+it1400_p60_ps60_ms26_par01_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 26 --parsimony 0.1 --binary-operators + - *
+it1400_p60_ps60_ms26_par01_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 26 --parsimony 0.1 --unary-operators log
+it1400_p60_ps60_ms26_par01_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 26 --parsimony 0.1 --unary-operators log --binary-operators + - *
+it1400_p60_ps60_ms26_par08_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 26 --parsimony 0.8
+it1400_p60_ps60_ms26_par08_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 26 --parsimony 0.8 --binary-operators + - *
+it1400_p60_ps60_ms26_par08_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 26 --parsimony 0.8 --unary-operators log
+it1400_p60_ps60_ms26_par08_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 26 --parsimony 0.8 --unary-operators log --binary-operators + - *
+it1400_p60_ps60_ms26_par30_unone_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 26 --parsimony 3.0
+it1400_p60_ps60_ms26_par30_unone_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 26 --parsimony 3.0 --binary-operators + - *
+it1400_p60_ps60_ms26_par30_ulog_bdiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 26 --parsimony 3.0 --unary-operators log
+it1400_p60_ps60_ms26_par30_ulog_bnodiv	0.2	--max-iterations 1400 --populations 60 --population-size 60 --max-size 26 --parsimony 3.0 --unary-operators log --binary-operators + - *
