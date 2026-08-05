@@ -49,7 +49,7 @@ except ImportError as exc:  # pragma: no cover - optional dependency
 TARGET_COLUMN = 'kcat_cg'
 
 # Hyperparameters for AI Feynman
-OPERATORS = '+*-D~ILEA'  # Operators used in symbolic regression
+OPERATORS = '+*-/L'  # brute-force ops: add, multiply, subtract, divide, log (rational + log only)
 BF_TRY_TIME = 30  # Max time (seconds) per brute-force search step. AI-Feynman
 # runs ~10 of these per world transform and re-does them at every symmetry
 # level, so the total is BF_TRY_TIME * ~10 * depth. Combined with the full 5000
@@ -163,20 +163,22 @@ def neutralize_structural_stages() -> None:
     srun.brute_force_comp = _empty_file("results_comp.dat")
     srun.evaluate_derivatives = lambda *a, **k: 0  # -> skip compositionality
 
-    # Disable the bounded-output "world" transforms (asin/acos/sin/cos/atan/tan).
-    # These assume the target is a trig function of the discovered expression, so
-    # the recovered formula is e.g. asin(...) whose output is capped to +-pi/2.
-    # kcat_cg is a positive rate whose log spans a wide range, so a trig-capped
-    # form fits the sampled data but generalises terribly (range mismatch). Keep
-    # the unbounded transforms (exp/log/sqrt/squared/inverse). Each get_* takes
-    # the running ParetoSet and returns it, so the no-op just passes it through.
+    # Restrict AI-Feynman to the {+,-,*,/,log} basis by disabling every "world"
+    # output-transform except log. These transforms assume the target is
+    # exp/sqrt/trig/... of the discovered expression and wrap the output
+    # accordingly (e.g. the earlier asin(...) form, whose output was capped to
+    # +-pi/2 and generalised terribly). With them off, AI-Feynman searches for the
+    # expression directly using only the brute-force ops in OPERATORS (+,-,*,/,L).
+    # Each get_* takes the running ParetoSet and returns it, so the no-op just
+    # passes it through.
     def _skip_world(*args, **kwargs):
         for obj in args:
             if hasattr(obj, "get_pareto_points"):
                 return obj
         return args[5] if len(args) > 5 else None
 
-    for _world in ("get_asin", "get_acos", "get_sin", "get_cos", "get_atan", "get_tan"):
+    for _world in ("get_asin", "get_acos", "get_sin", "get_cos", "get_atan",
+                   "get_tan", "get_exp", "get_sqrt", "get_squared", "get_inverse"):
         if hasattr(srun, _world):
             setattr(srun, _world, _skip_world)
 

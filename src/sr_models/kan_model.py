@@ -50,9 +50,13 @@ STEPS = 60  # Optimizer steps per refinement round
 LAMB = 0.001  # Regularization parameter
 LAMB_ENTROPY = 2.0  # Entropy regularization (encourages sparse activations)
 
-# Function Library for Symbolic Representation. Include 1/x and sqrt so KAN can
-# express rational / Michaelis-Menten-like forms (k/(K+s)), not just poly/exp/log.
-LIBRARY = ['x', 'x^2', 'x^3', '1/x', 'sqrt', 'exp', 'log', 'abs']  # KAN function library
+# Function Library for Symbolic Representation. Restricted to {+,-,*,/,log}:
+# KAN trains on LOG inputs, so additive edge combinations already encode products
+# and quotients of the original variables (log k + log s = log(ks); log k - log s
+# = log(k/s)) -> +,-,*,/ come for free from the identity ('x') edges plus the
+# node sums. 'log' is the only extra unary needed; exp/sqrt/x^2/x^3/1/x/abs are
+# dropped so KAN cannot use transcendentals outside the allowed set.
+LIBRARY = ['x', 'log']  # KAN function library
 
 def seed_everything(seed: int) -> None:
     random.seed(seed)
