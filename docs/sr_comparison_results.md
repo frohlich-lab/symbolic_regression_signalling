@@ -22,6 +22,15 @@ How well each formula predicts `kcat_cg` on the full 432,542-row test set,
 
 ![RHS comparison](figures/sr_rhs_comparison_two_step_enzyme.png)
 
+### Complexity vs accuracy
+
+Formula complexity (node count) vs the same direct log-MAE — `results_plot.png`
+from the `plot_methods` rule. PySR (sQSSA) is Pareto-optimal (lowest error at
+moderate complexity); KAN is the most complex (its 6-term power law); AI-Feynman
+and DSO are simplest but least accurate.
+
+![Complexity vs accuracy](figures/sr_complexity_vs_accuracy_two_step_enzyme.png)
+
 ## Discovered formulas
 
 **PySR (sQSSA)** — clean Michaelis-Menten rational; essentially exact (median ~0.06%):
