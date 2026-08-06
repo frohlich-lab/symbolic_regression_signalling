@@ -1659,8 +1659,16 @@ if enzyme_model != "experimental":
         # $CONDA_PREFIX/bin is a no-op when activation already worked and a fix
         # when it didn't.
         env_path_fix = '[ -n "$CONDA_PREFIX" ] && export PATH="$CONDA_PREFIX/bin:$PATH";'
+        # AI-Feynman hardcodes cwd-relative output (results/, model/, mystery.dat,
+        # args.dat, qaz.dat) with no option to redirect it, so running it from the repo
+        # root dumped all of that at the repo root, un-attributable to a model or
+        # variant. Give each run its own working directory next to its temp output.
+        work_dir_flag = ""
+        if model == "aifeynman":
+            suffix = f"_{variant}" if variant else ""
+            work_dir_flag = f" --work_dir $(dirname {temp_file})/aifeynman_work{suffix}"
         return f"""
-            {env_path_fix} {install_command}{separator} timeout {config["timeout_duration"]} python src/sr_models/{model}_model.py --dataset {dataset} --dataset_size {dataset_size} --features {features} --temp_file {temp_file}{variant_flag}{seed_flag} || test -s {temp_file}
+            {env_path_fix} {install_command}{separator} timeout {config["timeout_duration"]} python src/sr_models/{model}_model.py --dataset {dataset} --dataset_size {dataset_size} --features {features} --temp_file {temp_file}{variant_flag}{seed_flag}{work_dir_flag} || test -s {temp_file}
         """
 
     # Rules for symbolic regression for each model

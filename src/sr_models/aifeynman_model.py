@@ -21,6 +21,7 @@ Notes on robustness (see run_feynman):
 """
 
 import argparse
+import contextlib
 import random
 import pandas as pd
 import os
@@ -69,6 +70,33 @@ FILENAME = 'mystery.txt'  # Dataset file name
 
 # AI-Feynman writes here (relative to the CWD), regardless of DATA_PATHDIR.
 RESULTS_DIR = 'results'
+
+# AI-Feynman hardcodes several output locations relative to the working directory and
+# offers no way to redirect them: `results/`, the NN checkpoint dir `model/`, and the
+# loose scratch files `mystery.dat`, `args.dat`, `qaz.dat`, `results.dat`. Run from the
+# repo root they all land at the repo root. `run_in_work_dir` below chdir's into a
+# dedicated directory for the duration of the search so they land there instead.
+DEFAULT_WORK_DIR = 'data/aifeynman/work'
+
+
+@contextlib.contextmanager
+def run_in_work_dir(work_dir):
+    """Run AI-Feynman inside `work_dir` so its cwd-relative output lands there.
+
+    Every path the caller supplied must already be absolute by the time this is
+    entered -- see `main`, which resolves them before calling. A relative
+    `--temp_file` would otherwise be written inside the work directory and the
+    pipeline would look for it at the repo root and find nothing.
+    """
+    work_dir = Path(work_dir).resolve()
+    work_dir.mkdir(parents=True, exist_ok=True)
+    previous = Path.cwd()
+    os.chdir(work_dir)
+    print(f"AI Feynman working directory: {work_dir}")
+    try:
+        yield work_dir
+    finally:
+        os.chdir(previous)
 
 _SALVAGE_TEMP_FILE = None
 
@@ -321,6 +349,13 @@ def main():
         type=int,
         help='Override polynomial fit degree used by AI Feynman',
     )
+    parser.add_argument(
+        '--work_dir',
+        default=DEFAULT_WORK_DIR,
+        help='Directory to run AI Feynman inside. Its hardcoded cwd-relative output '
+             '(results/, model/, mystery.dat, args.dat, qaz.dat) lands here instead of '
+             'wherever the caller happened to be. Default: ' + DEFAULT_WORK_DIR,
+    )
 
     args = parser.parse_args()
     if AI_FEYNMAN_IMPORT_ERROR is not None:
@@ -329,18 +364,25 @@ def main():
             f"Original error: {AI_FEYNMAN_IMPORT_ERROR}"
         )
 
-    _install_sigterm_salvage(args.temp_file)
+    # Resolve before the chdir: these are the caller's paths, relative to the caller's
+    # working directory, and must keep pointing at the same files from inside work_dir.
+    dataset = str(Path(args.dataset).resolve())
+    temp_file = str(Path(args.temp_file).resolve())
+    Path(temp_file).parent.mkdir(parents=True, exist_ok=True)
+
+    _install_sigterm_salvage(temp_file)
     if args.seed is not None:
         seed_everything(args.seed)
-    data = load_dataset(args.dataset, args.dataset_size, args.features, args.seed)
-    run_feynman(
-        data,
-        args.temp_file,
-        args.features,
-        bf_try_time=args.bf_try_time or BF_TRY_TIME,
-        nn_epochs=args.nn_epochs or NN_EPOCHS,
-        polyfit_degree=args.polyfit_degree or POLYFIT_DEGREE,
-    )
+    data = load_dataset(dataset, args.dataset_size, args.features, args.seed)
+    with run_in_work_dir(args.work_dir):
+        run_feynman(
+            data,
+            temp_file,
+            args.features,
+            bf_try_time=args.bf_try_time or BF_TRY_TIME,
+            nn_epochs=args.nn_epochs or NN_EPOCHS,
+            polyfit_degree=args.polyfit_degree or POLYFIT_DEGREE,
+        )
 
 if __name__ == '__main__':
     main()
