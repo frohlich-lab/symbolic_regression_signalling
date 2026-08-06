@@ -1650,7 +1650,7 @@ if enzyme_model != "experimental":
         install_command = install_cmds.get(model, "")
         separator = ";" if install_command else ""
         variant_flag = f" --variant {variant}" if variant else ""
-        seed_flag = " --seed 42" if model == "pysr" else ""
+        seed_flag = " --seed 42"  # seed every method (data subsample + framework RNG), not just pysr
         # Force the activated conda env's bin to the front of PATH. snakemake
         # --use-conda logs "Activating conda environment ..." and sets
         # CONDA_PREFIX, but on some nodes the loaded Anaconda *module* python

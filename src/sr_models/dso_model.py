@@ -68,6 +68,7 @@ def create_dso_config(
     learning_rate: float,
     entropy_weight: float,
     entropy_gamma: float,
+    seed: int = 0,
 ) -> None:
     """Creates a JSON configuration file for DSO based on specified hyperparameters."""
     effective_batch_size = max(1, batch_size)
@@ -95,7 +96,8 @@ def create_dso_config(
             "const": {"on": True},
         },
         "experiment" : {
-            "logdir" : "./data/dso/logs"
+            "logdir" : "./data/dso/logs",
+            "seed" : seed,
         }
     }
     os.makedirs(os.path.dirname(CONFIG_FILE_PATH), exist_ok=True)
@@ -196,6 +198,7 @@ def main():
         learning_rate=args.learning_rate or DEFAULT_LEARNING_RATE,
         entropy_weight=args.entropy_weight or DEFAULT_ENTROPY_WEIGHT,
         entropy_gamma=args.entropy_gamma or DEFAULT_ENTROPY_GAMMA,
+        seed=args.seed if args.seed is not None else 0,
     )
     run_dso_training(args.temp_file)
 
