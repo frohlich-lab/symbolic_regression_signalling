@@ -1696,7 +1696,7 @@ def _plot_binwise_perk_traj(
                         ax.text(
                             0.98,
                             0.98,
-                            f"R² {r2_txt}",
+                            f"R²={r2_txt}",
                             transform=ax.transAxes,
                             va="top",
                             ha="right",
@@ -1720,13 +1720,13 @@ def _plot_binwise_perk_traj(
                         f"{marker} | seed {seed} | {model} | {mode} (bins 10/20/30/40)",
                         fontsize=15,
                     )
-                    fig_sel.tight_layout(rect=(0, 0, 1, 0.90))
+                    fig_sel.tight_layout(rect=(0, 0, 1, 0.93))
                     stem_sel = f"{marker}_seed{seed}_{model}_{mode}_bin_traj_selected".replace(" ", "_")
                     for ext in ("png", "svg"):
-                        fig_sel.savefig(out_dir / f"{stem_sel}.{ext}", dpi=220, bbox_inches="tight")
+                        fig_sel.savefig(out_dir / f"{stem_sel}.{ext}", dpi=300, bbox_inches="tight")
                         for sec in secondary_dirs:
                             try:
-                                fig_sel.savefig(sec / f"{stem_sel}.{ext}", dpi=220, bbox_inches="tight")
+                                fig_sel.savefig(sec / f"{stem_sel}.{ext}", dpi=300, bbox_inches="tight")
                             except Exception:
                                 pass
                     plt.close(fig_sel)

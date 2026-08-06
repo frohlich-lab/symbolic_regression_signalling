@@ -843,8 +843,12 @@ def main() -> None:
             )
 
     for _, row in summary.iterrows():
-        marker = row["group_name"]
-        formula = row["formula"]
+        marker = row.get("marker", row.get("group_name"))
+        if marker is None or (isinstance(marker, float) and np.isnan(marker)):
+            continue
+        marker = str(marker)
+        model_name = row.get("model", "Unknown")
+        formula = row.get("formula")
         if formula in (None, "N/A"):
             continue
 
@@ -853,7 +857,7 @@ def main() -> None:
         if sub.empty:
             continue
 
-        safe_eps = args.pysr_safe_division_eps if row["model"] == "PySR" else None
+        safe_eps = args.pysr_safe_division_eps if model_name == "PySR" else None
         expr = sanitize_formula(formula, safe_division_eps=safe_eps)
 
         # Train/test split on GFP bins
@@ -879,7 +883,7 @@ def main() -> None:
         train_proc = train_raw
         test_proc = test_raw
 
-        model_label = row["model"]
+        model_label = model_name
         seed_label = args.seed if args.seed is not None else "NA"
         print(
             f"[compute_marker_integration] seed={seed_label} model={model_label} "
@@ -903,7 +907,7 @@ def main() -> None:
             Dict[str, float],
             List[Dict[str, object]],
         ]:
-            restrict_mask = args.dataset_mode == "per_minute" and split_name == "test"
+            restrict_mask = args.dataset_mode == "per_minute"
 
             feats_local = frame[
                 [c for c in dataset.columns if c not in EXCLUDE_COLUMNS and c != target_col]
@@ -964,7 +968,7 @@ def main() -> None:
 
         metrics_row = {
             "marker": marker,
-            "model": row["model"],
+            "model": model_name,
             "dataset_mode": args.dataset_mode,
             "seed": args.seed,
             "formula": formula,
@@ -995,7 +999,7 @@ def main() -> None:
             payload.update(
                 {
                     "marker": marker,
-                    "model": row["model"],
+                    "model": model_name,
                     "dataset_mode": args.dataset_mode,
                     "seed": args.seed,
                 }

@@ -43,3 +43,4 @@ def seed_all(seed: int) -> int:
 
     return seed_everything(int(seed))
 
+

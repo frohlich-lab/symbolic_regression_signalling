@@ -16,3 +16,4 @@ dependencies:
   - seaborn
   - jax
   - diffrax
+  - equinox  # explicit for neural_ode_diffrax_baseline.py (also a diffrax transitive dep)

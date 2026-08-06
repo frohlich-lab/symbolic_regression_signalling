@@ -60,6 +60,10 @@ MODEL_COLOR_MAP = {
     for family, variant in MODEL_COMBINATIONS
 }
 
+_ALL_VARIANTS = OrderedDict(VARIANTS)
+_ALL_MODEL_COMBINATIONS = list(MODEL_COMBINATIONS)
+ALL_VARIANT_KEYS = tuple(_ALL_VARIANTS.keys())
+
 
 def variant_model_combinations(variant_key: Optional[str] = None) -> List[Tuple[str, str]]:
     if variant_key is None:
@@ -80,6 +84,87 @@ def variant_color_map(variant_key: Optional[str] = None) -> Dict[str, str]:
         f"{MODEL_FAMILIES[family]} ({VARIANTS[variant]})": MODEL_COLORS[(family, variant)]
         for family, variant in combos
     }
+
+
+def canonicalize_variant_keys(variant_keys: Optional[Iterable[str]]) -> List[str]:
+    if variant_keys is None:
+        return list(_ALL_VARIANTS.keys())
+
+    aliases = {
+        key.lower(): key
+        for key in _ALL_VARIANTS.keys()
+    }
+    aliases.update({
+        display.lower(): key
+        for key, display in _ALL_VARIANTS.items()
+    })
+
+    selected: List[str] = []
+    for raw_value in variant_keys:
+        if raw_value is None:
+            continue
+        for token in str(raw_value).split(","):
+            value = token.strip()
+            if not value:
+                continue
+            if value.lower() == "all":
+                return list(_ALL_VARIANTS.keys())
+            variant_key = aliases.get(value.lower())
+            if variant_key is None:
+                valid = ", ".join(_ALL_VARIANTS.keys())
+                raise ValueError(f"Unknown variant '{value}'. Expected one of: {valid}")
+            if variant_key not in selected:
+                selected.append(variant_key)
+
+    if not selected:
+        raise ValueError("At least one variant must be selected.")
+    return selected
+
+
+def _set_selected_variants(selected_variant_keys: List[str]) -> None:
+    selected_variants = OrderedDict(
+        (variant_key, _ALL_VARIANTS[variant_key])
+        for variant_key in selected_variant_keys
+    )
+    selected_combinations = [
+        (family, variant_key)
+        for family, variant_key in _ALL_MODEL_COMBINATIONS
+        if variant_key in selected_variants
+    ]
+
+    VARIANTS.clear()
+    VARIANTS.update(selected_variants)
+    MODEL_COMBINATIONS[:] = selected_combinations
+    MODEL_LINE_ORDER[:] = [
+        f"{MODEL_FAMILIES[family]} ({VARIANTS[variant_key]})"
+        for family, variant_key in MODEL_COMBINATIONS
+    ]
+    MODEL_COLOR_MAP.clear()
+    MODEL_COLOR_MAP.update({
+        f"{MODEL_FAMILIES[family]} ({VARIANTS[variant_key]})": MODEL_COLORS[(family, variant_key)]
+        for family, variant_key in MODEL_COMBINATIONS
+    })
+
+
+@contextmanager
+def selected_variants_context(selected_variant_keys: Optional[Iterable[str]]):
+    canonical_keys = canonicalize_variant_keys(selected_variant_keys)
+
+    old_variants = OrderedDict(VARIANTS)
+    old_line_order = list(MODEL_LINE_ORDER)
+    old_color_map = dict(MODEL_COLOR_MAP)
+    old_combinations = list(MODEL_COMBINATIONS)
+
+    try:
+        _set_selected_variants(canonical_keys)
+        yield canonical_keys
+    finally:
+        VARIANTS.clear()
+        VARIANTS.update(old_variants)
+        MODEL_LINE_ORDER[:] = old_line_order
+        MODEL_COLOR_MAP.clear()
+        MODEL_COLOR_MAP.update(old_color_map)
+        MODEL_COMBINATIONS[:] = old_combinations
 
 
 @contextmanager
@@ -475,9 +560,11 @@ def aggregate_seed_error_statistics(
 ) -> tuple[
     Dict[str, Dict[str, Dict[str, Dict[str, np.ndarray]]]],
     Dict[str, Dict[str, Dict[str, Dict[str, List[float]]]]],
+    Dict[str, Dict[str, Dict[str, Dict[str, List[float]]]]],
 ]:
     aggregated: Dict[str, Dict[str, Dict[str, Dict[str, List[np.ndarray]]]]] = OrderedDict()
     seed_medians: Dict[str, Dict[str, Dict[str, Dict[str, List[float]]]]] = OrderedDict()
+    seed_means: Dict[str, Dict[str, Dict[str, Dict[str, List[float]]]]] = OrderedDict()
 
     for model_dict in model_dicts:
         for regime, models in model_dict.items():
@@ -494,7 +581,9 @@ def aggregate_seed_error_statistics(
                     errors = np.asarray(metric_errors(metric_key, preds, y_true), dtype=float)
                     aggregated.setdefault(regime, OrderedDict()).setdefault(variant_key, OrderedDict()).setdefault(metric_key, OrderedDict()).setdefault(display_name, []).append(errors)
                     finite = errors[np.isfinite(errors)]
+                    mean_value = float(np.mean(finite)) if finite.size else float("nan")
                     median_value = float(np.median(finite)) if finite.size else float("nan")
+                    seed_means.setdefault(regime, OrderedDict()).setdefault(variant_key, OrderedDict()).setdefault(metric_key, OrderedDict()).setdefault(display_name, []).append(mean_value)
                     seed_medians.setdefault(regime, OrderedDict()).setdefault(variant_key, OrderedDict()).setdefault(metric_key, OrderedDict()).setdefault(display_name, []).append(median_value)
 
     collapsed: Dict[str, Dict[str, Dict[str, Dict[str, np.ndarray]]]] = OrderedDict()
@@ -538,7 +627,25 @@ def aggregate_seed_error_statistics(
         if regime_seed:
             filtered_seed_medians[regime] = regime_seed
 
-    return collapsed, filtered_seed_medians
+    filtered_seed_means: Dict[str, Dict[str, Dict[str, Dict[str, List[float]]]]] = OrderedDict()
+    for regime, variant_map in seed_means.items():
+        regime_seed: Dict[str, Dict[str, Dict[str, List[float]]]] = OrderedDict()
+        for variant_key, metric_map in variant_map.items():
+            variant_seed: Dict[str, Dict[str, List[float]]] = OrderedDict()
+            for metric_key, model_map in metric_map.items():
+                model_seed: Dict[str, List[float]] = OrderedDict()
+                for model_name, values in model_map.items():
+                    if not values:
+                        continue
+                    model_seed[model_name] = values
+                if model_seed:
+                    variant_seed[metric_key] = model_seed
+            if variant_seed:
+                regime_seed[variant_key] = variant_seed
+        if regime_seed:
+            filtered_seed_means[regime] = regime_seed
+
+    return collapsed, filtered_seed_medians, filtered_seed_means
 
 
 def gather_model_errors(
@@ -647,13 +754,46 @@ def collect_pysr_formula_lines(
     return lines
 
 
+def write_pysr_formula_files(
+    output_dir: Path | str,
+    variant_lines: Dict[str, List[str]],
+) -> None:
+    out_dir = Path(output_dir) / "shared/results/pysr"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    merged_lines: Dict[str, List[str]] = OrderedDict()
+    for variant_key in ALL_VARIANT_KEYS:
+        variant_path = out_dir / f"all_pysr_formulas_{variant_key}.txt"
+        if variant_key in variant_lines:
+            lines = [line for line in variant_lines[variant_key] if str(line).strip()]
+            if lines:
+                variant_path.write_text("\n".join(lines) + "\n")
+            else:
+                variant_path.unlink(missing_ok=True)
+        elif variant_path.exists():
+            lines = [line for line in variant_path.read_text().splitlines() if line.strip()]
+        else:
+            lines = []
+        merged_lines[variant_key] = lines
+
+    combined = [line for variant_key in ALL_VARIANT_KEYS for line in merged_lines[variant_key]]
+    combined_path = out_dir / "all_pysr_formulas.txt"
+    if combined:
+        combined_path.write_text("\n".join(combined) + "\n")
+    else:
+        combined_path.unlink(missing_ok=True)
+
+
 __all__ = [
+    "ALL_VARIANT_KEYS",
     "VARIANTS",
     "MODEL_FAMILIES",
     "MODEL_COMBINATIONS",
     "MODEL_LINE_ORDER",
     "MODEL_COLOR_MAP",
     "MODEL_COLORS",
+    "canonicalize_variant_keys",
+    "selected_variants_context",
     "variant_suffix",
     "has_persisted_splits",
     "model_display_name",
@@ -676,6 +816,7 @@ __all__ = [
     "collect_variant_predictions",
     "gather_model_errors",
     "collect_pysr_formula_lines",
+    "write_pysr_formula_files",
     "MM_EPS",
     "MM_TARGET_COLUMN",
     "metric_bounds",

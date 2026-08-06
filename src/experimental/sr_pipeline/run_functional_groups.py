@@ -245,6 +245,28 @@ def parse_args() -> argparse.Namespace:
         help="Parsimony coefficient for PySR (complexity penalty).",
     )
     parser.add_argument(
+        "--linear-stability-penalty",
+        type=float,
+        default=1000.0,
+        help="Penalty coefficient for positive slope in linear p direction.",
+    )
+    parser.add_argument(
+        "--inverse-stability-penalty",
+        type=float,
+        default=1000.0,
+        help="Penalty coefficient for negative slope in linear 1/p direction.",
+    )
+    parser.add_argument(
+        "--disable-linear-stability-penalty",
+        action="store_true",
+        help="Set the linear-p stability penalty coefficient to 0.",
+    )
+    parser.add_argument(
+        "--disable-inverse-stability-penalty",
+        action="store_true",
+        help="Set the inverse-p stability penalty coefficient to 0.",
+    )
+    parser.add_argument(
         "--binary-operators",
         nargs="*",
         default=("+", "-", "*", "/"),
@@ -982,6 +1004,21 @@ def run_pipeline(args: argparse.Namespace) -> Path:
 
         sr_kwargs: Optional[Dict[str, object]] = None
         if run_pysr:
+            linear_penalty = (
+                0.0
+                if args.disable_linear_stability_penalty
+                else float(args.linear_stability_penalty)
+            )
+            inverse_penalty = (
+                0.0
+                if args.disable_inverse_stability_penalty
+                else float(args.inverse_stability_penalty)
+            )
+            LOGGER.info(
+                "Custom loss stability penalties | linear=%s | inverse=%s",
+                linear_penalty,
+                inverse_penalty,
+            )
             loss_required_pERK = r"""
             import SymbolicRegression: Dataset, eval_tree_array
             import Statistics: count
@@ -993,8 +1030,8 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             const DEP_TOL = 1e-4
             const REDUNDANT_PENALTY = 1000.0
 
-            const WRONGSIGN_P_LINEAR = 1000.0
-            const WRONGSIGN_INV_LINEAR = 1000.0
+            const WRONGSIGN_P_LINEAR = __WRONGSIGN_P_LINEAR__
+            const WRONGSIGN_INV_LINEAR = __WRONGSIGN_INV_LINEAR__
 
             const EPS_REL = 1e-3
             const LIN_TOL_REL = 1e-3
@@ -1112,6 +1149,11 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 return L(_loss_core(tree, X, y, options))
             end
             """
+            loss_required_pERK = loss_required_pERK.replace(
+                "__WRONGSIGN_P_LINEAR__", format(linear_penalty, ".16g")
+            ).replace(
+                "__WRONGSIGN_INV_LINEAR__", format(inverse_penalty, ".16g")
+            )
 
             sr_kwargs = {
                 "niterations": args.max_iterations,

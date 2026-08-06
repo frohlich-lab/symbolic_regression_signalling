@@ -167,6 +167,18 @@ def _assert_runs_only(path: Optional[Path], label: str) -> None:
         raise ValueError(f"{label} must use data/experimental/runs/... not {p}")
 
 
+def _normalize_marker_columns(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """Support both legacy group summaries and marker-mode summaries."""
+    if df is None:
+        return None
+    out = df.copy()
+    if "group_name" not in out.columns and "marker" in out.columns:
+        out["group_name"] = out["marker"]
+    if "marker" not in out.columns and "group_name" in out.columns:
+        out["marker"] = out["group_name"]
+    return out
+
+
 def _simple_ylim(values: Sequence[float], pad_frac: float = 0.05) -> Optional[Tuple[float, float]]:
     """
     Compute padded y-limits from the min/max of the plotted values.
@@ -221,16 +233,19 @@ def make_overlay_plots(
 
     base_output_dir = _resolve_overlay_output_dir(Path(args.output_dir))
     base_output_dir.mkdir(parents=True, exist_ok=True)
+    summary = _normalize_marker_columns(summary)
+    summary_seed = _normalize_marker_columns(summary_seed)
     # Keep only selected model rows
     summary = summary[summary["model"] == args.model].copy()
-    if args.filter_dataset_mode and "dataset_mode" in summary.columns:
-        summary = summary[summary["dataset_mode"] == args.filter_dataset_mode].copy()
+    filter_dataset_mode = args.filter_dataset_mode or args.dataset_mode
+    if filter_dataset_mode and "dataset_mode" in summary.columns:
+        summary = summary[summary["dataset_mode"] == filter_dataset_mode].copy()
     if summary.empty:
         raise ValueError(f"No rows for model {args.model} in summary.")
     if summary_seed is not None:
         summary_seed = summary_seed[summary_seed["model"] == args.model].copy()
-        if args.filter_dataset_mode and "dataset_mode" in summary_seed.columns:
-            summary_seed = summary_seed[summary_seed["dataset_mode"] == args.filter_dataset_mode].copy()
+        if filter_dataset_mode and "dataset_mode" in summary_seed.columns:
+            summary_seed = summary_seed[summary_seed["dataset_mode"] == filter_dataset_mode].copy()
 
     markers = sorted(summary["group_name"].unique().tolist())
     if not markers:
@@ -355,8 +370,6 @@ def make_overlay_plots(
         if cand in summary.columns:
             seed_col = cand
             break
-    if seed_col is None:
-        raise ValueError("Summary must include a seed or random_state column for overlays.")
 
     def _run_for_seed(seed_value: Optional[object]) -> None:
         if seed_value is not None and seed_col:
@@ -914,11 +927,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
-def _normalize_marker_column(df):
-    if "marker" not in df.columns and "group_name" in df.columns:
-        df = df.copy()
-        df["marker"] = df["group_name"]
-    return df

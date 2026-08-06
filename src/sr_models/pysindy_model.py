@@ -66,20 +66,35 @@ def load_dataset(
         missing = [col for col in requested if col not in data.columns]
         if missing:
             print(f"Warning: missing features for PySINDy: {missing}. Using available columns {feature_list}.")
-        cols_to_use = ['time'] if 'time' in data.columns else []
+        # Keep condition_id (trajectory grouping) and time (integration axis) so
+        # SINDy operates on genuine per-condition time series rather than on
+        # arbitrary fixed-length row chunks. Mixing conditions produced
+        # non-monotonic time and NaN finite-difference derivatives.
+        cols_to_use = [c for c in ('condition_id', 'time') if c in data.columns]
         cols_to_use += feature_list
         if target not in cols_to_use:
             cols_to_use.append(target)
         data = data[cols_to_use].dropna()
+        # The datasets encode a steady-state sample as time=inf (t -> infinity).
+        # An infinite time gap makes finite-difference derivatives NaN, so drop
+        # any non-finite time rows before building trajectories.
+        if 'time' in data.columns:
+            data = data[np.isfinite(data['time'])]
 
-    if dataset_size:
+    # Sample whole trajectories (by condition), never mid-trajectory rows.
+    if dataset_size and 'condition_id' in data.columns:
+        approx_traj_len = max(1, int(data.groupby('condition_id').size().median()))
+        n_conditions = max(1, dataset_size // approx_traj_len)
+        keep_ids = data['condition_id'].drop_duplicates().iloc[:n_conditions]
+        data = data[data['condition_id'].isin(keep_ids)]
+    elif dataset_size:
         dataset_size = min(dataset_size, len(data))
         data = data.iloc[:dataset_size]
 
-    # Apply exponential transformation
+    # Apply exponential transformation to the feature columns only.
     if 'feature_list' in locals():
         data[feature_list] = np.exp(data[feature_list])
-    
+
     return data
 
 
@@ -192,10 +207,41 @@ def convert_to_explicit_ode_system(rhs_expressions, input_features, t=symbols('t
 CHUNK_LENGTH = N_TIME_STEPS - 1
 
 
+def _enforce_increasing_time(chunk: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy with a strictly increasing 'time' column (or a synthetic one)."""
+    chunk = chunk.reset_index(drop=True)
+    if "time" in chunk.columns:
+        t_values = chunk["time"].to_numpy(dtype=float, copy=True)
+        for j in range(1, len(t_values)):
+            prev = t_values[j - 1]
+            if t_values[j] <= prev:
+                step = max(1e-9, abs(prev) * 1e-9)
+                t_values[j] = prev + step
+        chunk["time"] = t_values
+    else:
+        chunk["time"] = np.linspace(0.0, float(len(chunk) - 1), num=len(chunk))
+    return chunk
+
+
 def _build_samples(data: pd.DataFrame) -> list[pd.DataFrame]:
-    """Create per-trajectory data slices with a strictly increasing time grid."""
+    """Create per-trajectory data slices with a strictly increasing time grid.
+
+    When ``condition_id`` is present each condition is one trajectory (sorted by
+    time); the id column is dropped so the layout is [time, features..., target].
+    Otherwise we fall back to fixed-length row chunks.
+    """
     samples: list[pd.DataFrame] = []
     if data.empty:
+        return samples
+
+    if "condition_id" in data.columns:
+        for _, group in data.groupby("condition_id", sort=False):
+            if len(group) < 2:
+                continue
+            group = group.drop(columns=["condition_id"])
+            if "time" in group.columns:
+                group = group.sort_values("time")
+            samples.append(_enforce_increasing_time(group))
         return samples
 
     if "time" in data.columns:
@@ -210,20 +256,7 @@ def _build_samples(data: pd.DataFrame) -> list[pd.DataFrame]:
         chunk = data.iloc[start:end].copy()
         if len(chunk) < 2:
             continue
-        chunk = chunk.reset_index(drop=True)
-
-        if "time" in chunk.columns:
-            t_values = chunk["time"].to_numpy(dtype=float, copy=True)
-            for j in range(1, len(t_values)):
-                prev = t_values[j - 1]
-                if t_values[j] <= prev:
-                    step = max(1e-9, abs(prev) * 1e-9)
-                    t_values[j] = prev + step
-            chunk["time"] = t_values
-        else:
-            chunk["time"] = np.linspace(0.0, float(len(chunk) - 1), num=len(chunk))
-
-        samples.append(chunk)
+        samples.append(_enforce_increasing_time(chunk))
 
     return samples
 
@@ -273,14 +306,26 @@ def custom_log_loss(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     loss = (np.log10(y_pred) - np.log10(y_true))
     return np.mean(loss)
 
+def _feature_names_from_data(data: pd.DataFrame) -> list[str]:
+    """Derive SINDy feature names from the dataframe columns.
+
+    ``sample_splitter`` treats column 0 as the time axis and the last column as
+    the target, using ``iloc[:, 1:-1]`` as the feature matrix. The feature names
+    handed to PySINDy must line up with exactly those columns, otherwise PySINDy
+    raises a shape mismatch. The previous hard-coded list (7 names) never matched
+    the configured features and broke every run.
+    """
+    return list(data.columns[1:-1])
+
+
 def find_best_formula(
     data: pd.DataFrame, temp_file: str, n_iterations: int = N_ITERATIONS
 ) -> None:
     """Run SINDy-PI to find the best formula."""
     t, X, _ = sample_splitter(data)
     x_dots = get_x_dot(data)
-    
-    feature_names = ['P_p', 'tK', 'P_u', 'k_cat', 'k_on', 'k_off', 'k_inact']
+
+    feature_names = _feature_names_from_data(data)
 
     # Initialize SINDy-PI model
     pde_lib = ps.PDELibrary(
@@ -322,8 +367,8 @@ def grid_search(
     """Perform grid search over alpha and threshold to find the best parameters."""
     t, X, _ = sample_splitter(data)
     x_dots = get_x_dot(data, finite_difference_order_override)
-    
-    feature_names = ['P_p', 'tK', 'P_u', 'k_cat', 'k_on', 'k_off', 'k_inact']
+
+    feature_names = _feature_names_from_data(data)
     best_loss = float('inf')
     best_params = None
     best_formula = None

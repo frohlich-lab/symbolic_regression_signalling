@@ -190,6 +190,21 @@ def pr_of(v: np.ndarray) -> float:
     return float(s * s / sq) if sq > 0 else 0.0
 
 
+def _count_vars(formula: str, features) -> float:
+    """Distinct model variables appearing in the expression.
+
+    Longest name first so p_ERK1_2_min is not also counted as p_ERK1_2. This is an exact
+    count, unlike the network's participation ratio, which is an effective count -- the two
+    are therefore not compared statistically.
+    """
+    t, n = str(formula), 0
+    for f in sorted(features, key=len, reverse=True):
+        if f in t:
+            n += 1
+            t = t.replace(f, " ")
+    return float(n)
+
+
 def _parse_pysr(path: Path) -> dict[str, tuple[float, str]]:
     text = path.read_text()
     out: dict[str, tuple[float, str]] = {}
@@ -198,7 +213,7 @@ def _parse_pysr(path: Path) -> dict[str, tuple[float, str]]:
             continue
         if not block.startswith("Group:"):
             block = "Group: " + block
-        m = re.search(r"Group:\s*(\S+)", block)
+        m = re.search(r"Group:\s*(.+)", block)
         r2 = re.search(r"Test R2:\s*([-+0-9.eE]+)", block)
         f = re.search(r"Formula:\s*(.+)", block)
         if m and r2 and f:
@@ -292,8 +307,10 @@ def main() -> None:
         non_gfp_idx = [i for i, f in enumerate(meta["feature_cols"]) if f != "GFP"]
         nn_pr = pr_of(causal["mean_signed_jac"][non_gfp_idx])
 
-        py_jac = _pysr_jac_at_mean(py_formula, marker, dataset)
-        py_pr = pr_of(py_jac[[FEATURES.index(f) for f in NON_GFP]]) if py_jac is not None else 0.0
+        # Exact count of variables in the recovered expression (GFP excluded, as for the
+        # network). Replaces the Jacobian participation ratio: a count is what the paper
+        # reports in the text, and it needs no sensitivity evaluation at the training mean.
+        py_pr = _count_vars(py_formula, NON_GFP)
 
         rows.append(dict(marker=marker, nn_r2=nn_best_r2, py_r2=py_best_r2,
                          nn_pr=nn_pr, py_pr=py_pr))
@@ -335,7 +352,7 @@ def main() -> None:
     nn_ok = df.nn_r2 > threshold
     py_ok = df.py_r2 > threshold
     nn_pr_good = df[nn_ok & (df.nn_pr > 0)].nn_pr.values
-    py_pr_good = df[py_ok & (df.py_pr > 0)].py_pr.values
+    py_pr_good = df[py_ok].py_pr.values
     # Split the Neural ODE's working markers by whether PySR also got there.
     nn_pr_py_ok = df[nn_ok & py_ok & (df.nn_pr > 0)].nn_pr.values
     nn_pr_py_bad = df[nn_ok & ~py_ok & (df.nn_pr > 0)].nn_pr.values
@@ -520,17 +537,17 @@ def main() -> None:
     # Stats: paired where the markers coincide, independent otherwise. Every
     # p-value goes to stdout for the caption; only significant brackets are
     # drawn, so the narrow panel stays readable.
-    paired = df[nn_ok & py_ok & (df.nn_pr > 0) & (df.py_pr > 0)]
+    paired = df[nn_ok & py_ok & (df.nn_pr > 0)]
+    # Only the network-internal comparison is a like-for-like test. The SR box is an exact
+    # variable count and the network boxes are participation ratios, so SR-vs-network
+    # p-values are reported to stdout for reference but never drawn as brackets.
     tests = []
-    if len(paired) >= 3:
-        tests.append((0, 1, "paired Wilcoxon",
-                      stats.wilcoxon(paired.py_pr.values, paired.nn_pr.values).pvalue))
     if len(nn_pr_py_ok) and len(nn_pr_py_bad):
         tests.append((1, 2, "Mann-Whitney U",
                       stats.mannwhitneyu(nn_pr_py_ok, nn_pr_py_bad).pvalue))
-    if len(py_pr_good) and len(nn_pr_py_bad):
-        tests.append((0, 2, "Mann-Whitney U",
-                      stats.mannwhitneyu(py_pr_good, nn_pr_py_bad).pvalue))
+    if len(paired) >= 3:
+        print("  [not drawn] SR variable count vs NN PR, paired Wilcoxon p = "
+              f"{stats.wilcoxon(paired.py_pr.values, paired.nn_pr.values).pvalue:.4g}")
 
     all_vals = np.concatenate([v for _, v, _, _, _ in groups if len(v)])
     top = float(all_vals.max())
@@ -576,7 +593,7 @@ def main() -> None:
     ax_box.tick_params(axis="y", labelsize=FS)
     ax_box.set_title("Parsimony", loc="left", fontsize=FS,
                      fontweight="bold", color=INK, pad=5)
-    ax_box.set_ylabel("Effective number of drivers (PR)\non markers that method solves",
+    ax_box.set_ylabel("Number of variables used\non markers that method solves",
                       fontsize=FS, linespacing=1.35)
 
     out_png = Path(args.output)

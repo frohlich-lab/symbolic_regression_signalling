@@ -147,7 +147,7 @@ def main():
     if args.parsimony is not None:
         override_config['parsimony'] = args.parsimony
     if args.variant == "tQSSA" and "maxsize" not in override_config:
-        override_config["maxsize"] = 35
+        override_config["maxsize"] = 45
     find_best_formula(
         data,
         args.temp_file,

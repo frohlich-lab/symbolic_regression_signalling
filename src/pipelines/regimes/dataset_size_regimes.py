@@ -5,6 +5,7 @@ import argparse
 import warnings
 import logging
 import json
+import sys
 from collections import OrderedDict
 from typing import Dict, List, Optional
 
@@ -14,6 +15,19 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import torch
 from pathlib import Path
+
+SRC_ROOT = Path(__file__).resolve().parents[2]
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+PROJECT_ROOT = SRC_ROOT.parent
+os.environ.setdefault(
+    "PYTHON_JULIAPKG_PROJECT",
+    str((PROJECT_ROOT / ".snakemake" / "juliapkg" / Path(__file__).stem).resolve()),
+)
+os.environ.setdefault(
+    "JULIA_DEPOT_PATH",
+    str((PROJECT_ROOT / ".snakemake" / "julia_depot").resolve()),
+)
 
 from pysr import PySRRegressor
 from sklearn.model_selection import train_test_split
@@ -32,6 +46,7 @@ from regime_variants import (
     MODEL_LINE_ORDER,
     VARIANTS,
     augment_for_variant,
+    canonicalize_variant_keys,
     collect_variant_predictions,
     collect_pysr_formula_lines,
     gather_model_errors,
@@ -53,6 +68,8 @@ from regime_variants import (
     clip_metric_values,
     metric_limits_with_margin,
     variant_plot_context,
+    selected_variants_context,
+    write_pysr_formula_files,
 )
 
 warnings.filterwarnings("ignore")
@@ -291,9 +308,11 @@ def _collect_error_distributions(
 ) -> tuple[
     Dict[str, Dict[str, Dict[str, np.ndarray]]],
     Dict[str, Dict[str, Dict[str, List[float]]]],
+    Dict[str, Dict[str, Dict[str, List[float]]]],
 ]:
     distributions: Dict[str, Dict[str, Dict[str, np.ndarray]]] = OrderedDict()
     seed_medians: Dict[str, Dict[str, Dict[str, List[float]]]] = OrderedDict()
+    seed_means: Dict[str, Dict[str, Dict[str, List[float]]]] = OrderedDict()
 
     for regime in _ordered_regimes(model_dict):
         models = model_dict.get(regime)
@@ -302,8 +321,10 @@ def _collect_error_distributions(
 
         aggregated_errors = models.get("aggregated_errors", {})
         aggregated_seed_medians = models.get("aggregated_seed_medians", {})
+        aggregated_seed_means = models.get("aggregated_seed_means", {})
         metric_maps = {metric_key: {} for metric_key in metric_keys()}
         median_maps = {metric_key: {} for metric_key in metric_keys()}
+        mean_maps = {metric_key: {} for metric_key in metric_keys()}
 
         for family, variant_key in MODEL_COMBINATIONS:
             display_name = model_display_name(family, variant_key)
@@ -322,8 +343,16 @@ def _collect_error_distributions(
                         .get(metric_key, {})
                         .get(display_name)
                     )
+                    means = (
+                        aggregated_seed_means
+                        .get(variant_key, {})
+                        .get(metric_key, {})
+                        .get(display_name)
+                    )
                     if medians is not None:
                         median_maps[metric_key][display_name] = list(medians)
+                    if means is not None:
+                        mean_maps[metric_key][display_name] = list(means)
                 continue
 
             snapshot = collect_variant_predictions(models, variant_key, evaluate_model)
@@ -337,14 +366,17 @@ def _collect_error_distributions(
                 errs = metric_errors(metric_key, preds, y_true)
                 metric_maps[metric_key][display_name] = errs
                 finite = errs[np.isfinite(errs)]
+                mean_value = float(np.mean(finite)) if finite.size else float("nan")
                 median_value = float(np.median(finite)) if finite.size else float("nan")
+                mean_maps[metric_key][display_name] = [mean_value]
                 median_maps[metric_key][display_name] = [median_value]
 
         if any(metric_maps[m] for m in metric_keys()):
             distributions[regime] = metric_maps
             seed_medians[regime] = median_maps
+            seed_means[regime] = mean_maps
 
-    return distributions, seed_medians
+    return distributions, seed_medians, seed_means
 
 
 def _metric_slice(
@@ -507,7 +539,8 @@ def _plot_dataset_size_lineplot(
         else:
             x_labels.append(f"{mult * 100:.0f}%")
 
-    lineplot_figsize = (7.893, 5.913)  # Match noise_regimes_full lineplot pixel size at 300 dpi.
+    lineplot_figsize = (8.0, 6.0)
+    lineplot_layout = dict(left=0.153, right=0.987, bottom=0.272, top=0.983)
 
     def _render_lineplot(*, fixed_ylim: bool) -> None:
         fig, ax = plt.subplots(figsize=lineplot_figsize)
@@ -541,7 +574,7 @@ def _plot_dataset_size_lineplot(
         legend_fs = 21
         legend_title_fs = 22
         ax.set_xticks(x)
-        ax.set_xticklabels(x_labels, fontsize=tick_fs)
+        ax.set_xticklabels(x_labels, rotation=20, ha="right", fontsize=tick_fs)
         ax.set_xlabel("Dataset Size Regime", fontsize=label_fs)
         ax.set_ylabel(spec.axis_label, fontsize=label_fs)
         ax.set_yscale(spec.y_scale)
@@ -566,7 +599,7 @@ def _plot_dataset_size_lineplot(
 
         suffix = "_template" if template else ""
         fixed_suffix = "_fixed_ylim" if fixed_ylim else ""
-        plt.tight_layout()
+        fig.subplots_adjust(**lineplot_layout)
         filename = f"{spec.filename_prefix}_dataset_size_lineplot{fixed_suffix}{suffix}.png"
         plt.savefig(plot_dir / filename, dpi=300, bbox_inches=None, pad_inches=0.0)
         plt.close()
@@ -578,6 +611,7 @@ def _plot_dataset_size_lineplot(
 def plot_dataset_size_lineplots(
     distributions: Dict[str, Dict[str, Dict[str, np.ndarray]]],
     seed_medians: Dict[str, Dict[str, Dict[str, List[float]]]],
+    seed_means: Dict[str, Dict[str, Dict[str, List[float]]]],
     output_dir: str,
     template: bool = False,
 ):
@@ -585,14 +619,14 @@ def plot_dataset_size_lineplots(
         metric_dist = _metric_slice(distributions, metric_key)
         if not metric_dist:
             continue
-        metric_seed_medians = {
+        metric_seed_values = {
             regime: seed_medians.get(regime, {}).get(metric_key, {})
             for regime in metric_dist.keys()
         }
         _plot_dataset_size_lineplot(
             metric_key,
             metric_dist,
-            metric_seed_medians,
+            metric_seed_values,
             output_dir,
             template=template,
         )
@@ -657,7 +691,7 @@ def _plot_error_distributions(metric_key, metric_distributions, output_dir):
 
 
 def plot_error_distributions(model_dict, output_dir):
-    distributions, _ = _collect_error_distributions(model_dict)
+    distributions, _, _ = _collect_error_distributions(model_dict)
     if not distributions:
         LOGGER.info("No error distributions available; skipping violin plots")
         return
@@ -956,7 +990,7 @@ def plot_nn_vs_mm_response_curves_linear(model_dict, output_dir, n_samples=10, n
 
 
 def plot_horizontal_boxplots(model_dict, output_dir):
-    distributions, _ = _collect_error_distributions(model_dict)
+    distributions, _, _ = _collect_error_distributions(model_dict)
     if not distributions:
         return
 
@@ -1019,7 +1053,7 @@ def plot_horizontal_boxplots(model_dict, output_dir):
 
 
 def plot_vertical_boxplots(model_dict, output_dir):
-    distributions, _ = _collect_error_distributions(model_dict)
+    distributions, _, _ = _collect_error_distributions(model_dict)
     if not distributions:
         return
 
@@ -1101,10 +1135,13 @@ def plot_sqssa_vs_tqssa_baselines(
     output_dir: str,
     metric_key: str = "log_mae",
 ) -> None:
-    distributions, seed_medians = _collect_error_distributions(model_dict)
+    distributions, seed_medians, seed_means = _collect_error_distributions(model_dict)
     metric_dist = _metric_slice(distributions, metric_key)
     seed_median_dist = _metric_slice(seed_medians, metric_key)
-    source_dist = seed_median_dist if seed_median_dist else metric_dist
+    source_dist = (
+        seed_median_dist if seed_median_dist
+        else metric_dist
+    )
     if source_dist:
         avg_dist: Dict[str, Dict[str, np.ndarray]] = OrderedDict()
         for regime, model_map in source_dist.items():
@@ -1245,24 +1282,8 @@ def plot_sqssa_vs_tqssa_baselines(
 
 
 def save_pysr_formulas(model_dict, features, output_dir):
-    out_dir = Path(output_dir) / "shared/results/pysr"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     variant_lines = collect_pysr_formula_lines(model_dict, features)
-    combined: list[str] = []
-    for variant_key, lines in variant_lines.items():
-        if not lines:
-            continue
-        combined.extend(lines)
-        variant_path = out_dir / f"all_pysr_formulas_{variant_key}.txt"
-        with variant_path.open("w") as handle:
-            for line in lines:
-                handle.write(line + "\n")
-
-    if combined:
-        with (out_dir / "all_pysr_formulas.txt").open("w") as handle:
-            for line in combined:
-                handle.write(line + "\n")
+    write_pysr_formula_files(output_dir, variant_lines)
 
 
 def _evaluate_models_single_seed(
@@ -1407,8 +1428,6 @@ def _evaluate_models_single_seed(
                 pysr_dir.mkdir(parents=True, exist_ok=True)
                 pysr_model_path = pysr_dir / "hall_of_fame.pkl"
                 config_override = dict(pysr_operator_config(variant_key))
-                if variant_key == "tQSSA":
-                    config_override["maxsize"] = 35
                 if not config_override:
                     config_override = None
                 if plots_only:
@@ -1663,9 +1682,9 @@ def _render_variant_plots(model_dict: Dict[str, Dict[str, object]], output_dir: 
                 plot_nn_vs_mm_response_curves_linear(model_dict, variant_dir)
             plot_horizontal_boxplots(model_dict, variant_dir)
             plot_vertical_boxplots(model_dict, variant_dir)
-            error_distributions, seed_medians = _collect_error_distributions(model_dict)
-            plot_dataset_size_lineplots(error_distributions, seed_medians, variant_dir, template=False)
-            plot_dataset_size_lineplots(error_distributions, seed_medians, variant_dir, template=True)
+            error_distributions, seed_medians, seed_means = _collect_error_distributions(model_dict)
+            plot_dataset_size_lineplots(error_distributions, seed_medians, seed_means, variant_dir, template=False)
+            plot_dataset_size_lineplots(error_distributions, seed_medians, seed_means, variant_dir, template=True)
         _emit(f"[plots] Saved {variant_key} variant outputs to {variant_dir}")
 
 
@@ -1723,7 +1742,7 @@ def evaluate_models(
         seed_dir = Path(output_dir) / "_multi_seed" / f"seed_{idx + 1}"
         save_pysr_formulas(model_dict, features, str(seed_dir))
     if render_plots:
-        aggregated_errors, seed_medians_map = aggregate_seed_error_statistics(
+        aggregated_errors, seed_medians_map, seed_means_map = aggregate_seed_error_statistics(
             seed_model_dicts,
             evaluate_model,
         )
@@ -1731,20 +1750,24 @@ def evaluate_models(
         for regime, models in base_model_dict.items():
             models["aggregated_errors"] = aggregated_errors.get(regime, {})
             models["aggregated_seed_medians"] = seed_medians_map.get(regime, {})
+            models["aggregated_seed_means"] = seed_means_map.get(regime, {})
             models["seed_values"] = seeds
 
         plot_model_subregimes(base_model_dict, output_dir)
         plot_error_distributions(base_model_dict, output_dir)
         plot_input_error_correlation(base_model_dict, output_dir)
         plot_model_error_correlation(base_model_dict, output_dir)
-        plot_nn_vs_mm_response_curves_linear(base_model_dict, output_dir)
+        if "sQSSA" in VARIANTS:
+            plot_nn_vs_mm_response_curves_linear(base_model_dict, output_dir)
         plot_horizontal_boxplots(base_model_dict, output_dir)
         plot_vertical_boxplots(base_model_dict, output_dir)
-        plot_sqssa_vs_tqssa_baselines(base_model_dict, output_dir)
-        error_distributions, seed_medians = _collect_error_distributions(base_model_dict)
-        plot_dataset_size_lineplots(error_distributions, seed_medians, output_dir, template=False)
-        plot_dataset_size_lineplots(error_distributions, seed_medians, output_dir, template=True)
-        plot_sqssa_vs_tqssa_baselines(base_model_dict, output_dir, metric_key="relative_mae")
+        if len(VARIANTS) > 1:
+            plot_sqssa_vs_tqssa_baselines(base_model_dict, output_dir)
+        error_distributions, seed_medians, seed_means = _collect_error_distributions(base_model_dict)
+        plot_dataset_size_lineplots(error_distributions, seed_medians, seed_means, output_dir, template=False)
+        plot_dataset_size_lineplots(error_distributions, seed_medians, seed_means, output_dir, template=True)
+        if len(VARIANTS) > 1:
+            plot_sqssa_vs_tqssa_baselines(base_model_dict, output_dir, metric_key="relative_mae")
         _render_variant_plots(base_model_dict, output_dir)
     # Keep existing shared output at output_dir for downstream rules
     save_pysr_formulas(base_model_dict, features, output_dir)
@@ -1762,24 +1785,28 @@ def main():
     parser.add_argument("--pysr-base-size", type=int, default=3000, dest="pysr_base_size", help="Baseline sample count previously used for PySR training (e.g., 3000)")
     parser.add_argument("--nn-base-size", type=int, default=20000, dest="nn_base_size", help="Baseline pool size previously used for NN training (e.g., 20000)")
     parser.add_argument("--num-seeds", type=int, default=3, dest="num_seeds", help="Number of random seeds to evaluate per model (>=1)")
+    parser.add_argument("--variants", nargs="+", default=list(VARIANTS.keys()), help="Subset of variants to run, e.g. tQSSA or sQSSA tQSSA")
+    parser.add_argument("--output-dir", type=str, help="Override output root directory")
     parser.add_argument("--plots-only", action="store_true", help="Do not train; load existing models and render plots only")
     parser.add_argument("--no-plots", action="store_true", help="Skip plot generation during evaluation")
     args = parser.parse_args()
 
     seed = seed_everything(resolve_seed(args.seed))
     data = load_dataset(args.dataset, args.features)
-    output_dir = os.path.join(os.path.dirname(os.path.dirname(args.dataset)), "dataset_size_regimes")
-    evaluate_models(
-        data,
-        args.features,
-        output_dir,
-        seed,
-        pysr_base_size=args.pysr_base_size,
-        nn_base_size=args.nn_base_size,
-        num_seeds=max(1, args.num_seeds),
-        plots_only=args.plots_only,
-        render_plots=not args.no_plots,
-    )
+    selected_variants = canonicalize_variant_keys(args.variants)
+    output_dir = args.output_dir or os.path.join(os.path.dirname(os.path.dirname(args.dataset)), "dataset_size_regimes")
+    with selected_variants_context(selected_variants):
+        evaluate_models(
+            data,
+            args.features,
+            output_dir,
+            seed,
+            pysr_base_size=args.pysr_base_size,
+            nn_base_size=args.nn_base_size,
+            num_seeds=max(1, args.num_seeds),
+            plots_only=args.plots_only,
+            render_plots=not args.no_plots,
+        )
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ import ast
 import json
 import re
 import logging
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -19,9 +20,9 @@ from pathlib import Path
 import sys
 from typing import Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+SRC_ROOT = Path(__file__).resolve().parents[3]
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 import numpy as np
 import pandas as pd
@@ -55,6 +56,20 @@ LOGGER.propagate = False
 RUN_SEED: Optional[int] = None
 
 
+def _subprocess_env_with_src() -> Dict[str, str]:
+    """Ensure subprocesses can import modules from src/."""
+    env = os.environ.copy()
+    src_path = str(SRC_ROOT)
+    py_path = env.get("PYTHONPATH")
+    if not py_path:
+        env["PYTHONPATH"] = src_path
+        return env
+    existing_paths = py_path.split(os.pathsep)
+    if src_path not in existing_paths:
+        env["PYTHONPATH"] = os.pathsep.join([src_path, py_path])
+    return env
+
+
 def _is_runs_layout(base: Path) -> bool:
     """
     Return True when the output base looks like the new experimental layout:
@@ -81,7 +96,7 @@ def _run_module(cmd: List[str], description: str) -> None:
     """Run a Python module as a subprocess with logging."""
     try:
         LOGGER.info("Running %s", description)
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env=_subprocess_env_with_src())
     except subprocess.CalledProcessError as exc:
         LOGGER.warning("Failed to run %s: %s", description, exc)
 
@@ -108,6 +123,10 @@ class MarkerResult:
     train_r2_bin_count: Optional[int] = None
     best_loss: Optional[float] = None
     target_space: Literal["linear"] = "linear"
+
+
+# Backward-compatible alias retained for legacy references in this module.
+GroupResult = MarkerResult
 
 
 def parse_args() -> argparse.Namespace:
@@ -197,6 +216,16 @@ def parse_args() -> argparse.Namespace:
         help="Fraction of data reserved for test evaluation (default: 0.2 for an 80/20 split).",
     )
     parser.add_argument(
+        "--test-split-policy",
+        choices=("random_bins", "top_gfp_bins"),
+        default="random_bins",
+        help=(
+            "How to choose held-out GFP bins. "
+            "'random_bins' reproduces the current random bin split; "
+            "'top_gfp_bins' uses the highest-GFP bins as an out-of-distribution test set."
+        ),
+    )
+    parser.add_argument(
         "--random-state",
         type=int,
         default=42,
@@ -245,6 +274,28 @@ def parse_args() -> argparse.Namespace:
         help="Parsimony coefficient for PySR (complexity penalty).",
     )
     parser.add_argument(
+        "--linear-stability-penalty",
+        type=float,
+        default=1000.0,
+        help="Penalty coefficient for positive slope in linear p direction.",
+    )
+    parser.add_argument(
+        "--inverse-stability-penalty",
+        type=float,
+        default=1000.0,
+        help="Penalty coefficient for negative slope in linear 1/p direction.",
+    )
+    parser.add_argument(
+        "--disable-linear-stability-penalty",
+        action="store_true",
+        help="Set the linear-p stability penalty coefficient to 0.",
+    )
+    parser.add_argument(
+        "--disable-inverse-stability-penalty",
+        action="store_true",
+        help="Set the inverse-p stability penalty coefficient to 0.",
+    )
+    parser.add_argument(
         "--binary-operators",
         nargs="*",
         default=("+", "-", "*", "/"),
@@ -291,6 +342,22 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("data/experimental/processed/markers.csv"),
         help="CSV file listing markers with member markers (columns: group, members).",
+    )
+    parser.add_argument(
+        "--pysr-sample-weighting",
+        choices=("none", "gfp_bin_linear"),
+        default="none",
+        help=(
+            "Optional PySR sample weighting scheme. "
+            "'gfp_bin_linear' scales training samples linearly by GFP_bin, "
+            "with the lowest bin at weight 1 and the highest at --pysr-sample-weight-max."
+        ),
+    )
+    parser.add_argument(
+        "--pysr-sample-weight-max",
+        type=float,
+        default=2.0,
+        help="Maximum training weight used by --pysr-sample-weighting gfp_bin_linear.",
     )
     return parser.parse_args()
 
@@ -413,19 +480,65 @@ def select_features(df: pd.DataFrame, feature_mode: str) -> List[str]:
 
 
 def choose_bin_split(
-    df: pd.DataFrame, test_size: float, random_state: int
+    df: pd.DataFrame,
+    test_size: float,
+    random_state: int,
+    split_policy: str = "random_bins",
 ) -> Tuple[Optional[set], Optional[set]]:
-    bins = df["GFP_bin"].dropna().unique()
+    bins = np.sort(df["GFP_bin"].dropna().unique())
     if len(bins) < 2:
         return None, None
-    rng = np.random.default_rng(random_state)
-    shuffled = list(bins)
-    rng.shuffle(shuffled)
-    n_test = max(1, int(round(len(shuffled) * test_size)))
-    n_test = min(len(shuffled) - 1, n_test)
-    test_bins = set(shuffled[:n_test])
-    train_bins = set(shuffled[n_test:])
-    return train_bins, test_bins
+    n_test = max(1, int(round(len(bins) * test_size)))
+    n_test = min(len(bins) - 1, n_test)
+    if split_policy == "random_bins":
+        rng = np.random.default_rng(random_state)
+        shuffled = list(bins)
+        rng.shuffle(shuffled)
+        test_bins = set(shuffled[:n_test])
+        train_bins = set(shuffled[n_test:])
+        return train_bins, test_bins
+    if split_policy == "top_gfp_bins":
+        ordered = list(bins)
+        test_bins = set(ordered[-n_test:])
+        train_bins = set(ordered[:-n_test])
+        return train_bins, test_bins
+    raise ValueError(f"Unknown test split policy: {split_policy}")
+
+
+def compute_pysr_sample_weights(
+    train_df: pd.DataFrame,
+    strategy: str,
+    max_weight: float,
+    *,
+    reference_df: Optional[pd.DataFrame] = None,
+) -> Optional[np.ndarray]:
+    if strategy == "none":
+        return None
+    if max_weight < 1.0:
+        raise ValueError("pysr_sample_weight_max must be >= 1.0")
+    if strategy != "gfp_bin_linear":
+        raise ValueError(f"Unknown PySR sample weighting strategy: {strategy}")
+    if train_df.empty:
+        return np.array([], dtype=float)
+
+    source = reference_df if reference_df is not None else train_df
+    ref_bins = pd.to_numeric(source.get("GFP_bin"), errors="coerce")
+    train_bins = pd.to_numeric(train_df.get("GFP_bin"), errors="coerce")
+    ref_bins = ref_bins.dropna()
+    weights = np.ones(len(train_df), dtype=float)
+    if ref_bins.empty:
+        return weights
+
+    min_bin = float(ref_bins.min())
+    max_bin = float(ref_bins.max())
+    if max_bin <= min_bin:
+        return weights
+
+    normalized = (train_bins.to_numpy(dtype=float) - min_bin) / (max_bin - min_bin)
+    normalized = np.clip(normalized, 0.0, 1.0)
+    weights = 1.0 + normalized * (max_weight - 1.0)
+    weights = np.where(np.isfinite(weights), weights, 1.0)
+    return weights
 
 
 def apply_per_minute_sampling(
@@ -480,6 +593,9 @@ def train_group_models(
     *,
     run_pysr: bool,
     run_linreg: bool,
+    test_split_policy: str = "random_bins",
+    pysr_sample_weighting: str = "none",
+    pysr_sample_weight_max: float = 2.0,
     sr_kwargs: Optional[Dict[str, object]] = None,
     trajectory_records: Optional[List[Dict[str, object]]] = None,
     log_prefix: str = "",
@@ -527,7 +643,12 @@ def train_group_models(
         if fallback is not None:
             gfp_idx_1b = sanitized_names.index(fallback) + 1
 
-    train_bins, test_bins = choose_bin_split(subset, test_size=test_size, random_state=random_state)
+    train_bins, test_bins = choose_bin_split(
+        subset,
+        test_size=test_size,
+        random_state=random_state,
+        split_policy=test_split_policy,
+    )
     if not train_bins or not test_bins:
         if log_prefix:
             LOGGER.info("%s: cannot split bins into train/test; skipping", log_prefix)
@@ -544,6 +665,16 @@ def train_group_models(
 
     X_train, y_train = _make_xy(train_df)
     X_test_raw, y_test_raw = _make_xy(test_df_raw)
+    train_weights = (
+        compute_pysr_sample_weights(
+            train_df,
+            pysr_sample_weighting,
+            pysr_sample_weight_max,
+            reference_df=subset,
+        )
+        if run_pysr
+        else None
+    )
 
     if len(y_train) == 0 or len(y_test_raw) == 0:
         return []
@@ -617,7 +748,20 @@ def train_group_models(
         best_loss: Optional[float] = None
 
         try:
-            pysr_model.fit(X_train, y_train)
+            fit_kwargs: Dict[str, object] = {}
+            if train_weights is not None:
+                fit_kwargs["weights"] = train_weights
+                if log_prefix:
+                    LOGGER.info(
+                        "%s: PySR sample weighting=%s | weight min=%.3f mean=%.3f max=%.3f",
+                        log_prefix,
+                        pysr_sample_weighting,
+                        float(np.min(train_weights)),
+                        float(np.mean(train_weights)),
+                        float(np.max(train_weights)),
+                    )
+
+            pysr_model.fit(X_train, y_train, **fit_kwargs)
 
             y_pred_train = pysr_model.predict(X_train)
             y_true_train_eval = y_train.values
@@ -902,10 +1046,15 @@ def run_pipeline(args: argparse.Namespace) -> Path:
 
     seed_all(args.random_state)
     LOGGER.info(
-        "Starting functional group symbolic regression | random_state=%s | dataset_mode=%s | feature_modes=%s",
+        (
+            "Starting functional group symbolic regression | random_state=%s | dataset_mode=%s "
+            "| feature_modes=%s | test_split_policy=%s | pysr_sample_weighting=%s"
+        ),
         args.random_state,
         args.dataset_mode,
         ", ".join(args.feature_modes),
+        args.test_split_policy,
+        args.pysr_sample_weighting,
     )
 
     def _prepare_dataset(csv_path: Path, mode: str) -> pd.DataFrame:
@@ -982,6 +1131,21 @@ def run_pipeline(args: argparse.Namespace) -> Path:
 
         sr_kwargs: Optional[Dict[str, object]] = None
         if run_pysr:
+            linear_penalty = (
+                0.0
+                if args.disable_linear_stability_penalty
+                else float(args.linear_stability_penalty)
+            )
+            inverse_penalty = (
+                0.0
+                if args.disable_inverse_stability_penalty
+                else float(args.inverse_stability_penalty)
+            )
+            LOGGER.info(
+                "Custom loss stability penalties | linear=%s | inverse=%s",
+                linear_penalty,
+                inverse_penalty,
+            )
             loss_required_pERK = r"""
             import SymbolicRegression: Dataset, eval_tree_array
             import Statistics: count
@@ -993,8 +1157,8 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             const DEP_TOL = 1e-4
             const REDUNDANT_PENALTY = 1000.0
 
-            const WRONGSIGN_P_LINEAR = 1000.0
-            const WRONGSIGN_INV_LINEAR = 1000.0
+            const WRONGSIGN_P_LINEAR = __WRONGSIGN_P_LINEAR__
+            const WRONGSIGN_INV_LINEAR = __WRONGSIGN_INV_LINEAR__
 
             const EPS_REL = 1e-3
             const LIN_TOL_REL = 1e-3
@@ -1112,8 +1276,23 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 return L(_loss_core(tree, X, y, options))
             end
             """
+            loss_required_pERK = loss_required_pERK.replace(
+                "__WRONGSIGN_P_LINEAR__", format(linear_penalty, ".16g")
+            ).replace(
+                "__WRONGSIGN_INV_LINEAR__", format(inverse_penalty, ".16g")
+            )
+
+            # Keep PySR's own search scratch (hall_of_fame.csv + checkpoint.pkl, one
+            # directory per fit) inside this run's output tree. Without this PySR
+            # defaults to ./outputs/<date>_<time>_<rand>/ relative to the working
+            # directory, which accumulated 6,800 stray directories at the repo root --
+            # one per experimental fit ever run locally, indistinguishable from each
+            # other and impossible to attribute to a marker or seed after the fact.
+            pysr_search_dir = output_dir / "pysr_search"
+            pysr_search_dir.mkdir(parents=True, exist_ok=True)
 
             sr_kwargs = {
+                "output_directory": str(pysr_search_dir),
                 "niterations": args.max_iterations,
                 "population_size": args.population_size,
                 "populations": args.populations,
@@ -1167,6 +1346,9 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                     run_mode,
                     run_pysr=run_pysr,
                     run_linreg=run_linreg,
+                    test_split_policy=args.test_split_policy,
+                    pysr_sample_weighting=args.pysr_sample_weighting,
+                    pysr_sample_weight_max=args.pysr_sample_weight_max,
                     sr_kwargs=sr_kwargs,
                     trajectory_records=trajectories_by_mode[run_mode],
                     log_prefix=f"{run_mode}/{feature_mode}/{marker}",
@@ -1280,15 +1462,20 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             "train_r2_bin_count": res.train_r2_bin_count,
             "train_samples": res.train_samples,
             "test_samples_raw": res.test_samples,
-            "target_space": res.target_space,
-            "primary_test_r2": res.test_r2,
-            "seed": RUN_SEED,
+                "target_space": res.target_space,
+                "primary_test_r2": res.test_r2,
+                "seed": RUN_SEED,
+                "test_split_policy": args.test_split_policy,
+                "pysr_sample_weighting": args.pysr_sample_weighting,
+                "pysr_sample_weight_max": args.pysr_sample_weight_max,
             }
             for res in all_results
         ]
     )
     summary_path = summary_dir / "marker_marker_summary.csv"
     summary_df.to_csv(summary_path, index=False)
+    summary_compat_path = summary_dir / "marker_summary.csv"
+    summary_df.to_csv(summary_compat_path, index=False)
     LOGGER.info("Wrote summary CSV to %s", summary_path)
     LOGGER.info("Symbolic regression pipeline completed | random_state=%s", args.random_state)
 
@@ -1308,7 +1495,7 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         cmd = [
             sys.executable,
             "-m",
-            "experimental.sr_pipeline.compute_marker_integration",
+            "pipelines.experimental.sr_pipeline.compute_marker_integration",
             "--dataset",
             str(dataset_path),
             "--summary",
@@ -1345,7 +1532,7 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         base_args = [
             sys.executable,
             "-m",
-            "experimental.sr_pipeline.plot_marker_overlays",
+            "pipelines.experimental.sr_pipeline.plot_marker_overlays",
             "--dataset",
             str(dataset_path),
             "--summary",
@@ -1356,6 +1543,8 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             str(sr_traj),
             "--dataset-mode",
             run_mode,
+            "--filter-dataset-mode",
+            run_mode,
             "--measured-timepoints",
             *[str(t) for t in args.measured_timepoints],
             "--markers-per-fig",
@@ -1365,8 +1554,26 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             base_args.extend(["--integration-trajectories", str(integ_traj)])
         if integ_metrics.exists():
             base_args.extend(["--integration-metrics", str(integ_metrics)])
+        available_models = set(summary_df["model"].dropna().astype(str).unique())
         for model in ("PySR", "Linear Regression"):
-            cmd_overlay = base_args + ["--model", model]
+            if model not in available_models:
+                continue
+            if model == "PySR":
+                fig_base = f"marker_overlay_{run_mode}"
+                metrics_csv = f"marker_overlay_metrics_{run_mode}.csv"
+            else:
+                fig_base = f"marker_overlay_linear_regression_{run_mode}"
+                metrics_csv = f"marker_overlay_metrics_linear_regression_{run_mode}.csv"
+            cmd_overlay = base_args + [
+                "--model",
+                model,
+                "--fig-base",
+                fig_base,
+                "--metrics-csv",
+                metrics_csv,
+                "--metrics-output-dir",
+                str(metrics_dir),
+            ]
             _run_module(cmd_overlay, f"overlay plots ({run_mode}, {model})")
     return summary_path
 
@@ -1422,10 +1629,14 @@ def main() -> None:
             canonical_summary = aggregated_summary_dir / "marker_marker_summary.csv"
             canonical_summary.parent.mkdir(parents=True, exist_ok=True)
             agg_mean.to_csv(canonical_summary, index=False)
+            canonical_summary_compat = aggregated_summary_dir / "marker_summary.csv"
+            agg_mean.to_csv(canonical_summary_compat, index=False)
             LOGGER.info("Wrote mean-over-seeds summary to %s", canonical_summary)
 
             seed_summary_path = aggregated_summary_dir / "marker_marker_summary_seed.csv"
             pd.read_csv(summary_paths[0]).to_csv(seed_summary_path, index=False)
+            seed_summary_compat_path = aggregated_summary_dir / "marker_summary_seed.csv"
+            pd.read_csv(summary_paths[0]).to_csv(seed_summary_compat_path, index=False)
             LOGGER.info("Saved first-seed summary to %s", seed_summary_path)
 
             formulas_dir = aggregated_formulas_dir
@@ -1446,7 +1657,7 @@ def main() -> None:
         plot_args = [
             sys.executable,
             "-m",
-            "experimental.sr_pipeline.plot_metrics_summary",
+            "pipelines.experimental.sr_pipeline.plot_metrics_summary",
             "--summary",
             str(canonical_summary),
             "--output-dir",
@@ -1468,8 +1679,12 @@ def main() -> None:
         canonical_summary = aggregated_summary_dir / "marker_marker_summary.csv"
         canonical_summary.parent.mkdir(parents=True, exist_ok=True)
         pd.read_csv(seed_summary).to_csv(canonical_summary, index=False)
+        canonical_summary_compat = aggregated_summary_dir / "marker_summary.csv"
+        pd.read_csv(seed_summary).to_csv(canonical_summary_compat, index=False)
         seed_summary_path = aggregated_summary_dir / "marker_marker_summary_seed.csv"
         pd.read_csv(seed_summary).to_csv(seed_summary_path, index=False)
+        seed_summary_compat_path = aggregated_summary_dir / "marker_summary_seed.csv"
+        pd.read_csv(seed_summary).to_csv(seed_summary_compat_path, index=False)
         formulas_dir = aggregated_formulas_dir
         for mode in ("snapshot", "per_minute"):
             seed_formula = seeds_root / f"seed_{seeds[0]}" / "formulas" / f"all_{mode}.txt"
@@ -1480,7 +1695,7 @@ def main() -> None:
         plot_args = [
             sys.executable,
             "-m",
-            "experimental.sr_pipeline.plot_metrics_summary",
+            "pipelines.experimental.sr_pipeline.plot_metrics_summary",
             "--summary",
             str(canonical_summary),
             "--output-dir",

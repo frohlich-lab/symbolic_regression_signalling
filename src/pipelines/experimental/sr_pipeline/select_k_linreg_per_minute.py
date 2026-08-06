@@ -98,6 +98,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-size", type=float, default=0.2, help="Test fraction for GFP-bin split.")
     parser.add_argument("--random-state", type=int, default=42, help="Random seed for splits/sampling.")
     parser.add_argument(
+        "--test-split-policy",
+        choices=("random_bins", "top_gfp_bins"),
+        default="random_bins",
+        help=(
+            "GFP-bin train/test split policy, mirroring run_markers. 'random_bins' (default) "
+            "holds out a random fraction of bins (in-distribution); 'top_gfp_bins' holds out the "
+            "highest-GFP bins as an out-of-distribution dose-extrapolation test."
+        ),
+    )
+    parser.add_argument(
         "--seeds",
         nargs="*",
         type=int,
@@ -357,7 +367,12 @@ def main() -> None:
             subset = subset.dropna(subset=feature_cols + [target_col])
             if subset.empty:
                 continue
-            train_bins, test_bins = choose_bin_split(subset, test_size=args.test_size, random_state=seed)
+            train_bins, test_bins = choose_bin_split(
+                subset,
+                test_size=args.test_size,
+                random_state=seed,
+                split_policy=args.test_split_policy,
+            )
             if not train_bins or not test_bins:
                 continue
             subset = subset[subset["GFP_bin"].isin(train_bins | test_bins)].copy()

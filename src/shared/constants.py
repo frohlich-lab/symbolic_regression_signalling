@@ -28,6 +28,7 @@ def pysr_operator_config(variant: Optional[str]) -> dict:
     if variant_norm == "tqssa":
         return {
             "binary_operators": ["+", "-", "*", "/"],
-            "unary_operators": ["sqrt"],
+            "unary_operators": ["sqrt", "square"],
+            "maxsize": 45,
         }
     return {}

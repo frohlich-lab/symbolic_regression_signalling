@@ -507,7 +507,8 @@ def _plot_dataset_size_lineplot(
         else:
             x_labels.append(f"{mult * 100:.0f}%")
 
-    lineplot_figsize = (7.893, 5.913)  # Match noise_regimes_full lineplot pixel size at 300 dpi.
+    lineplot_figsize = (8.0, 6.0)
+    lineplot_layout = dict(left=0.153, right=0.987, bottom=0.272, top=0.983)
 
     def _render_lineplot(*, fixed_ylim: bool) -> None:
         fig, ax = plt.subplots(figsize=lineplot_figsize)
@@ -541,7 +542,7 @@ def _plot_dataset_size_lineplot(
         legend_fs = 21
         legend_title_fs = 22
         ax.set_xticks(x)
-        ax.set_xticklabels(x_labels, fontsize=tick_fs)
+        ax.set_xticklabels(x_labels, rotation=20, ha="right", fontsize=tick_fs)
         ax.set_xlabel("Dataset Size Regime", fontsize=label_fs)
         ax.set_ylabel(spec.axis_label, fontsize=label_fs)
         ax.set_yscale(spec.y_scale)
@@ -566,7 +567,7 @@ def _plot_dataset_size_lineplot(
 
         suffix = "_template" if template else ""
         fixed_suffix = "_fixed_ylim" if fixed_ylim else ""
-        plt.tight_layout()
+        fig.subplots_adjust(**lineplot_layout)
         filename = f"{spec.filename_prefix}_dataset_size_lineplot{fixed_suffix}{suffix}.png"
         plt.savefig(plot_dir / filename, dpi=300, bbox_inches=None, pad_inches=0.0)
         plt.close()
