@@ -1,30 +1,40 @@
-# ===========================================================================
-# Synthetic-benchmark SR comparison rules.
+# =============================================================================
+# Synthetic-benchmark SR comparison
+# =============================================================================
 #
-# Data generation, preprocessing, the five SR method wrappers, the MLP baseline,
-# model selection and the comparison plots. Relocated verbatim from common.smk,
-# which held rules for all three domains while this file was a placeholder.
-# Configuration, paths and `rule all` remain in common.smk.
-# ===========================================================================
+#   generate_data_model ──► preprocessing_model ──┬─► pysindy ────┐
+#     mass-action ODE          train/val/test     ├─► aifeynman ──┤
+#     simulation               splits             ├─► dso ────────┼─► get_best_formula
+#                                                 ├─► kan ────────┤        │
+#                                                 ├─► pysr ───────┤        ▼
+#                                                 └─► nn ─────────┘  integrate_and_plot
+#                                                    (MLP baseline)   plot_methods
+#                                                                     sr_timepoint_lineplot
+#
+# SECTIONS
+#   1  Default target and data     rule all, generate_data_model, preprocessing_model
+#   2  Sweep arms                  per-method best-config lookups, when sweeps are on
+#   3  SR method wrappers          the five methods plus the MLP baseline
+#   4  Selection and plots         best formula, integration, comparison figures
+#   5  Cross-model plots           nn_grid_search, pan_enzyme_model_plots
+#
+# Each method runs through `symbolic_regression_rule` (section 3), which builds one
+# shell command: optional env install, then src/sr_models/<method>_model.py under a
+# wall-clock timeout, seeded with 42. PySR additionally runs once per measurement-lens
+# variant (sQSSA, tQSSA); the others run once.
+#
+# Configuration and paths live in common.smk. Regime-degradation rules are in
+# regimes.smk and share this file's `enzyme_model != "experimental"` guard.
+# =============================================================================
 
-# The synthetic default target, plus the two rules that build its inputs.
+# --- 1. Default target and data ----------------------------------------------
 #
-# These were previously guarded by `if run_pysr: pass / else:`. `run_pysr` is
-# `"pysr" in exp_models`, where `exp_models` is the EXPERIMENTAL models list and
-# defaults to `["pysr"]` -- so it was always True, the `else:` never executed, and the
-# synthetic workflow silently had no `all`, no `generate_data_model` and no
-# `preprocessing_model`. Its default target fell through to whichever rule parsed first
-# (`pysindy`), and it could not build its own datasets: the synthetic rules only worked
-# on a machine where `data/<model>/<type>/processed/` already happened to exist. A fresh
-# clone could not reproduce the synthetic benchmarks at all.
+# This block must stay FIRST in this file. On the synthetic branch neither common.smk
+# nor experimental.smk declares any rule, so the default target is whichever rule is
+# parsed first here.
 #
-# The guard is now the same one the rest of this file uses. It must stay a guard rather
-# than being dropped entirely: `rule all` for the experimental branch is declared in
-# common.smk, and defining a second one here unconditionally is a duplicate-rule error.
-#
-# This block must also stay FIRST in this file. On the synthetic branch common.smk and
-# experimental.smk declare no rules at all, so the first rule parsed is whichever one
-# appears here first -- and that is what Snakemake makes the default target.
+# The guard is required, not decorative: the experimental branch declares its own
+# `rule all` in common.smk, and a second unconditional one is a duplicate-rule error.
 if enzyme_model != "experimental":
 
     rule all:
@@ -95,11 +105,8 @@ if enzyme_model != "experimental":
             f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/relative_mae/relative_mae_dataset_size_lineplot_template.png",
             f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/relative_mae/relative_mae_error_distributions.png",
             *timepoint_outputs,
-            # `pan_enzyme_model_plots` writes under a {variant} directory
-            # (data/panmodel_plots/<sQSSA|tQSSA>/...), so these have to carry the
-            # variant too. They were written without it and so could never be
-            # satisfied -- which went unnoticed because the whole rule was
-            # unreachable behind the `run_pysr` guard.
+            # pan_enzyme_model_plots writes under a {variant} directory, so these
+            # must name the variant or they can never be satisfied.
             *[
                 f"data/panmodel_plots/{variant}/{name}"
                 for variant in variant_keys
@@ -142,6 +149,10 @@ if enzyme_model != "experimental":
 
 if enzyme_model != "experimental":
 
+    # --- 2. Sweep arms -------------------------------------------------------
+    #
+    # Only declared when a per-method best-config file exists, so a repo without
+    # sweep results still builds.
     if "pysindy" in sweep_best_configs:
         rule sweep_pysindy:
             input:
@@ -293,6 +304,11 @@ if enzyme_model != "experimental":
                 """
 
     # Function to generate shell commands for symbolic regression with timeout and optional installs
+    # --- 3. SR method wrappers -----------------------------------------------
+    #
+    # One shell command per method. `install_cmds` covers the three that cannot be
+    # declared in a conda env: AI-Feynman needs f2py under setuptools<60, DSO pins
+    # numpy 1.18, PySINDy is installed from the vendored tree.
     def symbolic_regression_rule(model, dataset, dataset_size, features, temp_file, variant=None):
         install_cmds = {
             # AI-Feynman ships f2py Fortran extensions built via the deprecated
@@ -421,6 +437,7 @@ if enzyme_model != "experimental":
             """
 
     # Rule to extract the best formula from each temporary result file
+    # --- 4. Selection and plots ----------------------------------------------
     rule get_best_formula:
         input:
             temp_files=temp_files
@@ -516,6 +533,10 @@ if enzyme_model != "experimental":
 
 
 # New rule to perform grid search for the NN model
+# --- 5. Cross-model plots ----------------------------------------------------
+#
+# Module level, not inside the guard: these span enzyme models rather than
+# belonging to one.
 rule nn_grid_search:
     output:
         report=f"data/{enzyme_model}/{data_type}/sr_comparison/results/nn_grid_search/grid_search_results.txt"

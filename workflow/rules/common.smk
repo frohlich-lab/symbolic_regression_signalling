@@ -630,11 +630,8 @@ if enzyme_model == "experimental":
         select_k_boxplot_ode,
         select_k_ribbon_coef,
         select_k_ribbon_variance,
-        # The `select_k_panel_*` artefacts used to be requested here too. They came from
-        # `experimental_plot_pysr_vs_selectk`, an in-distribution PySR-vs-linreg
-        # comparison that v5 does not use; the OOD comparison is
-        # `experimental_paper_fig_sr_vs_linreg`. The rule is gone, so requesting its
-        # outputs would leave the default target unbuildable.
+        # The PySR-vs-linreg comparison is experimental_paper_fig_sr_vs_linreg, on
+        # the OOD split. There is no in-distribution equivalent by design.
         metrics_models_r2,
         metrics_models_r2_svg,
         metrics_models_relmae,

@@ -1,50 +1,57 @@
 # =============================================================================
-# Draft SR-MM v5 — experimental ERK pipeline
+# Experimental ERK pipeline
 # =============================================================================
 #
-# The chain the manuscript's experimental results actually come from, in order:
+#   marker inputs ──┬─► pysr_config_sweep ──► select_pysr_config ──┐   $$$
+#     (data prep)   │      288 arms            72 candidates,      │
+#                   │      6 contexts          ranked on train     │
+#                   │                                             ▼
+#                   ├─────────────────────────► pysr_ood_final          $$$
+#                   │                             40 contexts x 3 seeds
+#                   │                                    │
+#                   │                                    ▼
+#                   │                            summarise_pysr_ood
+#                   │                             rates + exemplars
+#                   │                                    │
+#                   ├─► linreg_ood ─────────────────┐    │
+#                   │     OLS, 10 inputs            │    │
+#                   │                               ▼    ▼
+#                   └─► sparse_neural_ode ──────►  paper figures
+#                         L21 / L1 / C-NODE   $$$
 #
-#   markers_per_minute_fit.csv            (experimental_marker_inputs, below)
-#        |
-#        +-- pysr_config_sweep            288 arms x 6 development contexts x 3 seeds
-#        |        |                       -> screen.csv                     [expensive]
-#        |        +-- select_pysr_config   train-ranked; 72 candidate arms
-#        |                 |               -> Table S10 + selected_config.tsv
-#        |                 v
-#        +-- pysr_ood_final               selected config, all 40 contexts x 3 seeds
-#        |        |                       -> per-seed formulas + metrics     [expensive]
-#        |        +-- summarise_pysr_ood   -> success rates, Fig. 5 exemplars
-#        |
-#        +-- linreg_ood                   OLS on all ten inputs, same split
-#        |
-#        +-- sparse_neural_ode            L21 / L1 / C-NODE variants        [expensive]
-#                 |
-#                 +-- paper figures
+#   $$$ = cluster-scale (~3,000 and ~70 CPU-hours for the two PySR stages)
 #
-# Every stage is scored on ONE split (top 20% of GFP bins held out) and ONE metric (R2
-# of the ODE-integrated p-ERK trajectory, best of seeds 42/43/44). Mixing in the
-# derivative-fit R2 or the in-distribution split changes the conclusions, so neither is
-# used anywhere below. See docs/experimental_provenance.md for the figure-by-figure map.
+# SECTIONS
+#   1  PySR configuration sweep   the 288-arm grid, and the rule that picks from it
+#   2  Frozen-config run          that configuration applied to all 40 contexts
+#   3  Sparse Neural ODE          lambda sweep, then the L21 / L1 / C-NODE variants
+#   4  Paper figures
+#   5  Aggregators                experimental_v5_all, experimental_v5_tables
+#   6  Data prep and shared       marker inputs, ODE integration, summary plots
 #
-# The two stages marked [expensive] are ~3,000 and ~70 CPU-hours and were run on NEMO
-# via the sharding helpers in src/pipelines/experimental/sweeps/. Their outputs are
-# committed under data/experimental/runs/, so Snakemake treats them as up to date and
-# only the cheap downstream stages re-run. Deleting an output triggers a full re-run;
-# do that deliberately, and on a cluster.
+# CONVENTIONS  every stage below obeys all three; see also common.smk for the paths
+#   split    top 20% of GFP bins held out, so scores measure dose extrapolation
+#   metric   R2 of the ODE-integrated p-ERK trajectory (not the derivative fit)
+#   seeds    42/43/44, reported as best-of
+#
+# The $$$ stages ran on NEMO via src/pipelines/experimental/sweeps/. Their outputs are
+# committed, so Snakemake sees them as up to date and only the cheap stages re-run;
+# their inputs are ancient() so a touched timestamp cannot trigger a rebuild. Delete an
+# output to re-run deliberately, on a cluster.
+#
+# Figure- and table-by-artefact map: docs/experimental_provenance.md
 
 if enzyme_model == "experimental":
 
 
-    # ------------------------------------------------- 1. PySR configuration sweep
+    # --- 1. PySR configuration sweep -----------------------------------------
 
     rule experimental_pysr_config_sweep:
-        # EXPENSIVE (~3,000 CPU-hours: 288 arms x 6 contexts x 3 seeds, ~34 min/fit).
-        # Run on a cluster. The shipped screen CSV is this rule's recorded output, so
-        # Snakemake will not rebuild it unless you delete it.
+        # $$$ ~3,000 CPU-hours (288 arms x 6 contexts x 3 seeds, ~34 min/fit).
         #
-        # 288 arms are run; 72 are selection candidates (see the next rule). The wider
-        # grid also varies the unary-operator and no-division axes, which is how we know
-        # the candidate family is the right one to restrict to rather than an assumption.
+        # Runs 288 arms; 72 of them are selection candidates -- those keeping division
+        # with no unary operators. The wider grid varies the unary-operator and
+        # no-division axes so that restriction is measured rather than assumed.
         input:
             # ancient(): these outputs were produced out of band on the cluster, so their
             # mtimes bear no relation to the inputs' and a plain dependency would offer
@@ -65,9 +72,9 @@ if enzyme_model == "experimental":
             set -euo pipefail
             mkdir -p {params.sweep_dir}/arms {params.sweep_dir}/metrics
 
-            # Arm definitions. Stability penalties stay at their defaults in every arm:
-            # they encode the dynamical-admissibility prior (d[p-ERK]/dt decreasing in
-            # p-ERK), so relaxing them to gain R2 would be tuning away the prior.
+            # Arm definitions. Stability penalties are held at their defaults in every
+            # arm -- they encode the prior that d[p-ERK]/dt decreases in p-ERK, so they
+            # are not a tunable axis.
             python src/pipelines/experimental/sweeps/make_grid_arms.py \
                 {params.sweep_dir}/arms/arms.tsv
 
@@ -82,10 +89,11 @@ if enzyme_model == "experimental":
             """
 
     rule experimental_pysr_select_config:
-        # Cheap and deterministic. Ranks the 72 candidate arms on median integrated R2
-        # over the TRAINING GFP bins only, so the held-out highest-dose bins play no
-        # part in the choice. Emits Table S10 and the flag string every later PySR run
-        # is driven by, rather than leaving that string duplicated across scripts.
+        # Ranks the 72 candidates on median integrated R2 over the TRAINING bins only,
+        # so the held-out doses play no part in the choice. Deterministic.
+        #
+        # Emits two things: the ranked table, and the flag string that drives every
+        # later PySR run -- so the configuration is defined in one place.
         input:
             screen=pysr_sweep_screen
         output:
@@ -101,14 +109,14 @@ if enzyme_model == "experimental":
                 --output-config {output.config}
             """
 
-    # ---------------------------------------------- 2. frozen-config run, all 40
+    # --- 2. Frozen-config run, all 40 contexts --------------------------------
 
     rule experimental_pysr_ood_final:
-        # EXPENSIVE (~70 CPU-hours: 40 contexts x 3 seeds, ~35 min/fit). Applies the
-        # selected configuration UNCHANGED to all 40 contexts -- including the 34 the
-        # sweep never saw. This separation is the point: an earlier iteration reported
-        # sweep-derived numbers as general and they did not survive contact with the
-        # unseen contexts.
+        # $$$ ~70 CPU-hours (40 contexts x 3 seeds, ~35 min/fit).
+        #
+        # Applies the selected configuration UNCHANGED to all 40 contexts, including the
+        # 34 the sweep never saw. Keeping selection and application separate is what
+        # makes the reported rates generalise beyond the development set.
         input:
             # ancient() for the same reason as the sweep above: this is a recorded
             # 70-CPU-hour cluster run, not something to rebuild because a timestamp
@@ -237,7 +245,11 @@ if enzyme_model == "experimental":
         late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
     )
 
-    # ---------------------------------------------------- 3. sparse Neural ODE SI
+    # --- 3. Sparse Neural ODE -------------------------------------------------
+    #
+    # L21 at lambda_jac = 3 is the reference model; L1 and the path-regularised
+    # (C-NODE) variant exist to show the dependency counts are not an artefact of
+    # the penalty. The lambda sweep is what fixes lambda_jac = 3.
 
     rule experimental_sparse_node_lambda_sweep:
         # Fig. S3B. Sweeps lambda_jac and picks by an elbow rule -- the largest
@@ -285,7 +297,63 @@ if enzyme_model == "experimental":
                 --output {output.summary}
             """
 
-    # ------------------------------------------------------------ 4. paper figures
+    rule experimental_neural_ode_diffrax_ood_l1:
+        # L1 element-wise Jacobian sparsity, λ_jac = 1.0 (appendix variant).
+        input:
+            per_minute=marker_per_minute_csv
+        output:
+            done=neural_ode_diffrax_l1_done
+        conda:
+            "../../envs/pysr.yaml"
+        params:
+            out_dir=neural_ode_diffrax_l1_seeds_dir,
+            **_diffrax_sweep_params,
+        shell:
+            _diffrax_sweep_shell(
+                neural_ode_diffrax_l1_seeds_dir,
+                "diffrax_ood_l1_lam1",
+                "--jac-reg 1.0 --jac-reg-mode l1 --hess-reg 0.0",
+            )
+
+    rule experimental_neural_ode_diffrax_ood_l21:
+        # L21 group-sparse Jacobian, λ_jac = 3.0 — main-text "Neural ODE".
+        # Calibrated on VAL R²; see scripts/calib_l21jac_then_decide.sh.
+        input:
+            per_minute=marker_per_minute_csv
+        output:
+            done=neural_ode_diffrax_l21_done
+        conda:
+            "../../envs/pysr.yaml"
+        params:
+            out_dir=neural_ode_diffrax_l21_seeds_dir,
+            **_diffrax_sweep_params,
+        shell:
+            _diffrax_sweep_shell(
+                neural_ode_diffrax_l21_seeds_dir,
+                "diffrax_ood_l21j3_valcalib",
+                "--jac-reg 3.0 --jac-reg-mode l21 --hess-reg 0.0",
+            )
+
+    rule experimental_neural_ode_diffrax_ood_cnode:
+        # C-NODE path-product regulariser (Aliee/Theis/Kilbertus 2022), λ = 0.01.
+        # Calibrated on VAL R²; see scripts/calib_pathreg_then_sweep.sh.
+        input:
+            per_minute=marker_per_minute_csv
+        output:
+            done=neural_ode_diffrax_cnode_done
+        conda:
+            "../../envs/pysr.yaml"
+        params:
+            out_dir=neural_ode_diffrax_cnode_seeds_dir,
+            **_diffrax_sweep_params,
+        shell:
+            _diffrax_sweep_shell(
+                neural_ode_diffrax_cnode_seeds_dir,
+                "diffrax_ood_cnode_lam0p01",
+                "--path-reg 0.01",
+            )
+
+    # --- 4. Paper figures -----------------------------------------------------
 
     rule experimental_paper_fig_parsimony_tradeoff:
         # Fig. 4E + the sparsity panel. Both axes are held-out ODE-integrated R2:
@@ -406,7 +474,7 @@ if enzyme_model == "experimental":
             done
             """
 
-    # ------------------------------------------------------------- 5. aggregators
+    # --- 5. Aggregators -------------------------------------------------------
 
     rule experimental_v5_all:
         # Everything the manuscript's experimental sections depend on.
@@ -443,13 +511,10 @@ if enzyme_model == "experimental":
             pysr_final_summary,
             pysr_final_exemplars,
 
-    # ---------------------------------------------------------------------
-    # Data preparation, the in-distribution reference run, and the shared
-    # experimental stages. Relocated verbatim from common.smk, which had kept
-    # rules for all three domains while sr_comparison.smk and regimes.smk sat
-    # empty. `rule all` stays in common.smk: it has to be the first rule the
-    # workflow parses to remain the default target.
-    # ---------------------------------------------------------------------
+    # --- 6. Data preparation and shared stages -------------------------------
+    #
+    # Marker inputs, fit diagnostics, the in-distribution reference run, ODE
+    # integration and the summary plots. Everything above depends on these.
 
     rule experimental_marker_inputs:
         input:
@@ -624,64 +689,6 @@ if enzyme_model == "experimental":
                 --test-split-policy {params.split_policy} \
                 --measured-timepoints {params.measured}
             """
-
-
-
-    rule experimental_neural_ode_diffrax_ood_l1:
-        # L1 element-wise Jacobian sparsity, λ_jac = 1.0 (appendix variant).
-        input:
-            per_minute=marker_per_minute_csv
-        output:
-            done=neural_ode_diffrax_l1_done
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=neural_ode_diffrax_l1_seeds_dir,
-            **_diffrax_sweep_params,
-        shell:
-            _diffrax_sweep_shell(
-                neural_ode_diffrax_l1_seeds_dir,
-                "diffrax_ood_l1_lam1",
-                "--jac-reg 1.0 --jac-reg-mode l1 --hess-reg 0.0",
-            )
-
-    rule experimental_neural_ode_diffrax_ood_l21:
-        # L21 group-sparse Jacobian, λ_jac = 3.0 — main-text "Neural ODE".
-        # Calibrated on VAL R²; see scripts/calib_l21jac_then_decide.sh.
-        input:
-            per_minute=marker_per_minute_csv
-        output:
-            done=neural_ode_diffrax_l21_done
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=neural_ode_diffrax_l21_seeds_dir,
-            **_diffrax_sweep_params,
-        shell:
-            _diffrax_sweep_shell(
-                neural_ode_diffrax_l21_seeds_dir,
-                "diffrax_ood_l21j3_valcalib",
-                "--jac-reg 3.0 --jac-reg-mode l21 --hess-reg 0.0",
-            )
-
-    rule experimental_neural_ode_diffrax_ood_cnode:
-        # C-NODE path-product regulariser (Aliee/Theis/Kilbertus 2022), λ = 0.01.
-        # Calibrated on VAL R²; see scripts/calib_pathreg_then_sweep.sh.
-        input:
-            per_minute=marker_per_minute_csv
-        output:
-            done=neural_ode_diffrax_cnode_done
-        conda:
-            "../../envs/pysr.yaml"
-        params:
-            out_dir=neural_ode_diffrax_cnode_seeds_dir,
-            **_diffrax_sweep_params,
-        shell:
-            _diffrax_sweep_shell(
-                neural_ode_diffrax_cnode_seeds_dir,
-                "diffrax_ood_cnode_lam0p01",
-                "--path-reg 0.01",
-            )
 
 
     rule experimental_marker_integration:

@@ -1,11 +1,31 @@
-# ===========================================================================
-# Data-degradation regime rules.
+# =============================================================================
+# Data-degradation regimes
+# =============================================================================
 #
-# Measurement noise, dataset size, Michaelis-Menten deviation, kinetic limits and
-# timepoint coverage, each crossed with the tQSSA measurement-lens shift.
-# Relocated verbatim from common.smk, which held rules for all three domains
-# while this file was a placeholder.
-# ===========================================================================
+# How well SR recovers a known law as the data get worse. One axis is degraded at a
+# time, and each axis is crossed with the tQSSA measurement lens.
+#
+#   data_merged.csv ──┬─► <axis>_regimes ──────► all_pysr_formulas.txt
+#                     │     (search only)
+#                     └─► <axis>_regime_plots ─► error landscape, correlation grids,
+#                           (search + render)     log-MAE boxplots, lineplots
+#
+# AXES               DIRECTORY                  VARIED
+#   kinetic          kinetic_regimes/           position in kcat/Km space
+#   noise            noise_regimes_full/        measurement noise level
+#   mm_deviation     mm_deviation_regimes/      departure from MM assumptions
+#   dataset_size     dataset_size_regimes/      number of training samples
+#   timepoint        timepoint_regimes/         timepoint coverage (dynamic only)
+#
+# Each axis has four rules: search and plots, then `_tqssa` copies of both that rerun
+# under the total-substrate lens. Search and plots are separate because the search is
+# the expensive half and the figures get re-cut far more often -- the plots rules pass
+# `--plots-only` and reuse the formulas already on disk.
+#
+# Outputs land under data/<enzyme_model>/<data_type>/<axis>/shared/. Configuration and
+# paths live in common.smk. Shares the `enzyme_model != "experimental"` guard with
+# sr_comparison.smk, and depends on that file's preprocessing_model for its input.
+# =============================================================================
 
 if enzyme_model != "experimental":
 
