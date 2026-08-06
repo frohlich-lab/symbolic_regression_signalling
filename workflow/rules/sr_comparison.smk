@@ -42,6 +42,8 @@ if enzyme_model != "experimental":
             f"data/{enzyme_model}/{data_type}/sr_comparison/plots/results_plot.png",
             f"data/{enzyme_model}/{data_type}/sr_comparison/plots/integrated_results_plot.png",
             f"data/{enzyme_model}/{data_type}/sr_comparison/results/loss_comparison.csv",
+            f"data/{enzyme_model}/{data_type}/sr_comparison/results/rhs_loss_comparison.csv",
+            f"data/{enzyme_model}/{data_type}/sr_comparison/plots/rhs_comparison.png",
             f"data/{enzyme_model}/{data_type}/sr_comparison/plots/log_mae_timepoint_lineplot.png",
             f"data/{enzyme_model}/{data_type}/sr_comparison/plots/log_mae_timepoint_lineplot_template.png",
             *nn_model_outputs,
@@ -494,6 +496,28 @@ if enzyme_model != "experimental":
             echo "Generating comparison plot for all methods."
             [ -n "$CONDA_PREFIX" ] && export PATH="$CONDA_PREFIX/bin:$PATH"; PYTHONPATH=src python src/pipelines/sr_comparison/plot_methods.py --dataset {input.dataset} --formulas {input.formulas} --output {output} --discovery-scales {params.discovery_scales}
             echo "Comparison plot saved to {output}"
+            """
+
+    # Direct (non-integrated) RHS fit: how well each formula predicts kcat_cg on
+    # the test set, no ODE. Produces a CSV + bar-chart PNG.
+    rule rhs_comparison:
+        input:
+            dataset=f"data/{enzyme_model}/{data_type}/processed/data_test.csv",
+            formulas=formula_files
+        output:
+            csv=f"data/{enzyme_model}/{data_type}/sr_comparison/results/rhs_loss_comparison.csv",
+            plot=f"data/{enzyme_model}/{data_type}/sr_comparison/plots/rhs_comparison.png"
+        conda:
+            "../../envs/base.yaml"
+        params:
+            methods=" ".join(models),
+            features=features,
+            discovery_scales="'" + config["discovery_scales"] + "'"
+        shell:
+            """
+            echo "Computing direct RHS fit for methods: {params.methods}"
+            [ -n "$CONDA_PREFIX" ] && export PATH="$CONDA_PREFIX/bin:$PATH"; PYTHONPATH=src python src/pipelines/sr_comparison/plot_rhs_comparison.py --dataset {input.dataset} --formulas {input.formulas} --methods {params.methods} --features {params.features} --discovery-scales {params.discovery_scales} --output {output.csv} --plot {output.plot}
+            echo "RHS comparison saved to {output.csv}, plot {output.plot}"
             """
 
 
