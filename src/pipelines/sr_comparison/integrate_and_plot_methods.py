@@ -11,10 +11,10 @@ from matplotlib.cm import get_cmap
 from pathlib import Path
 from diffrax import ODETerm, diffeqsolve, Kvaerno3, SaveAt, SteadyStateEvent, PIDController, ImplicitAdjoint
 from typing import Optional
-from plot_style import apply_cell_systems_style
+from shared.plot_style import apply_cell_systems_style
 
-from mm_models import TARGET_COLUMN as MM_TARGET_COLUMN
-from regime_variants import MODEL_COLORS, VARIANTS
+from shared.mm_models import TARGET_COLUMN as MM_TARGET_COLUMN
+from shared.regime_variants import MODEL_COLORS, VARIANTS
 
 # Solver parameters
 STEADY_STATE_ATOL = 1e-14

@@ -16,9 +16,9 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
-from plot_style import apply_cell_systems_style
-from mm_models import TARGET_COLUMN as MM_TARGET_COLUMN
-from regime_variants import MODEL_COLORS, VARIANTS, augment_for_variant
+from shared.plot_style import apply_cell_systems_style
+from shared.mm_models import TARGET_COLUMN as MM_TARGET_COLUMN
+from shared.regime_variants import MODEL_COLORS, VARIANTS, augment_for_variant
 
 def load_formulas_from_file(file_path):
     """

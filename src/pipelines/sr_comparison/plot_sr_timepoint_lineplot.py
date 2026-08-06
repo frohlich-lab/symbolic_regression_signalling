@@ -15,16 +15,16 @@ import sympy
 import torch
 import matplotlib.pyplot as plt
 
-from plot_style import apply_cell_systems_style
-from mm_models import TARGET_COLUMN as MM_TARGET_COLUMN, mm_predictions
-from regime_variants import (
+from shared.plot_style import apply_cell_systems_style
+from shared.mm_models import TARGET_COLUMN as MM_TARGET_COLUMN, mm_predictions
+from shared.regime_variants import (
     MODEL_COLOR_MAP,
     MODEL_LINE_ORDER,
     VARIANTS,
     augment_for_variant,
     model_display_name,
 )
-from nn_model import NeuralNet, device as NN_DEVICE, load_dataset
+from shared.nn_model import NeuralNet, device as NN_DEVICE, load_dataset
 
 # Small epsilon to avoid division by zero in relative error
 EPS = 1e-12

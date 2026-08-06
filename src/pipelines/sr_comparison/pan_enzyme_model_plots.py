@@ -9,7 +9,7 @@ from sympy.utilities.lambdify import lambdify
 from sklearn.metrics import r2_score
 from matplotlib.cm import get_cmap
 from matplotlib.ticker import LogLocator, NullLocator, NullFormatter
-from plot_style import apply_cell_systems_style
+from shared.plot_style import apply_cell_systems_style
 
 # Apply consistent publication styling
 apply_cell_systems_style()

@@ -251,7 +251,7 @@ def main() -> None:
     ap.add_argument("--output", required=True, help="PNG output path. PDF is written next to it.")
     ap.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44])
     ap.add_argument("--r2-threshold", type=float, default=0.6)
-    ap.add_argument("--exclude-marker", action="append", default=["untransfected1"])
+    ap.add_argument("--exclude-marker", action="append", default=[])
     ap.add_argument("--pysr-integ-csv",
                     help="Put PySR on the ODE-INTEGRATED R² axis, read from this CSV "
                          "(needs 'marker' and 'ode_integ_r2_median'; best of seeds is "

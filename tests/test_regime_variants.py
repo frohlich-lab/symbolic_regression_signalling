@@ -3,7 +3,7 @@ import pytest
 np = pytest.importorskip('numpy')
 pytest.importorskip('pandas')
 
-from pipelines.regimes.regime_variants import variant_model_combinations
+from shared.regime_variants import variant_model_combinations
 
 
 def test_variant_model_combinations_invalid():

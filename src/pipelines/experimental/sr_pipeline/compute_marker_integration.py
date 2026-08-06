@@ -41,7 +41,7 @@ from pipelines.experimental.sr_pipeline.run_markers import (  # type: ignore
 )
 from pipelines.experimental.sr_pipeline.metrics import coefficient_of_determination  # type: ignore
 from pipelines.experimental.sr_pipeline.seeding import seed_all
-from utils.seeding import resolve_seed
+from shared.seeding import resolve_seed
 
 
 # -----------------------------------------------------------------------------

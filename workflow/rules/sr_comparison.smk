@@ -137,7 +137,7 @@ if enzyme_model != "experimental":
             target_feature=config["target_feature"]
         shell:
             """
-            python src/preprocessing.py --train {input.train} --test {input.test} --valid {input.valid} --output {output.merged} --train-output {output.train_split} --test-output {output.test_split} --target_feature {params.target_feature}
+            python src/pipelines/sr_comparison/preprocessing.py --train {input.train} --test {input.test} --valid {input.valid} --output {output.merged} --train-output {output.train_split} --test-output {output.test_split} --target_feature {params.target_feature}
             """
 
 if enzyme_model != "experimental":
@@ -417,7 +417,7 @@ if enzyme_model != "experimental":
             variant=lambda wildcards: wildcards.variant
         shell:
             """
-            python src/nn_model.py --dataset {input.train} --dataset_size {params.dataset_size} --features {params.features} --variant {params.variant} --output {output} || true
+            python src/shared/nn_model.py --dataset {input.train} --dataset_size {params.dataset_size} --features {params.features} --variant {params.variant} --output {output} || true
             """
 
     # Rule to extract the best formula from each temporary result file
@@ -542,4 +542,4 @@ rule pan_enzyme_model_plots:
     wildcard_constraints:
         variant="|".join(PAN_PLOT_VARIANTS)
     shell:
-        "python src/pan_enzyme_model_plots.py --root-dir {input.root_dir} --discovery-scales {params.discovery_scales} --variant {wildcards.variant}"
+        "python src/pipelines/sr_comparison/pan_enzyme_model_plots.py --root-dir {input.root_dir} --discovery-scales {params.discovery_scales} --variant {wildcards.variant}"

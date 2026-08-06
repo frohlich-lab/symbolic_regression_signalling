@@ -46,20 +46,20 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, FunctionTransformer
 from sklearn.pipeline import Pipeline
 
-from nn_model import train_model, evaluate_model, load_model_checkpoint
-from constants import PYSR_CONFIG, pysr_operator_config
-from plot_style import apply_cell_systems_style
-from utils.seeding import resolve_seed, seed_everything
+from shared.nn_model import train_model, evaluate_model, load_model_checkpoint
+from shared.constants import PYSR_CONFIG, pysr_operator_config
+from shared.plot_style import apply_cell_systems_style
+from shared.seeding import resolve_seed, seed_everything
 
 # mm + variants
-from mm_models import (
+from shared.mm_models import (
     EPS as MM_EPS,
     TARGET_COLUMN as MM_TARGET_COLUMN,
     mm_predictions,
     sqssa_only,
 )
 
-from regime_variants import (
+from shared.regime_variants import (
     MODEL_COLOR_MAP,
     MODEL_COMBINATIONS,
     MODEL_FAMILIES,

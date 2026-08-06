@@ -11,8 +11,8 @@ import optuna
 import torch.nn as nn
 from optuna.samplers import TPESampler
 
-import nn_model
-from nn_model import evaluate_model, load_dataset, train_model
+from shared import nn_model
+from shared.nn_model import evaluate_model, load_dataset, train_model
 
 
 ACTIVATION_LOOKUP = {

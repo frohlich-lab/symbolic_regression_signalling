@@ -23,8 +23,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from constants import PYSR_CONFIG, pysr_operator_config
-from regime_variants import VARIANTS, augment_for_variant
+from shared.constants import PYSR_CONFIG, pysr_operator_config
+from shared.regime_variants import VARIANTS, augment_for_variant
 
 TARGET_COLUMN = 'kcat_cg'
 

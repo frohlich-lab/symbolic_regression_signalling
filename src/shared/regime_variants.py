@@ -13,7 +13,7 @@ import re
 import numpy as np
 import pandas as pd
 
-from mm_models import (
+from shared.mm_models import (
     EPS as MM_EPS,
     TARGET_COLUMN as MM_TARGET_COLUMN,
     mm_predictions,

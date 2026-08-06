@@ -4,7 +4,7 @@ import argparse
 import os
 import pandas as pd
 
-from regime_variants import VARIANTS
+from shared.regime_variants import VARIANTS
 
 
 def split_method_variant(method: str):

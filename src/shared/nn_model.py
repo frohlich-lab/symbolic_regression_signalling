@@ -11,13 +11,19 @@ import copy
 import sys
 from pathlib import Path
 
-from utils.seeding import resolve_seed, seed_everything
+# Put src/ on the path BEFORE importing anything from shared.*. When this file is run
+# directly -- rule `nn` invokes it as a script -- Python seeds sys.path with the script's
+# own directory (src/shared/), not src/, so `shared.seeding` would not resolve.
+#
+# This replaces a `parents[1]` block that pointed at the repo root back when this file
+# lived at src/nn_model.py. Nothing needed the repo root; the imports below worked only
+# because running a script in src/ happened to put src/ on the path. Now it is explicit.
+SRC_ROOT = Path(__file__).resolve().parents[1]
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.append(str(ROOT_DIR))
-
-from regime_variants import VARIANTS, augment_for_variant
+from shared.seeding import resolve_seed, seed_everything
+from shared.regime_variants import VARIANTS, augment_for_variant
 
 
 def _build_optimizer(model):

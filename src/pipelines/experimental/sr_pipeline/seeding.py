@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional, Sequence
 
-from utils.seeding import resolve_seed, seed_everything
+from shared.seeding import resolve_seed, seed_everything
 
 
 def canonicalize_seeds(
