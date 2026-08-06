@@ -7,27 +7,25 @@
 # Configuration, paths and `rule all` remain in common.smk.
 # ===========================================================================
 
-# ---------------------------------------------------------------------------
-# KNOWN BUG, PRESERVED HERE DELIBERATELY -- the three rules below never load.
+# The synthetic default target, plus the two rules that build its inputs.
 #
-# `run_pysr` is `"pysr" in exp_models`, where `exp_models` is the EXPERIMENTAL models
-# list and defaults to `["pysr"]`. It is therefore always True, so this `else:` branch
-# never executes, so the synthetic workflow has no `all`, no `generate_data_model` and
-# no `preprocessing_model`. Its default target falls through to whichever rule is
-# parsed first (`pysindy`), and it cannot regenerate its own datasets -- the synthetic
-# rules only work because `data/<model>/<type>/processed/` already exists on disk.
+# These were previously guarded by `if run_pysr: pass / else:`. `run_pysr` is
+# `"pysr" in exp_models`, where `exp_models` is the EXPERIMENTAL models list and
+# defaults to `["pysr"]` -- so it was always True, the `else:` never executed, and the
+# synthetic workflow silently had no `all`, no `generate_data_model` and no
+# `preprocessing_model`. Its default target fell through to whichever rule parsed first
+# (`pysindy`), and it could not build its own datasets: the synthetic rules only worked
+# on a machine where `data/<model>/<type>/processed/` already happened to exist. A fresh
+# clone could not reproduce the synthetic benchmarks at all.
 #
-# This predates the rule-file split (verified against f18d44e: the same three rules sat
-# at indent 4 under the same `else:`). It is left untouched so that the split is a pure
-# relocation with an identical rule set; fixing it means newly defining three rules and
-# changing the synthetic default target, which is a behaviour change and belongs in its
-# own commit. The fix is to gate on the synthetic config rather than the experimental
-# one -- e.g. drop the conditional entirely, since nothing here depends on `run_pysr`.
-# ---------------------------------------------------------------------------
-if run_pysr:
-    pass
-
-else:
+# The guard is now the same one the rest of this file uses. It must stay a guard rather
+# than being dropped entirely: `rule all` for the experimental branch is declared in
+# common.smk, and defining a second one here unconditionally is a duplicate-rule error.
+#
+# This block must also stay FIRST in this file. On the synthetic branch common.smk and
+# experimental.smk declare no rules at all, so the first rule parsed is whichever one
+# appears here first -- and that is what Snakemake makes the default target.
+if enzyme_model != "experimental":
 
     rule all:
         input:
@@ -97,9 +95,20 @@ else:
             f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/relative_mae/relative_mae_dataset_size_lineplot_template.png",
             f"data/{enzyme_model}/{data_type}/dataset_size_regimes/shared/plots/relative_mae/relative_mae_error_distributions.png",
             *timepoint_outputs,
-            "data/panmodel_plots/symbolic_model_r2_scores_bar.png",
-            "data/panmodel_plots/symbolic_model_r2_scores_scatter.png",
-            "data/panmodel_plots/all_symbolic_formulas.txt"
+            # `pan_enzyme_model_plots` writes under a {variant} directory
+            # (data/panmodel_plots/<sQSSA|tQSSA>/...), so these have to carry the
+            # variant too. They were written without it and so could never be
+            # satisfied -- which went unnoticed because the whole rule was
+            # unreachable behind the `run_pysr` guard.
+            *[
+                f"data/panmodel_plots/{variant}/{name}"
+                for variant in variant_keys
+                for name in (
+                    "symbolic_model_r2_scores_bar.png",
+                    "symbolic_model_r2_scores_scatter.png",
+                    "all_symbolic_formulas.txt",
+                )
+            ]
 
     rule generate_data_model:
         output:
