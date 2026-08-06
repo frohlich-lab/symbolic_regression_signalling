@@ -447,9 +447,18 @@ def _collect_sr_sweep_outputs(root: Path, max_files: int, deep: bool) -> list[di
         "**/*equations*.csv",
         "**/*pysr*.csv",
     ]
-    roots = [root / "results", root / "outputs", root / "data", root / "tuning_runs"]
+    # Everything the pipeline produces now lands under data/. The old root-level
+    # scratch directories (results/, outputs/, model/, tuning_runs/) were the default
+    # output locations of AI-Feynman, PySR and the Optuna tuner leaking into the working
+    # directory; each now writes inside data/ instead, and the historical copies moved to
+    # archive/superseded/. They are still scanned when --deep is passed, so an old
+    # snapshot can be reproduced, but they are no longer expected to exist.
+    roots = [root / "data"]
     if deep:
-        roots.append(root / "wandb")
+        roots += [
+            root / "wandb",
+            root / "archive" / "superseded",
+        ]
     found = []
     seen = set()
     for base in roots:
