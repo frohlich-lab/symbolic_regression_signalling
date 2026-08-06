@@ -32,7 +32,7 @@ def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
 
-def load_dataset(file_path, dataset_size=None, features=None, variant: str = "sQSSA"):
+def load_dataset(file_path, dataset_size=None, features=None, variant: str = "sQSSA", seed=None):
     """
     Load dataset from a CSV file, sample it if dataset size is specified, 
     and select specific features if provided.
@@ -53,9 +53,12 @@ def load_dataset(file_path, dataset_size=None, features=None, variant: str = "sQ
         selected = list(data.columns)
     data = data[selected]
 
-    # Sample the dataset if dataset size is specified
+    # Sample the dataset if dataset size is specified. random_state=seed so the
+    # subsample is reproducible; without it PySR trained on a different random
+    # subset every run and returned a different (though structurally similar)
+    # formula despite its search being seeded.
     if dataset_size:
-        data = data.sample(n=min(dataset_size, len(data)))
+        data = data.sample(n=min(dataset_size, len(data)), random_state=seed)
 
     data = data.map(np.exp)
 
@@ -136,7 +139,7 @@ def main():
 
     args = parser.parse_args()
     print(f"Running PySR for variant: {args.variant}")
-    data = load_dataset(args.dataset, args.dataset_size, args.features, variant=args.variant)
+    data = load_dataset(args.dataset, args.dataset_size, args.features, variant=args.variant, seed=args.seed)
     override_config: Dict[str, object] = {}
     if args.n_iterations is not None:
         override_config['niterations'] = args.n_iterations
