@@ -26,7 +26,7 @@
 #   2  Frozen-config run          that configuration applied to all 40 contexts
 #   3  Sparse Neural ODE          lambda sweep, then the L21 / L1 / C-NODE variants
 #   4  Paper figures
-#   5  Aggregators                experimental_v5_all, experimental_v5_tables
+#   5  Aggregators                experimental_results, experimental_metrics
 #   6  Data prep and shared       marker inputs, ODE integration, summary plots
 #
 # CONVENTIONS  every stage below obeys all three; see also common.smk for the paths
@@ -355,7 +355,7 @@ if enzyme_model == "experimental":
 
     # --- 4. Paper figures -----------------------------------------------------
 
-    rule experimental_paper_fig_parsimony_tradeoff:
+    rule experimental_compare_sr_vs_neural_ode:
         # Fig. 4E + the sparsity panel. Both axes are held-out ODE-integrated R2:
         # --pysr-integ-csv is what makes PySR's axis comparable to the network's
         # trajectory R2. Without it PySR is plotted on its derivative-fit R2, which is a
@@ -367,7 +367,7 @@ if enzyme_model == "experimental":
             pysr_integ=pysr_final_per_fit,
             dataset=marker_per_minute_csv
         output:
-            fig=paper_fig_parsimony_tradeoff
+            fig=sr_vs_node_panel
         conda:
             "../../envs/pysr.yaml"
         params:
@@ -378,7 +378,7 @@ if enzyme_model == "experimental":
         shell:
             """
             mkdir -p $(dirname {output.fig})
-            python src/pipelines/experimental/sr_pipeline/paper_figures/plot_parsimony_tradeoff.py \
+            python src/pipelines/experimental/sr_pipeline/figures/plot_parsimony_tradeoff.py \
                 --nn-dir {params.nn_dir} \
                 --pysr-dir {params.pysr_dir} \
                 --pysr-integ-csv {input.pysr_integ} \
@@ -388,7 +388,7 @@ if enzyme_model == "experimental":
                 --output {output.fig}
             """
 
-    rule experimental_paper_fig_cutoff_robustness:
+    rule experimental_node_driver_readout:
         # Seed robustness, between-method agreement and driver-set size against the
         # top-X% Jacobian-mass cutoff used to read dependencies off the network.
         input:
@@ -396,7 +396,7 @@ if enzyme_model == "experimental":
             pysr_formulas=pysr_final_formulas,
             dataset=marker_per_minute_csv
         output:
-            fig=paper_fig_cutoff_robustness
+            fig=node_driver_readout
         conda:
             "../../envs/pysr.yaml"
         params:
@@ -405,14 +405,14 @@ if enzyme_model == "experimental":
         shell:
             """
             mkdir -p $(dirname {output.fig})
-            python src/pipelines/experimental/sr_pipeline/paper_figures/plot_cutoff_robustness.py \
+            python src/pipelines/experimental/sr_pipeline/figures/plot_cutoff_robustness.py \
                 --nn-dir {params.nn_dir} \
                 --pysr-dir {params.pysr_dir} \
                 --dataset {input.dataset} \
                 --output {output.fig}
             """
 
-    rule experimental_paper_fig_nn_appendix:
+    rule experimental_node_regulariser_comparison:
         # Fig. S3A / Table S8: L21 vs L1 vs C-NODE. The point is a null -- median
         # held-out R2 0.617 / 0.629 / 0.610, indistinguishable (Wilcoxon p = 0.19 and
         # 0.29 against L21) -- so the reported dependency counts are not an artefact of
@@ -424,7 +424,7 @@ if enzyme_model == "experimental":
             l21=sparse_node_l21_done,
             cnode=sparse_node_cnode_done
         output:
-            fig=paper_fig_nn_appendix
+            fig=node_regulariser_comp
         conda:
             "../../envs/pysr.yaml"
         params:
@@ -434,14 +434,14 @@ if enzyme_model == "experimental":
         shell:
             """
             mkdir -p $(dirname {output.fig})
-            python src/pipelines/experimental/sr_pipeline/paper_figures/plot_nn_appendix_comparison.py \
+            python src/pipelines/experimental/sr_pipeline/figures/plot_nn_appendix_comparison.py \
                 --l1-dir {params.l1_dir} \
                 --l21-dir {params.l21_dir} \
                 --cnode-dir {params.cnode_dir} \
                 --output {output.fig}
             """
 
-    rule experimental_paper_fig_sr_vs_linreg:
+    rule experimental_compare_sr_vs_linreg:
         # Fig. 4D (k=10, the full ten-input pool -- the toughest baseline) and Fig. S4
         # (k=4, complexity-matched to PySR's median equation). Controls are included
         # here, unlike in the sparsity panel; PySR wins at every k tested.
@@ -450,8 +450,8 @@ if enzyme_model == "experimental":
             pysr_formulas=pysr_final_formulas,
             pysr_integ=pysr_final_per_fit
         output:
-            full=paper_fig_sr_vs_linreg,
-            matched=paper_fig_sr_vs_linreg_k4
+            full=sr_vs_linreg_k10,
+            matched=sr_vs_linreg_k4
         conda:
             "../../envs/pysr.yaml"
         params:
@@ -465,7 +465,7 @@ if enzyme_model == "experimental":
             for spec in "{params.k_full}:{output.full}" "{params.k_matched}:{output.matched}"; do
                 k=${{spec%%:*}}
                 out=${{spec#*:}}
-                python src/pipelines/experimental/sr_pipeline/paper_figures/plot_sr_vs_linreg_ood.py \
+                python src/pipelines/experimental/sr_pipeline/figures/plot_sr_vs_linreg_ood.py \
                     --linreg-metrics {input.linreg} \
                     --pysr-dir {params.pysr_dir} \
                     --pysr-integ-csv {input.pysr_integ} \
@@ -476,9 +476,9 @@ if enzyme_model == "experimental":
 
     # --- 5. Aggregators -------------------------------------------------------
 
-    rule experimental_v5_all:
+    rule experimental_results:
         # Everything the manuscript's experimental sections depend on.
-        #   snakemake --use-conda -j1 --config enzyme_model=experimental experimental_v5_all
+        #   snakemake --use-conda -j1 --config enzyme_model=experimental experimental_results
         #
         # Editing envs/pysr.yaml makes Snakemake offer to rebuild every conda-backed
         # stage, including the expensive PySR ones -- `ancient()` guards mtime, not
@@ -493,15 +493,15 @@ if enzyme_model == "experimental":
             pysr_final_summary,
             pysr_final_exemplars,
             # main text
-            paper_fig_parsimony_tradeoff,
-            paper_fig_sr_vs_linreg,
+            sr_vs_node_panel,
+            sr_vs_linreg_k10,
             # SI
-            paper_fig_sr_vs_linreg_k4,
-            paper_fig_nn_appendix,
-            paper_fig_cutoff_robustness,
+            sr_vs_linreg_k4,
+            node_regulariser_comp,
+            node_driver_readout,
             custom_loss_ablation_metrics,
 
-    rule experimental_v5_tables:
+    rule experimental_metrics:
         # Just the cheap numeric stages, for when you want to re-derive the reported
         # numbers without touching a figure or a GPU.
         input:

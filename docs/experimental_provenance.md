@@ -4,8 +4,8 @@ Every experimental number, figure and table in the v5 draft, mapped to the artef
 comes from and the pipeline stage that builds it. Reproduce the cheap stages with:
 
 ```bash
-snakemake --use-conda -j1 --config enzyme_model=experimental experimental_v5_tables
-snakemake --use-conda -j1 --config enzyme_model=experimental experimental_v5_all
+snakemake --use-conda -j1 --config enzyme_model=experimental experimental_metrics
+snakemake --use-conda -j1 --config enzyme_model=experimental experimental_results
 ```
 
 ## The three conventions that must not be mixed
@@ -49,7 +49,10 @@ Two further standing traps:
 | regulariser variants | `runs/sparse_neural_ode/{l1,pathreg}/` | `..._ood_l1`, `..._ood_cnode` | hours (GPU) |
 | λ sweep | `runs/sparse_neural_ode/lambda_sweep/` | `experimental_sparse_node_lambda_sweep` | hours (GPU) |
 | custom-loss ablation | `runs/custom_loss_ablation/` | `experimental_custom_loss_ablation` | hours |
-| figures | `runs/paper_figures/` | `experimental_paper_fig_*` | seconds |
+| driver read-out | `runs/sparse_neural_ode/driver_readout/` | `experimental_node_driver_readout` | seconds |
+| regulariser comparison | `runs/sparse_neural_ode/regulariser_comparison/` | `experimental_node_regulariser_comparison` | seconds |
+| SR vs linreg | `runs/comparisons/sr_vs_linreg/` | `experimental_compare_sr_vs_linreg` | seconds |
+| SR vs Neural ODE | `runs/comparisons/sr_vs_neural_ode/` | `experimental_compare_sr_vs_neural_ode` | seconds |
 
 The two expensive PySR stages ran on NEMO via the sharding helpers in
 `src/pipelines/experimental/sweeps/`. Their outputs are committed, and their rules
@@ -85,15 +88,15 @@ contexts (median OOD R² 0.044 on development contexts, 0.000 on the 26 never se
 | v5 artefact | numbers | source |
 |---|---|---|
 | **Fig. 4D** headline | 8/32 contexts ≥ 0.6, median 4 variables (range 2–6) | `pysr_ood_final/metrics/success_rate_summary.csv` |
-| **Fig. 4D** baseline | SR better 19/40; 8 vs 3 solved; p = 0.035; mean 0.351 vs 0.178 | `paper_figures/sr_vs_linreg_ood_scatter.png` (k=10) |
-| **Fig. 4E** + sparsity panel | 30 contexts; NN 18, PySR 7, both 6, neither 11; PR 3.34 vs 5.20, p = 0.0071; SR vs NN-✓ p = 0.063 | `paper_figures/scatter_parsimony_tradeoff.png` |
+| **Fig. 4D** baseline | SR better 19/40; 8 vs 3 solved; p = 0.035; mean 0.351 vs 0.178 | `comparisons/sr_vs_linreg/heldout_r2_k10.png` |
+| **Fig. 4E** + sparsity panel | 30 contexts; NN 18, PySR 7, both 6, neither 11; PR 3.34 vs 5.20, p = 0.0071; SR vs NN-✓ p = 0.063 | `comparisons/sr_vs_neural_ode/accuracy_and_drivers.png` |
 | **Fig. 5** exemplars | PIKfyve/PIP5K3 s43 0.942 (3/3 seeds), PTPN7 s42 0.935 (2/3), ALPK2 s43 0.734 (1/3) | `pysr_ood_final/metrics/exemplar_ranking.csv` |
 | **Fig. S1** | custom-loss penalty ablation | `runs/custom_loss_ablation/` |
 | **Fig. S2** | trajectories near the R² threshold | `experimental_pysr_r2_threshold_sanity` |
-| **Fig. S3A / Table S8** | L21 0.617, L1 0.629, pathreg 0.610; p = 0.19 and 0.29 | `paper_figures/nn_appendix_comparison.png` |
+| **Fig. S3A / Table S8** | L21 0.617, L1 0.629, pathreg 0.610; p = 0.19 and 0.29 | `sparse_neural_ode/regulariser_comparison/l21_vs_l1_vs_cnode.png` |
 | **Fig. S3B** | λ ladder, elbow retains λ = 3.0 | `sparse_neural_ode/lambda_sweep_summary.csv` |
 | **Fig. S3C / Table S9** | 54-cell architecture grid; retained hd=64, 4 layers, lr=3e-3, tanh | `sparse_neural_ode/arch_grid.csv` |
-| **Fig. S4** | SR better 21/40; 8 vs 1 solved; p = 0.0032 | `paper_figures/sr_vs_linreg_ood_scatter_k4.png` (k=4) |
+| **Fig. S4** | SR better 21/40; 8 vs 1 solved; p = 0.0032 | `comparisons/sr_vs_linreg/heldout_r2_k4.png` |
 | **Table S10** | all 72 candidate arms, train-ranked | `pysr_config_sweep/metrics/table_s10_config_sweep.csv` |
 
 Fig. 5's exemplar rule is the **dual-threshold** one: a context counts as solved only if
@@ -104,7 +107,7 @@ that never fitted the data it was trained on and whose fan has no peak at all. N
 ranking does read held-out values, so it is test-based selection; the quantitative claim
 is the distribution, not the exemplars. Two rejected alternative rules are kept in
 `archive/superseded/adhoc_scripts/` with the reasoning in
-`runs/pysr_ood_final/figures/paper_v5/README.md`.
+`runs/pysr_ood_final/exemplar_selection/README.md`.
 
 ## Controls
 

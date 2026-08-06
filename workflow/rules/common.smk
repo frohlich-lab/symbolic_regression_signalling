@@ -444,17 +444,28 @@ exp_exclude_flags = " ".join(
     f"--exclude-marker {m}" for m in exp_control_contexts
 )
 
-paper_fig_dir = f"{exp_runs_root}/paper_figures"
-paper_fig_parsimony_tradeoff = f"{paper_fig_dir}/scatter_parsimony_tradeoff.png"
-paper_fig_cutoff_robustness  = f"{paper_fig_dir}/cutoff_robustness.png"
-paper_fig_nn_appendix        = f"{paper_fig_dir}/nn_appendix_comparison.png"
-paper_fig_sr_vs_linreg       = f"{paper_fig_dir}/sr_vs_linreg_ood_scatter.png"
-paper_fig_sr_vs_linreg_k4    = f"{paper_fig_dir}/sr_vs_linreg_ood_scatter_k4.png"
+# Figures land with the question they answer, not in a shared bucket named after where
+# they get printed. A cross-method result goes under comparisons/; anything that probes
+# one model's internals goes inside that model's directory.
+exp_comparisons_dir = f"{exp_runs_root}/comparisons"
 
-# PySR's solved equations use a median of four variables, so k=4 is the
-# complexity-matched baseline (Fig. S4) and k=10 the full-pool one (Fig. 4D). The
-# match is on the NUMBER of inputs, not their identity: the baseline picks its k by
-# univariate F-test while PySR picks its own subset by search.
+# SR against the OLS baseline, at two feature counts.
+sr_vs_linreg_dir  = f"{exp_comparisons_dir}/sr_vs_linreg"
+sr_vs_linreg_k10  = f"{sr_vs_linreg_dir}/heldout_r2_k10.png"
+sr_vs_linreg_k4   = f"{sr_vs_linreg_dir}/heldout_r2_k4.png"
+
+# SR against the sparse Neural ODE: held-out accuracy plus effective driver counts.
+sr_vs_node_dir    = f"{exp_comparisons_dir}/sr_vs_neural_ode"
+sr_vs_node_panel  = f"{sr_vs_node_dir}/accuracy_and_drivers.png"
+
+# Probes of the network itself, so they live with it.
+node_driver_readout   = f"{sparse_node_dir}/driver_readout/cutoff_robustness.png"
+node_regulariser_comp = f"{sparse_node_dir}/regulariser_comparison/l21_vs_l1_vs_cnode.png"
+
+# k=10 uses the full input pool -- the strongest form of the baseline. k=4 matches the
+# median number of variables in a solved SR equation, so the comparison is on equation
+# size. The match is on the COUNT, not the identity: the baseline picks its k by
+# univariate F-test while SR picks its own subset by search.
 linreg_k_full = 10
 linreg_k_matched = 4
 
@@ -630,7 +641,7 @@ if enzyme_model == "experimental":
         select_k_boxplot_ode,
         select_k_ribbon_coef,
         select_k_ribbon_variance,
-        # The PySR-vs-linreg comparison is experimental_paper_fig_sr_vs_linreg, on
+        # The PySR-vs-linreg comparison is experimental_compare_sr_vs_linreg, on
         # the OOD split. There is no in-distribution equivalent by design.
         metrics_models_r2,
         metrics_models_r2_svg,
@@ -665,11 +676,11 @@ if enzyme_model == "experimental":
         pysr_final_per_fit,
         pysr_final_summary,
         pysr_final_exemplars,
-        paper_fig_parsimony_tradeoff,
-        paper_fig_sr_vs_linreg,
-        paper_fig_sr_vs_linreg_k4,
-        paper_fig_nn_appendix,
-        paper_fig_cutoff_robustness,
+        sr_vs_node_panel,
+        sr_vs_linreg_k10,
+        sr_vs_linreg_k4,
+        node_regulariser_comp,
+        node_driver_readout,
     ])
 
     # Must stay the FIRST rule in the workflow: Snakemake takes the first rule it parses
@@ -680,7 +691,7 @@ if enzyme_model == "experimental":
     # Note this requests `marker_summary_output` and the snapshot/per-minute integration
     # metrics -- the in-distribution PySR run, whose outputs are archived as superseded,
     # so building `all` from scratch re-runs it. For the manuscript outputs alone use
-    # `experimental_v5_all`; for just the numbers, `experimental_v5_tables`.
+    # `experimental_results`; for just the numbers, `experimental_metrics`.
     rule all:
         input:
             experimental_rule_all_inputs
