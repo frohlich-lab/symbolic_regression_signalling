@@ -97,72 +97,60 @@ def _map_xi_to_columns(formula_str, dataset_columns):
         mapped = mapped.replace(f"x{i}", col)
     return mapped
 
-def compute_log_MAE_loss(formula, dataset, discovery_scale=None):
-    """Compute MAE in log-space between predictions and target.
+def compute_log_MAE_loss(formula, dataset, discovery_scale="linear", use_log_input=False):
+    """log-MAE between predicted and actual log(kcat_cg), respecting per-method scaling.
 
-    Assumptions:
-    - `dataset` target (last column) is in linear space.
-    - If `discovery_scale == 'log'`, the formula predicts log(target).
-    - If `discovery_scale == 'linear'`, the formula predicts target in linear space.
+    `dataset` columns are on the CSV's native LOG scale. Non-KAN formulas were
+    trained on LINEAR inputs, so we exp() the feature columns; KAN was trained on
+    LOG inputs, so its columns are used as-is (`use_log_input=True`). 'log'-scale
+    methods predict log(kcat_cg), so we exp() the formula output to recover kcat_cg.
+    The target column is already log(kcat_cg) and is used directly (not re-logged).
     """
-    formula_symbols = formula.free_symbols
-    formula_variable_names = [str(symbol) for symbol in formula_symbols]  # Extract variable names in formula
+    formula_variable_names = [str(symbol) for symbol in formula.free_symbols]
     relevant_columns = [col for col in dataset.columns if col in formula_variable_names]
 
     feature_symbols = sp.symbols(relevant_columns)
     target_column = dataset.columns[-1]  # Assuming the last column is the target
-
-    # Lambdify the formula function for relevant columns only; formulas evaluated in linear space
     formula_func = sp.lambdify(feature_symbols, formula, modules=['numpy'])
 
-    # Calculate predictions
-    args = [dataset[col].astype(float).values for col in relevant_columns]
-    predicted_values = formula_func(*args)
+    # Inputs: log (as-is) for KAN, linear (exp) for every other method.
+    inputs = []
+    for col in relevant_columns:
+        vals = dataset[col].astype(float).values
+        inputs.append(vals if use_log_input else np.exp(vals))
 
-    predicted_values = np.asarray(predicted_values)
-    if predicted_values.ndim > 1:
-        predicted_values = predicted_values.squeeze()
+    with np.errstate(all="ignore"):
+        predicted_values = np.asarray(formula_func(*inputs), dtype=float)
+        if predicted_values.ndim > 1:
+            predicted_values = predicted_values.squeeze()
+        if predicted_values.size != len(dataset):
+            predicted_values = np.broadcast_to(predicted_values, len(dataset))
+        # Recover kcat_cg: log-scale methods predict log(kcat_cg) -> exp() it.
+        kfw = np.exp(predicted_values) if discovery_scale == "log" else predicted_values
+        pred_log = np.log(np.clip(kfw, a_min=EPS, a_max=None))
 
-    if predicted_values.size != len(dataset):
-        predicted_values = np.broadcast_to(predicted_values, len(dataset))
-
-    if predicted_values.dtype == object:
-        converted = []
-        for val in predicted_values:
-            if hasattr(val, 'evalf'):
-                val = val.evalf()
-            try:
-                converted.append(float(val))
-            except (TypeError, ValueError):
-                converted.append(np.nan)
-        predicted_values = np.asarray(converted, dtype=float)
-
-    # Compute uniform log-space MAE: treat all formulas as linear
-    y_true = dataset[target_column].astype(float).values
-    pred_log = np.log(np.clip(np.asarray(predicted_values, dtype=float), a_min=EPS, a_max=None))
-    y_log = np.log(np.clip(y_true, a_min=EPS, a_max=None))
-
+    y_log = dataset[target_column].astype(float).values  # already log(kcat_cg)
     mask = np.isfinite(pred_log) & np.isfinite(y_log)
     if not np.any(mask):
         return np.nan
 
-    loss = np.mean(np.abs(pred_log[mask] - y_log[mask]))
-    return loss
+    return float(np.mean(np.abs(pred_log[mask] - y_log[mask])))
 
 def calculate_complexity(formula):
     """Calculate the complexity of a formula based on the number of elements."""
     return len(formula.atoms(sp.Symbol, sp.Number)) + len(formula.atoms(sp.Add, sp.Mul, sp.Pow, sp.Function))
 
-def scatter_plot_formulas(methods, formulas, dataset, output_file, plot_context=None, dataset_context=None):
+def scatter_plot_formulas(methods, formulas, dataset, discovery_scales, output_file, plot_context=None, dataset_context=None):
     """Generate a scatter plot of log-space MAE loss versus formula complexity and save it to a file."""
     grouped_points = {}
-    variant_cache: dict[str, pd.DataFrame] = {}
 
     for method, formula in zip(methods, formulas):
         base_method, variant_key = split_method_variant(method)
-        eval_dataset = dataset_for_variant(dataset, variant_key, variant_cache)
+        use_log_input = (base_method == "kan")
+        scale = discovery_scales.get(base_method, "linear") if discovery_scales else "linear"
         complexity = calculate_complexity(formula)
-        loss = compute_log_MAE_loss(formula, eval_dataset)
+        # Formulas reference base features; per-method input/output scaling handled inside.
+        loss = compute_log_MAE_loss(formula, dataset, discovery_scale=scale, use_log_input=use_log_input)
 
         if not np.isfinite(loss):
             continue
@@ -282,17 +270,17 @@ def main():
     parser.add_argument('--formulas', nargs='+', required=True, help='List of file paths containing formulas')
     parser.add_argument('--dataset', required=True, help='File path to a CSV dataset')
     parser.add_argument('--output', required=True, help='File path to save the generated plot')
-    parser.add_argument('--discovery-scales', required=False, type=str, help='(ignored) Discovery scales')
- 
+    parser.add_argument('--discovery-scales', required=False, type=str,
+                        help="JSON of base-method -> 'log'|'linear' (log methods predict log(kcat_cg)).")
+
     args = parser.parse_args()
     methods = [_infer_method_from_formula_path(formula) for formula in args.formulas]
+    discovery_scales = json.loads(args.discovery_scales) if args.discovery_scales else {}
 
-    # Load dataset from CSV file
+    # Load dataset on its native LOG scale; per-method input/output scaling is
+    # applied inside compute_log_MAE_loss (features exp'd for non-KAN, formula
+    # output exp'd for log-scale methods).
     dataset = pd.read_csv(args.dataset)
-    # Evaluate everything in linear space by exponentiating only numeric columns
-    for col in dataset.columns:
-        if pd.api.types.is_numeric_dtype(dataset[col]):
-            dataset[col] = np.exp(dataset[col].astype(float))
 
     # Load all formulas from the provided file paths
     formulas = []
@@ -310,6 +298,7 @@ def main():
         methods,
         formulas,
         dataset,
+        discovery_scales,
         args.output,
         plot_context=plot_context,
         dataset_context=dataset_context
