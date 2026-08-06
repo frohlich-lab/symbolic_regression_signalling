@@ -1,34 +1,25 @@
-from typing import Optional
+"""Compatibility wrapper for shared constants.
 
-PYSR_CONFIG = {
-    'niterations': 350,
-    'population_size': 30,
-    'populations': 15,
-    'binary_operators': ["+", "*", "/", "-"],
-    'unary_operators': ["exp", "log", "sqrt"],
-    'maxsize': 20,
-    'parsimony': 1,
-    'verbosity': 0,
-    'batching': True,
-    'annealing': True,
-    'elementwise_loss': "my_loss(x,y)=(log(max(x,1e-25))-log(max(y,1e-25)))^2",
-    'random_state': 42,
-}
+The implementation lives in `src/shared/constants.py`. This module existed as a
+byte-identical second copy, which meant every change had to be made twice -- and
+whichever copy was forgotten would silently diverge. It is now a re-export, matching
+the pattern `src/regime_variants.py` already uses.
 
+It has to stay: six live modules import it by the bare name, resolved through the
+`sys.path.insert(0, SRC_ROOT)` at the top of each pipeline script --
+`src/pipelines/regimes/{kinetic,noise,mm_deviation,dataset_size,timepoint}_regimes.py`
+and `src/sr_models/pysr_model.py` all do `from constants import ...`. Deleting this
+file would break all six; rewriting their imports is a separate change.
+"""
 
-def pysr_operator_config(variant: Optional[str]) -> dict:
-    if not variant:
-        return {}
-    variant_norm = variant.strip().lower()
-    if variant_norm == "sqssa":
-        return {
-            "binary_operators": ["+", "-", "*", "/"],
-            "unary_operators": [],
-        }
-    if variant_norm == "tqssa":
-        return {
-            "binary_operators": ["+", "-", "*", "/"],
-            "unary_operators": ["sqrt", "square"],
-            "maxsize": 45,
-        }
-    return {}
+from shared import constants as _impl
+
+globals().update(
+    {
+        name: getattr(_impl, name)
+        for name in dir(_impl)
+        if not name.startswith("_")
+    }
+)
+
+__all__ = [name for name in globals() if not name.startswith("_")]
