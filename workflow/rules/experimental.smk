@@ -127,12 +127,17 @@ if enzyme_model == "experimental":
             snapshot=ancient(marker_fit_snapshot_csv)
         output:
             formulas=pysr_final_formulas,
-            metrics=pysr_final_metrics
+            metrics=pysr_final_metrics,
+            # Fig. 5 and Fig. S2 draw individual held-out bins, so the trajectories are
+            # a reported output rather than a by-product; declaring them is also what
+            # would have caught the broken integration call below.
+            trajectories=pysr_final_traj
         conda:
             "../../envs/pysr.yaml"
         params:
             out_dir=pysr_final_dir,
             group_definitions_csv=exp_group_definitions_csv,
+            raw_measurements=exp_raw_time_course,
             measured=" ".join(str(t) for t in exp_measured_timepoints),
             seeds=" ".join(str(s) for s in pysr_final_seeds),
         shell:
@@ -167,11 +172,24 @@ if enzyme_model == "experimental":
 
                 # run_markers.py does not integrate; the trajectory metrics that every
                 # reported number is based on come from this separate stage.
+                #
+                # --summary, --output and --trajectories-output are all required and
+                # there is no --output-dir. This call used to pass --output-dir and no
+                # --summary, so it exited on argparse; nothing noticed because the rule
+                # takes ancient() inputs and its outputs were already on disk from the
+                # recovered cluster run. Naming every path explicitly is what keeps that
+                # from recurring.
+                seed_dir={params.out_dir}/seeds/seed_${{seed}}
                 python src/pipelines/experimental/sr_pipeline/compute_marker_integration.py \
                     --dataset {input.per_minute} \
-                    --sr-trajectories {params.out_dir}/seeds/seed_${{seed}}/trajectories/predicted_trajectories_per_minute.csv \
-                    --output-dir {params.out_dir}/seeds/seed_${{seed}}/metrics \
-                    --measured-timepoints {params.measured}
+                    --raw-dataset {params.raw_measurements} \
+                    --summary "$seed_dir/summary/marker_summary.csv" \
+                    --sr-trajectories "$seed_dir/trajectories/predicted_trajectories_per_minute.csv" \
+                    --dataset-mode per_minute \
+                    --output "$seed_dir/metrics/marker_integration_metrics_per_minute.csv" \
+                    --trajectories-output "$seed_dir/metrics/marker_integration_trajectories_per_minute.csv" \
+                    --measured-timepoints {params.measured} \
+                    --seed ${{seed}}
             done
             """
 
@@ -189,6 +207,7 @@ if enzyme_model == "experimental":
         conda:
             "../../envs/pysr.yaml"
         params:
+            raw_measurements=exp_raw_time_course,
             run_dir=pysr_final_dir,
             threshold=exp_r2_threshold,
         shell:
@@ -219,6 +238,7 @@ if enzyme_model == "experimental":
             mkdir -p {{params.out_dir}}/seed_${{{{seed}}}}
             python src/pipelines/experimental/sr_pipeline/neural_ode_diffrax_baseline.py \\
                 --dataset {{input.per_minute}} \\
+                --raw-dataset {{params.raw_measurements}} \\
                 --output-dir {{params.out_dir}}/seed_${{{{seed}}}} \\
                 --seeds ${{{{seed}}}} \\
                 --epochs 200 --patience 20 \\
@@ -264,6 +284,7 @@ if enzyme_model == "experimental":
         conda:
             "../../envs/pysr.yaml"
         params:
+            raw_measurements=exp_raw_time_course,
             out_dir=sparse_node_lambda_sweep_dir,
             lambdas=" ".join(f"{v:g}" for v in sparse_node_lambda_values),
             # _diffrax_sweep_params already carries `seeds`; do not re-declare it here.
@@ -278,6 +299,7 @@ if enzyme_model == "experimental":
                     mkdir -p {params.out_dir}/${{tag}}/seed_${{seed}}
                     python src/pipelines/experimental/sr_pipeline/neural_ode_diffrax_baseline.py \
                         --dataset {input.per_minute} \
+                        --raw-dataset {params.raw_measurements} \
                         --output-dir {params.out_dir}/${{tag}}/seed_${{seed}} \
                         --seeds ${{seed}} \
                         --epochs 200 --patience 20 \
@@ -294,6 +316,69 @@ if enzyme_model == "experimental":
             done
             python src/pipelines/experimental/sweeps/summarise_lambda_sweep.py \
                 --sweep-dir {params.out_dir} \
+                --output {output.summary}
+            """
+
+    rule experimental_sparse_node_arch_grid:
+        # $$$ Fig. S3C / Table S9, and the most expensive rule here after the PySR run:
+        # 54 cells (3 widths x 3 depths x 3 learning rates x 2 activations) x every
+        # context, at one seed. Scored on IN-DISTRIBUTION validation R2 only, so the
+        # held-out highest-dose bins take no part in choosing an architecture.
+        #
+        # ancient() for the same reason as the PySR sweep: this is a recorded run, and a
+        # moved timestamp must not spend 54 GPU-hours. See common.smk for why re-running
+        # will not reproduce the checked-in arch_grid.csv row for row.
+        input:
+            per_minute=ancient(marker_per_minute_csv)
+        output:
+            summary=sparse_node_arch_grid_csv
+        conda:
+            "../../envs/pysr.yaml"
+        params:
+            raw_measurements=exp_raw_time_course,
+            out_dir=sparse_node_arch_grid_dir,
+            widths=" ".join(str(v) for v in sparse_node_arch_widths),
+            depths=" ".join(str(v) for v in sparse_node_arch_depths),
+            lrs=" ".join(f"{v:g}" for v in sparse_node_arch_lrs),
+            activations=" ".join(sparse_node_arch_activations),
+            seed=sparse_node_arch_grid_seed,
+            # _diffrax_sweep_params already carries `seeds`, which this rule does not use
+            # (the grid is single-seed); take the shared per-minute sampling settings only.
+            **{k: v for k, v in _diffrax_sweep_params.items() if k != "seeds"},
+        shell:
+            """
+            set -euo pipefail
+            mkdir -p {params.out_dir}
+            for hd in {params.widths}; do
+              for hl in {params.depths}; do
+                for lr in {params.lrs}; do
+                  for act in {params.activations}; do
+                    # `.` -> `p` so the cell name survives as a directory and parses back;
+                    # summarise_arch_grid.py reads the hyperparameters out of this name.
+                    tag="hd${{hd}}_hl${{hl}}_lr$(echo "${{lr}}" | tr '.' 'p')_${{act}}"
+                    mkdir -p {params.out_dir}/${{tag}}
+                    python src/pipelines/experimental/sr_pipeline/neural_ode_diffrax_baseline.py \
+                        --dataset {input.per_minute} \
+                        --raw-dataset {params.raw_measurements} \
+                        --output-dir {params.out_dir}/${{tag}} \
+                        --seeds {params.seed} \
+                        --epochs 200 --patience 20 \
+                        --per-minute-max-time {params.max_time} \
+                        --per-minute-sampling-strategy {params.strategy} \
+                        --late-sample-window {params.late_window_start} {params.late_window_end} \
+                        --late-sample-points {params.late_points} \
+                        --measured-timepoints {params.measured} \
+                        --test-split-policy top_gfp_bins \
+                        --hidden-dim ${{hd}} --hidden-layers ${{hl}} \
+                        --lr ${{lr}} --activation ${{act}} \
+                        --jac-reg 3.0 --jac-reg-mode l21 --hess-reg 0.0 \
+                        --tag ${{tag}}
+                  done
+                done
+              done
+            done
+            python src/pipelines/experimental/sweeps/summarise_arch_grid.py \
+                --grid-dir {params.out_dir} \
                 --output {output.summary}
             """
 
@@ -361,31 +446,134 @@ if enzyme_model == "experimental":
         # trajectory R2. Without it PySR is plotted on its derivative-fit R2, which is a
         # different quantity (the two correlate ~0.5) and was how the earlier version of
         # this panel came to mix metrics.
+        #
+        # Four outputs, one script. `fig` and `paper` are the same 32-perturbation
+        # panel -- the second is the printed copy, an output rather than a hand `cp`.
+        # `all40` keeps the controls in and is Fig. S5, the robustness check on the
+        # same comparison. `joint` adds the linear-regression scatter as a third
+        # panel, so both baselines and the driver counts read as one row.
+        #
+        # --linreg-metrics takes the PER-SEED file for the same reason Fig. S4 does:
+        # both axes are best-of-three-seeds, and select_k_metrics_agg is already
+        # averaged over seeds, so it would put a seed-mean baseline against a
+        # best-of-seeds SR.
         input:
             nn_done=sparse_node_l21_done,
             pysr_formulas=pysr_final_formulas,
             pysr_integ=pysr_final_per_fit,
+            linreg=select_k_metrics,
             dataset=marker_per_minute_csv
         output:
-            fig=sr_vs_node_panel
+            fig=sr_vs_node_panel,
+            fig_pdf=sr_vs_node_panel.replace(".png", ".pdf"),
+            paper=fig_4ef_parsimony,
+            paper_pdf=fig_4ef_parsimony.replace(".png", ".pdf"),
+            all40=fig_s5_parsimony_all40,
+            all40_pdf=fig_s5_parsimony_all40.replace(".png", ".pdf"),
+            joint=fig_4_joint_baselines,
+            joint_pdf=fig_4_joint_baselines.replace(".png", ".pdf"),
+            closure=fig_4_closure_cost,
+            closure_pdf=fig_4_closure_cost.replace(".png", ".pdf"),
+            closure_curve=fig_4_closure_cost.replace(".png", "_rho_curve.csv"),
+            panel_inputs=fig_4_panel_inputs,
+            nointer=fig_4ef_parsimony_nointeractions,
+            nointer_pdf=fig_4ef_parsimony_nointeractions.replace(".png", ".pdf"),
+            srquad=fig_4ef_parsimony_srquadrant,
+            srquad_pdf=fig_4ef_parsimony_srquadrant.replace(".png", ".pdf")
         conda:
             "../../envs/pysr.yaml"
         params:
-            nn_dir=sparse_node_l21_dir,
+            nn_dir=node_hl4_dir,
             pysr_dir=f"{pysr_final_dir}/seeds",
             excludes=exp_exclude_flags,
             threshold=exp_r2_threshold,
+            linreg_k=linreg_k_full,
+            # Specification shared with the Results text and Table S8: dependency count
+            # (not the participation ratio) averaged over all three seeds, neural-ODE seed
+            # chosen on validation and its test score reported, PySR seed chosen by
+            # training R2, and both methods scored on the same ODE-integrated R2. Both
+            # selection rules read training/validation data only.
+            # --sr-parsimony was used until 2026-08-12; it partitions 14/26 rather than the
+            # 13/27 of Table S8, because AKT3's highest-training seed does not generalise.
+            # Split so the no-interaction variant can drop the third box column without
+            # restating the selection rules, which must be identical across variants.
+            spec_base=("--dependency-count --select-on-val --sr-best-train "
+                       "--node-integrated-r2"),
+            spec=("--dependency-count --select-on-val --sr-best-train "
+                  "--node-integrated-r2 --symbolic-interaction-box"),
+            interactions=f"--interaction-csv {node_hl4_interactions}",
+            # Callouts only, not data: the control dots stay in the scatter and every
+            # panel number is unchanged. The joint row draws this axes at ~1/3 of an
+            # 11-in figure that is placed at ~7 in, so the axes is height-limited and can
+            # be neither widened nor set in smaller type (9.6 pt is already ~6 pt on the
+            # page). Dropping the eight control names is the only lever that removes the
+            # crossing leaders, and they are the longest strings for the least biology.
+            label_skips=" ".join(f"--label-skip {m}" for m in exp_control_contexts),
+            table_s8=f"{exp_supplementary_dir}/table_s8_sr_per_context.csv",
         shell:
             """
-            mkdir -p $(dirname {output.fig})
+            set -euo pipefail
+            mkdir -p $(dirname {output.fig}) $(dirname {output.paper}) \
+                     $(dirname {output.all40}) $(dirname {output.joint})
+            # No {params.excludes} here: the Results text reports all 40 contexts, and 7 of
+            # the 13 SR successes are controls, so excluding them changes the panel's claim.
+            for out in "{output.fig}" "{output.paper}"; do
+                python src/pipelines/experimental/sr_pipeline/figures/plot_parsimony_tradeoff.py \
+                    --nn-dir {params.nn_dir} \
+                    --pysr-dir {params.pysr_dir} \
+                    --pysr-integ-csv {input.pysr_integ} \
+                    --dataset {input.dataset} \
+                    --r2-threshold {params.threshold} \
+                    {params.spec} {params.interactions} \
+                    --dump-inputs {output.panel_inputs} \
+                    --output "$out"
+            done
+            # Same panel values, collapsed to one box column. Built from the dump above
+            # rather than recomputed, so it cannot disagree with the panel it replaces.
+            python src/pipelines/experimental/sr_pipeline/figures/plot_fig4_composite_complexity.py \
+                --panel-inputs {output.panel_inputs} \
+                --table-s8 {params.table_s8} \
+                --rho 1.0 \
+                --threshold {params.threshold} \
+                --output {output.closure}
+            # Layout variants the draft chooses between: no interaction column, and the
+            # SR box restricted to the top-right quadrant so its bracket is paired.
             python src/pipelines/experimental/sr_pipeline/figures/plot_parsimony_tradeoff.py \
                 --nn-dir {params.nn_dir} \
                 --pysr-dir {params.pysr_dir} \
                 --pysr-integ-csv {input.pysr_integ} \
                 --dataset {input.dataset} \
                 --r2-threshold {params.threshold} \
-                {params.excludes} \
-                --output {output.fig}
+                {params.spec_base} \
+                --output {output.nointer}
+            python src/pipelines/experimental/sr_pipeline/figures/plot_parsimony_tradeoff.py \
+                --nn-dir {params.nn_dir} \
+                --pysr-dir {params.pysr_dir} \
+                --pysr-integ-csv {input.pysr_integ} \
+                --dataset {input.dataset} \
+                --r2-threshold {params.threshold} \
+                {params.spec} {params.interactions} --sr-box-quadrant \
+                --output {output.srquad}
+            python src/pipelines/experimental/sr_pipeline/figures/plot_parsimony_tradeoff.py \
+                --nn-dir {params.nn_dir} \
+                --pysr-dir {params.pysr_dir} \
+                --pysr-integ-csv {input.pysr_integ} \
+                --dataset {input.dataset} \
+                --r2-threshold {params.threshold} \
+                {params.spec} {params.interactions} \
+                --output {output.all40}
+            python src/pipelines/experimental/sr_pipeline/figures/plot_parsimony_tradeoff.py \
+                --nn-dir {params.nn_dir} \
+                --pysr-dir {params.pysr_dir} \
+                --pysr-integ-csv {input.pysr_integ} \
+                --dataset {input.dataset} \
+                --linreg-metrics {input.linreg} \
+                --linreg-k {params.linreg_k} \
+                --r2-threshold {params.threshold} \
+                {params.spec} {params.interactions} \
+                {params.excludes} {params.label_skips} \
+                --no-panel-titles --no-tick-legend \
+                --output {output.joint}
             """
 
     rule experimental_node_driver_readout:
@@ -396,7 +584,8 @@ if enzyme_model == "experimental":
             pysr_formulas=pysr_final_formulas,
             dataset=marker_per_minute_csv
         output:
-            fig=node_driver_readout
+            fig=node_driver_readout,
+            fig_pdf=node_driver_readout.replace(".png", ".pdf")
         conda:
             "../../envs/pysr.yaml"
         params:
@@ -424,7 +613,11 @@ if enzyme_model == "experimental":
             l21=sparse_node_l21_done,
             cnode=sparse_node_cnode_done
         output:
-            fig=node_regulariser_comp
+            fig=node_regulariser_comp,
+            fig_pdf=node_regulariser_comp.replace(".png", ".pdf"),
+            # The per-variant summary the figure is annotated from; Table S8 quotes it,
+            # so it is a result rather than a by-product.
+            summary=node_regulariser_comp.replace(".png", ".csv")
         conda:
             "../../envs/pysr.yaml"
         params:
@@ -442,26 +635,36 @@ if enzyme_model == "experimental":
             """
 
     rule experimental_compare_sr_vs_linreg:
-        # Fig. 4D (k=10, the full ten-input pool -- the toughest baseline) and Fig. S4
-        # (k=4, complexity-matched to PySR's median equation). Controls are included
-        # here, unlike in the sparsity panel; PySR wins at every k tested.
+        # Diagnostic sweep at k=10 (the full ten-input pool, the toughest baseline) and
+        # k=4 (complexity-matched to PySR's median equation), both over all 40 contexts:
+        # PySR wins at every k tested, and keeping the controls in is what shows that.
+        #
+        # The printed panel is the third output and drops the controls, because there
+        # "extrapolating to an unseen dose" is a context with no dose-response at all.
+        # It is generated here rather than by hand so that the figure in the manuscript
+        # and the figure in the pipeline cannot disagree.
         input:
             linreg=select_k_metrics,
             pysr_formulas=pysr_final_formulas,
             pysr_integ=pysr_final_per_fit
         output:
             full=sr_vs_linreg_k10,
-            matched=sr_vs_linreg_k4
+            full_pdf=sr_vs_linreg_k10.replace(".png", ".pdf"),
+            matched=sr_vs_linreg_k4,
+            matched_pdf=sr_vs_linreg_k4.replace(".png", ".pdf"),
+            paper=fig_4d_sr_vs_linreg,
+            paper_pdf=fig_4d_sr_vs_linreg.replace(".png", ".pdf")
         conda:
             "../../envs/pysr.yaml"
         params:
             pysr_dir=f"{pysr_final_dir}/seeds",
             k_full=linreg_k_full,
             k_matched=linreg_k_matched,
+            exclude=exp_exclude_flags,
         shell:
             """
             set -euo pipefail
-            mkdir -p $(dirname {output.full})
+            mkdir -p $(dirname {output.full}) $(dirname {output.paper})
             for spec in "{params.k_full}:{output.full}" "{params.k_matched}:{output.matched}"; do
                 k=${{spec%%:*}}
                 out=${{spec#*:}}
@@ -472,6 +675,313 @@ if enzyme_model == "experimental":
                     --linreg-k ${{k}} \
                     --output ${{out}}
             done
+            # --sr-best-train: Fig. 4D must partition contexts the same way Fig. 4E and
+            # Table S8 do. Without it the panel selected each marker's best held-out seed
+            # and showed 15 contexts above the cutoff where the text reports 13.
+            python src/pipelines/experimental/sr_pipeline/figures/plot_sr_vs_linreg_ood.py \
+                --linreg-metrics {input.linreg} \
+                --pysr-dir {params.pysr_dir} \
+                --pysr-integ-csv {input.pysr_integ} \
+                --linreg-k {params.k_full} \
+                --sr-best-train \
+                {params.exclude} \
+                --output {output.paper}
+            """
+
+    rule experimental_fig_s4_sr_vs_linreg_matched:
+        # Fig. S4: the k=4 comparison as printed. Same numbers as sr_vs_linreg_k4 above,
+        # drawn on the supplementary style sheet and annotated with the 32-perturbation
+        # Wilcoxon test.
+        #
+        # --linreg-metrics takes the PER-SEED file, not select_k_metrics_agg: both axes
+        # are best-of-three-seeds, and the agg file is already averaged over seeds, so
+        # feeding it would silently put a seed-mean baseline against a best-of-seeds SR.
+        input:
+            linreg=select_k_metrics,
+            pysr_integ=pysr_final_per_fit
+        output:
+            png=fig_s4_sr_vs_linreg,
+            pdf=fig_s4_sr_vs_linreg.replace(".png", ".pdf")
+        conda:
+            "../../envs/pysr.yaml"
+        params:
+            k_matched=linreg_k_matched,
+            threshold=exp_r2_threshold,
+        shell:
+            """
+            mkdir -p $(dirname {output.png})
+            python src/pipelines/experimental/sr_pipeline/figures/plot_fig_s4_sr_vs_linreg_matched.py \
+                --linreg-metrics {input.linreg} \
+                --pysr-integ-csv {input.pysr_integ} \
+                --linreg-k {params.k_matched} \
+                --threshold {params.threshold} \
+                --output {output.png}
+            """
+
+    rule experimental_fig_s2_threshold_examples:
+        # Fig. S2: what the R2 = 0.6 cutoff buys. Draws the six perturbation fits either
+        # side of it, ordered by the marker-level integrated R2 the cutoff acts on, one
+        # held-out bin each on a normalised axis. The six-a-side window is contiguous, so
+        # every perturbation fit inside it is shown (the script asserts this). Controls
+        # are excluded: their R2 cluster at 0.60-0.73, so including them made "cleared the
+        # cutoff" and "is a trivially easy control" the same visual category. Read it as
+        # showing the transition is gradual and 0.6 sits inside it -- it does NOT show a
+        # discontinuity at 0.6, and the caption must not claim one.
+        input:
+            fits=ancient(pysr_final_fits_dir)
+        output:
+            png=fig_s2_threshold_examples,
+            pdf=fig_s2_threshold_examples.replace(".png", ".pdf")
+        conda:
+            "../../envs/pysr.yaml"
+        shell:
+            """
+            mkdir -p $(dirname {output.png})
+            python src/pipelines/experimental/sr_pipeline/figures/plot_fig_s2_threshold_examples.py \
+                --fits-dir {input.fits} \
+                --output {output.png}
+            """
+
+    rule experimental_threshold_calibration:
+        # Why R2 = 0.6. One panel: fraction of contexts clearing each candidate cutoff,
+        # real vs a wrong-context null -- integrated R2 earned by a real SR trajectory
+        # belonging to a DIFFERENT context, built with the same median-over-bins and
+        # best-of-three-seeds selection the reported statistic uses, so the comparison is
+        # like-for-like. The claim is the vertical GAP at 0.6 (~9,000x); where the null
+        # curve ends is the Monte Carlo resolution limit and must not be captioned. 0.6
+        # is safe and inconsequential, NOT uniquely optimal -- read
+        # docs/experimental_provenance.md before writing a caption for it.
+        input:
+            fits=ancient(pysr_final_fits_dir),
+            per_fit=pysr_final_per_fit,
+            # No rule writes this one; it is a recorded artefact like fits/, so it
+            # is ancient() for the same reason.
+            panel=ancient(f"{pysr_final_dir}/metrics/panel_inputs_32perturbations.csv")
+        output:
+            png=fig_threshold_calibration,
+            pdf=fig_threshold_calibration.replace(".png", ".pdf")
+        conda:
+            "../../envs/pysr.yaml"
+        shell:
+            """
+            mkdir -p $(dirname {output.png})
+            python src/pipelines/experimental/sr_pipeline/figures/plot_threshold_calibration.py \
+                --fits-dir {input.fits} \
+                --per-fit-csv {input.per_fit} \
+                --panel-csv {input.panel} \
+                --output {output.png}
+            """
+
+    rule experimental_threshold_error_tradeoff:
+        # What each candidate cutoff buys: held-out prediction error of everything it
+        # would accept, as a % of each bin's measured dynamic range, against contexts
+        # kept. Summarised CUMULATIVELY and bootstrapped over fits -- marginal bands of
+        # +/-0.05 hold only 3-5 fits and produced a spurious "plateau" whose mean and
+        # median disagreed by 11 points. The curve is a smooth monotone tradeoff with
+        # overlapping intervals: there is NO knee at 0.6 and it must not be drawn as one.
+        # It supports the accuracy claim (~12% of range at 0.6), not the cutoff choice.
+        input:
+            fits=ancient(pysr_final_fits_dir),
+            per_fit=pysr_final_per_fit
+        output:
+            png=fig_threshold_error_tradeoff,
+            pdf=fig_threshold_error_tradeoff.replace(".png", ".pdf")
+        conda:
+            "../../envs/pysr.yaml"
+        shell:
+            """
+            mkdir -p $(dirname {output.png})
+            python src/pipelines/experimental/sr_pipeline/figures/plot_threshold_error_tradeoff.py \
+                --fits-dir {input.fits} \
+                --per-fit-csv {input.per_fit} \
+                --output {output.png}
+            """
+
+    rule experimental_threshold_intuition:
+        # What a held-out curve at R2 ~ 0.5 / 0.6 / 0.7 actually looks like: the 8 curves
+        # nearest each value, measurement and prediction together. For the reviewer who
+        # assumes 0.7 is the standard bar -- the 0.6 and 0.7 blocks are hard to tell
+        # apart (18% vs 15% of range missed), so 0.7 buys ~3 points of accuracy.
+        # It does NOT show 0.6 beating 0.7 and must not be captioned that way.
+        # Selection is load-bearing here: three other framings were tried and one of them
+        # (quantiles of the accepted population) was rejected as misleading. Read the
+        # docs/experimental_provenance.md entry before changing the rule.
+        input:
+            fits=ancient(pysr_final_fits_dir)
+        output:
+            png=fig_threshold_intuition,
+            pdf=fig_threshold_intuition.replace(".png", ".pdf")
+        conda:
+            "../../envs/pysr.yaml"
+        shell:
+            """
+            mkdir -p $(dirname {output.png})
+            python src/pipelines/experimental/sr_pipeline/figures/plot_threshold_intuition.py \
+                --fits-dir {input.fits} \
+                --output {output.png}
+            """
+
+    rule experimental_fig5_perbin_trajectories:
+        # Fig. 5: one square panel per held-out GFP bin for a single exemplar fit, which
+        # is what shows the dose gradient is reproduced bin by bin rather than only on
+        # average. The exemplar pair is pinned in common.smk; the fan overlays in
+        # pysr_ood_final/exemplar_fans/ are the diagnostic version of the same fits.
+        input:
+            traj=ancient(f"{pysr_final_fits_dir}/{{marker}}/seed_{{seed}}/metrics/"
+                         f"marker_integration_trajectories_per_minute.csv")
+        output:
+            png=f"{exp_paper_figures_dir}/fig_5_perbin_{{marker}}_s{{seed}}.png",
+            pdf=f"{exp_paper_figures_dir}/fig_5_perbin_{{marker}}_s{{seed}}.pdf",
+            fan=f"{exp_paper_figures_dir}/fig_5_fan_{{marker}}_s{{seed}}.png",
+            fan_pdf=f"{exp_paper_figures_dir}/fig_5_fan_{{marker}}_s{{seed}}.pdf"
+        wildcard_constraints:
+            # Only the pinned exemplars, so a marker name containing "_" cannot be
+            # mis-split against the "_s<seed>" suffix.
+            marker="|".join(m for m, _ in fig5_exemplars),
+            seed=r"\d+",
+        conda:
+            "../../envs/pysr.yaml"
+        params:
+            measured=" ".join(str(t) for t in exp_measured_timepoints),
+        shell:
+            """
+            mkdir -p $(dirname {output.png})
+            python src/pipelines/experimental/sr_pipeline/figures/plot_perbin_trajectories.py \
+                --traj {input.traj} \
+                --measured {params.measured} \
+                --title "{wildcards.marker} (seed {wildcards.seed})" \
+                --output {output.png}
+            # Centre panel, from the same table, so both panels describe one fit.
+            python src/pipelines/experimental/sr_pipeline/figures/plot_exemplar_fans.py \
+                --traj {input.traj} \
+                --title "{wildcards.marker} | seed {wildcards.seed}" \
+                --output {output.fan}
+            """
+
+    rule experimental_node_participation_ratios:
+        # Table S8's dependency count: participation ratio of the input Jacobian with GFP
+        # excluded. Reads the saved checkpoints of all three regulariser variants, so it
+        # depends on the sweeps having run with --save-models rather than on any metrics
+        # file.
+        input:
+            l1=sparse_node_l1_done,
+            l21=sparse_node_l21_done,
+            cnode=sparse_node_cnode_done
+        output:
+            csv=sparse_node_participation_csv
+        conda:
+            "../../envs/pysr.yaml"
+        params:
+            nde_root=sparse_node_dir,
+        shell:
+            """
+            python src/pipelines/experimental/sr_pipeline/figures/compute_participation_ratios.py \
+                --nde-root {params.nde_root} \
+                --output {output.csv}
+            """
+
+    rule experimental_fig_s3_node_selection:
+        # Fig. S3: the three panels behind the Neural ODE's settings -- regulariser
+        # variants (A), the lambda ladder and its elbow (B), and whether validation R2
+        # predicts held-out R2 at all (C, it barely does).
+        input:
+            regulariser=node_regulariser_comp,
+            lambda_sweep=sparse_node_lambda_sweep_csv,
+            arch_grid=sparse_node_arch_grid_csv,
+            table_s10=pysr_sweep_table
+        output:
+            png=fig_s3_node_selection,
+            pdf=fig_s3_node_selection.replace(".png", ".pdf")
+        conda:
+            "../../envs/pysr.yaml"
+        params:
+            nde_root=sparse_node_dir,
+        shell:
+            """
+            mkdir -p $(dirname {output.png})
+            python src/pipelines/experimental/sr_pipeline/figures/plot_fig_s3_neural_ode_selection.py \
+                --nde-root {params.nde_root} \
+                --table-s10 {input.table_s10} \
+                --output {output.png}
+            """
+
+    rule experimental_table_s8_sr_per_context:
+        # Table S8: one row per context, the seed retained by training R2 and what it
+        # recovered. Separate from the batch below because it reads the PySR per-fit table
+        # and the Fig. 4 panel dump, so it is guaranteed to agree with the printed panel
+        # on which contexts count as successes -- the hand-maintained version did not.
+        input:
+            pysr_integ=pysr_final_per_fit,
+            panel_inputs=fig_4_panel_inputs
+        output:
+            table_s8_sr_per_context
+        conda:
+            "../../envs/pysr.yaml"
+        params:
+            threshold=exp_r2_threshold,
+        shell:
+            """
+            mkdir -p $(dirname {output})
+            python src/pipelines/experimental/sr_pipeline/figures/make_table_s8_sr_per_context.py \
+                --pysr-integ-csv {input.pysr_integ} \
+                --panel-inputs {input.panel_inputs} \
+                --threshold {params.threshold} \
+                --output {output}
+            """
+
+    rule experimental_fig_s1_loss_ablation:
+        # Fig. S1: the custom-loss ablation. Seed 42 across all four loss configurations by
+        # design, so this panel is independent of the seed-selection rule the rest of the
+        # figures use and does not need rebuilding when that rule changes.
+        input:
+            fits=ancient(pysr_final_fits_dir)
+        output:
+            png=fig_s1_loss_ablation,
+            pdf=fig_s1_loss_ablation.replace(".png", ".pdf"),
+            metrics=f"{exp_supplementary_dir}/fig_s1_loss_ablation_metrics.csv"
+        conda:
+            "../../envs/pysr.yaml"
+        params:
+            threshold=exp_r2_threshold,
+        shell:
+            """
+            mkdir -p $(dirname {output.png})
+            python src/pipelines/experimental/sr_pipeline/figures/plot_fig_s1_loss_ablation.py \
+                --fits-dir {input.fits} \
+                --metrics-out {output.metrics} \
+                --threshold {params.threshold} \
+                --output {output.png}
+            """
+
+    rule experimental_supplementary_tables:
+        # Tables S9-S10 in one rule because they read one set of run artefacts: S9 is the
+        # PySR configuration sweep, S10 the Neural ODE architecture search. That order is
+        # the order the main text cites them; they were numbered the other way until
+        # 2026-08-12. The two *_full.csv are the complete 72- and 54-row grids, deposited
+        # with the code rather than typeset. The regulariser comparison and readout key are
+        # still computed but land in archive/, having lost their citations.
+        input:
+            participation=sparse_node_participation_csv,
+            arch_grid=sparse_node_arch_grid_csv,
+            l1=sparse_node_l1_done,
+            l21=sparse_node_l21_done,
+            cnode=sparse_node_cnode_done,
+            table_s10=pysr_sweep_table
+        output:
+            *supp_tables,
+            *supp_tables_retired
+        conda:
+            "../../envs/pysr.yaml"
+        params:
+            nde_root=sparse_node_dir,
+            out_dir=exp_supplementary_dir,
+        shell:
+            """
+            mkdir -p {params.out_dir}
+            python src/pipelines/experimental/sr_pipeline/figures/make_supplementary_tables.py \
+                --nde-root {params.nde_root} \
+                --table-s10-src {input.table_s10} \
+                --out-dir {params.out_dir}
             """
 
     # --- 5. Aggregators -------------------------------------------------------
@@ -492,14 +1002,36 @@ if enzyme_model == "experimental":
             pysr_final_per_fit,
             pysr_final_summary,
             pysr_final_exemplars,
-            # main text
+            # main text -- every printed panel, so `paper_figures/` is collectable as a
+            # set without a single hand-run command
             sr_vs_node_panel,
             sr_vs_linreg_k10,
+            fig_4d_sr_vs_linreg,
+            fig_4ef_parsimony,
+            fig_4_joint_baselines,
+            fig_4_closure_cost,
+            fig_4ef_parsimony_nointeractions,
+            fig_4ef_parsimony_srquadrant,
+            fig5_perbin,
+            fig5_fans,
             # SI
+            fig_s1_loss_ablation,
+            table_s8_sr_per_context,
             sr_vs_linreg_k4,
             node_regulariser_comp,
             node_driver_readout,
             custom_loss_ablation_metrics,
+            fig_s2_threshold_examples,
+            fig_threshold_calibration,
+            fig_threshold_error_tradeoff,
+            fig_threshold_intuition,
+            fig_s3_node_selection,
+            fig_s4_sr_vs_linreg,
+            fig_s5_parsimony_all40,
+            supp_tables,
+            table_s12_threshold_sensitivity,
+            table_s13_interaction_sensitivity,
+            table_s14_lambda_calibration,
 
     rule experimental_metrics:
         # Just the cheap numeric stages, for when you want to re-derive the reported
@@ -510,6 +1042,9 @@ if enzyme_model == "experimental":
             pysr_final_per_fit,
             pysr_final_summary,
             pysr_final_exemplars,
+            sparse_node_participation_csv,
+            table_s8_sr_per_context,
+            supp_tables,
 
     # --- 6. Data preparation and shared stages -------------------------------
     #
@@ -656,18 +1191,15 @@ if enzyme_model == "experimental":
         output:
             metrics=select_k_metrics,
             metrics_agg=select_k_metrics_agg,
-            importance=select_k_importance,
-            importance_agg=select_k_importance_agg,
             boxplot_dt=select_k_boxplot_dt,
             boxplot_integ=select_k_boxplot_integ,
-            boxplot_ode=select_k_boxplot_ode,
-            ribbon_coef=select_k_ribbon_coef,
-            ribbon_variance=select_k_ribbon_variance
+            boxplot_ode=select_k_boxplot_ode
         conda:
             "../../envs/pysr.yaml"
         params:
             out_dir=select_k_dir,
             measured=" ".join(str(t) for t in exp_measured_timepoints),
+            raw_measurements=exp_raw_time_course,
             max_time=exp_per_minute_max_time,
             strategy=exp_per_minute_sampling_strategy if 'exp_per_minute_sampling_strategy' in globals() else "early_plus_sparse_late",
             late_window_start=exp_late_sample_window[0] if 'exp_late_sample_window' in globals() else 30.0,
@@ -675,11 +1207,14 @@ if enzyme_model == "experimental":
             late_points=exp_late_sample_points if 'exp_late_sample_points' in globals() else 15,
             seeds="42 43 44",
             split_policy=select_k_split_policy,
+            k_min=linreg_k_min,
+            k_max=linreg_k_max,
         shell:
             """
             mkdir -p {params.out_dir}
             python src/pipelines/experimental/sr_pipeline/select_k_linreg_per_minute.py \
                 --dataset {input.per_minute} \
+                --raw-dataset {params.raw_measurements} \
                 --output-dir {params.out_dir} \
                 --per-minute-max-time {params.max_time} \
                 --per-minute-sampling-strategy {params.strategy} \
@@ -687,6 +1222,7 @@ if enzyme_model == "experimental":
                 --late-sample-points {params.late_points} \
                 --seeds {params.seeds} \
                 --test-split-policy {params.split_policy} \
+                --min-k {params.k_min} --max-k {params.k_max} \
                 --measured-timepoints {params.measured}
             """
 
@@ -709,6 +1245,7 @@ if enzyme_model == "experimental":
         params:
             metrics_dir=exp_metrics_root,
             seeds_dir=exp_runs_seeds,
+            raw_measurements=exp_raw_time_course,
             measured=" ".join(str(t) for t in exp_measured_timepoints),
             trajectories_dir=exp_trajectories_root,
         shell:
@@ -733,6 +1270,7 @@ if enzyme_model == "experimental":
                     seed_per_minute_traj="$seed_metrics_dir/marker_integration_trajectories_per_minute.csv"
                     python src/pipelines/experimental/sr_pipeline/compute_marker_integration.py \
                         --dataset {input.snapshot} \
+                        --raw-dataset {params.raw_measurements} \
                         --summary "$summary_path" \
                         --sr-trajectories "{params.seeds_dir}/seed_${{seed_id}}/metrics/predicted_trajectories_snapshot.csv" \
                         --dataset-mode snapshot \
@@ -744,6 +1282,7 @@ if enzyme_model == "experimental":
 
                     python src/pipelines/experimental/sr_pipeline/compute_marker_integration.py \
                         --dataset {input.per_minute} \
+                        --raw-dataset {params.raw_measurements} \
                         --summary "$summary_path" \
                         --sr-trajectories "{params.seeds_dir}/seed_${{seed_id}}/metrics/predicted_trajectories_per_minute.csv" \
                         --dataset-mode per_minute \
@@ -778,6 +1317,7 @@ if enzyme_model == "experimental":
                 mkdir -p "$seed_metrics_dir"
                 python src/pipelines/experimental/sr_pipeline/compute_marker_integration.py \
                     --dataset {input.snapshot} \
+                    --raw-dataset {params.raw_measurements} \
                     --summary {input.summary_seed} \
                     --sr-trajectories "$seed_metrics_dir/predicted_trajectories_snapshot.csv" \
                     --dataset-mode snapshot \
@@ -787,6 +1327,7 @@ if enzyme_model == "experimental":
                     --measured-timepoints {params.measured}
                 python src/pipelines/experimental/sr_pipeline/compute_marker_integration.py \
                     --dataset {input.per_minute} \
+                    --raw-dataset {params.raw_measurements} \
                     --summary {input.summary_seed} \
                     --sr-trajectories "$seed_metrics_dir/predicted_trajectories_per_minute.csv" \
                     --dataset-mode per_minute \
@@ -1098,3 +1639,104 @@ if enzyme_model == "experimental":
                 --examples-per-target 3 \
                 --measured-timepoints {params.measured}
             """
+
+# ---------------------------------------------------------------------------
+# Four-layer L21 neural ODEs: the models every complexity number in the Results
+# is computed from. Assembled from the lambda sweep (which trained the selected
+# architecture) plus the two markers that sweep was missing, so the set is all 40.
+# ---------------------------------------------------------------------------
+rule assemble_node_hl4:
+    output:
+        marker=touch(f"{node_hl4_dir}/.assembled")
+    params:
+        src=f"{sparse_node_dir}/lambda_sweep/lam_3p0",
+        fill=f"{exp_runs_root}/reducibility/l21_hl4_fill",
+        dst=node_hl4_dir
+    shell:
+        """
+        set -euo pipefail
+        for S in 42 43 44; do
+            mkdir -p "{params.dst}/seed_$S/models"
+            cp -n {params.src}/seed_$S/models/* "{params.dst}/seed_$S/models/" 2>/dev/null || true
+            cp -n {params.src}/seed_$S/neural_ode_diffrax_metrics.csv                   "{params.dst}/seed_$S/" 2>/dev/null || true
+        done
+        for d in {params.fill}/*_*/; do
+            [ -d "$d/models" ] || continue
+            slug=$(basename "$d"); S=${{slug##*_}}
+            cp -n "$d"/models/* "{params.dst}/seed_$S/models/" 2>/dev/null || true
+            tail -n +2 "$d/neural_ode_diffrax_metrics.csv"                 >> "{params.dst}/seed_$S/neural_ode_diffrax_metrics.csv" 2>/dev/null || true
+        done
+        """
+
+
+rule tables_s12_s13_threshold_sensitivity:
+    """Tables S12/S13: how both complexity contrasts move with their thresholds.
+
+    Keyed off the Fig. 4 panel dump rather than recomputing the partition, so the tables
+    cannot classify a context differently from the panel they support -- the same guarantee
+    Table S8 relies on. One rule for both because a single Jacobian/Hessian pass over the
+    120 checkpoints serves the dependency sweep and the interacting-pair sweep, and the
+    Hessians are the slow part.
+    """
+    input:
+        assembled=f"{node_hl4_dir}/.assembled",
+        panel_inputs=fig_4_panel_inputs
+    output:
+        s12=table_s12_threshold_sensitivity,
+        s13=table_s13_interaction_sensitivity,
+        per_fit=node_hl4_threshold_per_fit
+    conda:
+        "../../envs/pysr.yaml"
+    params:
+        nn_dir=node_hl4_dir,
+        threshold=exp_r2_threshold,
+    shell:
+        """
+        set -euo pipefail
+        mkdir -p $(dirname {output.s12})
+        JAX_PLATFORMS=cpu JAX_ENABLE_X64=1 \
+        python src/pipelines/experimental/reducibility/make_tables_s12_s13.py \
+            --nn-dir {params.nn_dir} \
+            --panel-inputs {input.panel_inputs} \
+            --r2-threshold {params.threshold} \
+            --per-fit-csv {output.per_fit} \
+            --table-s12 {output.s12} \
+            --table-s13 {output.s13}
+        """
+
+
+rule table_s14_lambda_calibration:
+    """Table S14: the lambda ladder Fig. S3A plots, deposited as the caption promises.
+
+    A copy rather than a recomputation: the calibration rule already writes exactly these
+    columns, and recomputing them here would create a second path to the same numbers that
+    could drift from the one the figure reads.
+    """
+    input:
+        summary=sparse_node_lambda_sweep_csv
+    output:
+        csv=table_s14_lambda_calibration
+    shell:
+        """
+        set -euo pipefail
+        mkdir -p $(dirname {output.csv})
+        cp {input.summary} {output.csv}
+        """
+
+
+rule node_hl4_interaction_counts:
+    """Interacting input pairs per marker, scored against each law's own off-diagonal
+    scale so symbolic and network laws are measured on a common footing."""
+    input:
+        assembled=f"{node_hl4_dir}/.assembled"
+    output:
+        csv=node_hl4_interactions
+    conda:
+        "../../envs/pysr.yaml"
+    shell:
+        """
+        set -euo pipefail
+        JAX_PLATFORMS=cpu JAX_ENABLE_X64=1         python src/pipelines/experimental/reducibility/compute_interaction_counts.py
+        """
+
+

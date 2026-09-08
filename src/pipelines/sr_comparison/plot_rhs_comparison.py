@@ -49,12 +49,19 @@ def _base_method(method: str) -> str:
     return method.split("_")[0]
 
 
+def formula_complexity(expr) -> int:
+    """Number of nodes in the expression tree (operators + variables + constants),
+    the same 'size' notion PySR reports as complexity."""
+    return sum(1 for _ in sympy.preorder_traversal(expr))
+
+
 def evaluate_method(formula_path, feature_cols, log_inputs, lin_inputs,
                     log_target, discovery_scale, use_log_inputs):
-    """Return (mean_logmae, median_logmae, valid_fraction) or None."""
+    """Return (mean_logmae, median_logmae, valid_fraction, complexity) or None."""
     if not (os.path.exists(formula_path) and os.path.getsize(formula_path) > 0):
         return None
     expr = sympy.sympify(open(formula_path).read().strip())
+    complexity = formula_complexity(expr)  # complexity of the discovered formula
     kfw_expr = sympy.exp(expr) if discovery_scale == "log" else expr
     func = sympy.lambdify(feature_cols, kfw_expr, modules="numpy")
     cols = log_inputs if use_log_inputs else lin_inputs
@@ -63,9 +70,9 @@ def evaluate_method(formula_path, feature_cols, log_inputs, lin_inputs,
         err = np.abs(np.log(kfw) - log_target)
     finite = np.isfinite(err)
     if not finite.any():
-        return (np.nan, np.nan, 0.0)
+        return (np.nan, np.nan, 0.0, complexity)
     return (float(np.mean(err[finite])), float(np.median(err[finite])),
-            float(finite.mean()))
+            float(finite.mean()), complexity)
 
 
 def main():
@@ -103,10 +110,11 @@ def main():
         if res is None:
             print(f"{display}: no formula found ({formula_path}); skipping.")
             continue
-        mean_mae, median_mae, valid = res
-        rows.append({"method": display, "log_mae_mean": mean_mae,
-                     "log_mae_median": median_mae, "valid_fraction": valid})
-        print(f"{display:16s} mean={mean_mae:.4f} median={median_mae:.4f} valid={100*valid:.1f}%")
+        mean_mae, median_mae, valid, complexity = res
+        rows.append({"method": display, "complexity": complexity,
+                     "log_mae_mean": mean_mae, "log_mae_median": median_mae,
+                     "valid_fraction": valid})
+        print(f"{display:16s} complexity={complexity:3d} mean={mean_mae:.4f} median={median_mae:.4f} valid={100*valid:.1f}%")
 
     results = pd.DataFrame(rows).sort_values("log_mae_median").reset_index(drop=True)
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)

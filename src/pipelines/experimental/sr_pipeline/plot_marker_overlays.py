@@ -18,7 +18,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from pipelines.experimental.sr_pipeline import seed_annotations as seed_annot
 from pipelines.experimental.sr_pipeline.run_markers import EXCLUDE_COLUMNS, sanitize_feature_names
-from pipelines.experimental.sr_pipeline.compute_marker_integration import evaluate_formula
 
 LOGGER = logging.getLogger("experimental.marker_overlay")
 if not LOGGER.handlers:
@@ -804,16 +803,6 @@ def _make_overlay_plots_core(
                     if args.dataset_mode == "per_minute"
                     else np.ones_like(t, dtype=bool)
                 )
-                if meas_mask.sum() > 1 and np.isfinite(integ[meas_mask]).sum() > 1:
-                    obs_pe_eval = _obs_pe_array(g, len(g))
-                    # Use the filtered/ordered arrays already computed above
-                    if len(obs_pe_eval) == len(obs_pe):
-                        obs_pe_eval = obs_pe
-                    try:
-                        r2 = np.corrcoef(obs_pe_eval[meas_mask], integ[meas_mask])[0, 1] ** 2
-                        integ_r2_vals.append(float(r2))
-                    except Exception:
-                        pass
 
                 color = cmap(cidx / max(1, len(bins) - 1))
 

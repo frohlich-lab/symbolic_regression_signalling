@@ -232,6 +232,15 @@ def parse_args() -> argparse.Namespace:
         help="Random seed for reproducible splits and resampling.",
     )
     parser.add_argument(
+        "--markers",
+        nargs="*",
+        default=None,
+        help="Restrict the run to these markers. Marker selection is otherwise "
+             "taken from the dataset; this exists so a sweep can be fanned out "
+             "one marker per job rather than looping all 40 in a single task, "
+             "which at large --max-size overruns any reasonable walltime.",
+    )
+    parser.add_argument(
         "--marker-groups-json",
         type=Path,
         default=None,
@@ -302,6 +311,39 @@ def parse_args() -> argparse.Namespace:
         help="Binary operators exposed to PySR.",
     )
     parser.add_argument(
+        "--hill-operator",
+        action="store_true",
+        help=(
+            "Add a saturating binary operator hill(x, k) = x / (k^2 + |x|) to the "
+            "search. The mechanism the fits keep failing to express OOD is saturation: "
+            "with + - * / a Michaelis-Menten term costs several nodes, so the search "
+            "spends its complexity budget building one and never gets to the rest of "
+            "the law. k is squared so the half-saturation constant cannot go negative "
+            "and |x| keeps the denominator away from zero, which the plain x/(k+x) "
+            "form does not. It is registered with a sympy mapping, so the emitted "
+            "formula is expanded to plain arithmetic and downstream integration "
+            "needs no knowledge of the operator."
+        ),
+    )
+    parser.add_argument(
+        "--pysr-parallelism",
+        choices=("serial", "multithreading", "multiprocessing"),
+        default="serial",
+        help=(
+            "PySR execution mode. 'serial' (default) is what every reported run uses: "
+            "combined with --pysr-procs 0 it makes the search reproducible from "
+            "--random-state within one environment. Anything else drops "
+            "deterministic=True and the fit is no longer seed-reproducible -- use it "
+            "for exploratory arms only, never for a reported number."
+        ),
+    )
+    parser.add_argument(
+        "--pysr-procs",
+        type=int,
+        default=0,
+        help="PySR procs. Only meaningful with --pysr-parallelism multiprocessing.",
+    )
+    parser.add_argument(
         "--unary-operators",
         nargs="*",
         default=(),
@@ -358,6 +400,38 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=2.0,
         help="Maximum training weight used by --pysr-sample-weighting gfp_bin_linear.",
+    )
+    parser.add_argument(
+        "--no-require-gfp",
+        action="store_true",
+        help=(
+            "Stop mandating that every expression contain GFP and depend on it. The default "
+            "penalises GFP-free laws by +1000, which is misspecified for contexts where the "
+            "network ranks GFP 8th-9th of ten inputs (EGFR 0.099, MAP2K2 0.070 of max "
+            "sensitivity). p-ERK remains required: it is the state."
+        ),
+    )
+    parser.add_argument(
+        "--conditioning-threshold",
+        type=float,
+        default=0.0,
+        help=(
+            "Reject laws whose typical response to p-ERK exceeds this multiple of their own "
+            "output magnitude. 0 disables. Targets cancellation-built laws without "
+            "restricting which variables may appear."
+        ),
+    )
+    parser.add_argument(
+        "--standardise-target",
+        action="store_true",
+        help=(
+            "Put --parsimony on a per-marker scale by multiplying it by the training "
+            "target variance. The custom loss is an unnormalised MSE, so without this the "
+            "effective complexity budget varies ~250x across markers with the target "
+            "scale and the smallest-variance contexts optimise complexity rather than "
+            "fit. Equivalent to standardising the target, but leaves the emitted "
+            "expression, the target and all downstream consumers in original dy/dt units."
+        ),
     )
     return parser.parse_args()
 
@@ -596,6 +670,7 @@ def train_group_models(
     test_split_policy: str = "random_bins",
     pysr_sample_weighting: str = "none",
     pysr_sample_weight_max: float = 2.0,
+    standardise_target: bool = False,
     sr_kwargs: Optional[Dict[str, object]] = None,
     trajectory_records: Optional[List[Dict[str, object]]] = None,
     log_prefix: str = "",
@@ -679,6 +754,36 @@ def train_group_models(
     if len(y_train) == 0 or len(y_test_raw) == 0:
         return []
 
+    # The custom loss is an unnormalised MSE, while PySR's selection score adds
+    # `parsimony * complexity`. Target variance spans ~94x across markers, so a single
+    # global --parsimony imposes an effective complexity budget that differs per marker by
+    # 16x-258x: on the smallest-variance contexts the complexity term outweighs the entire
+    # data term and the search collapses to the minimal expression satisfying the hard
+    # constraints (which is how DUSP7 and RPS6KA6 return an identical two-term law from
+    # three independent seeds).
+    #
+    # The fix is applied to parsimony rather than to y. Standardising y would be
+    # equivalent for the search -- score = loss/s^2 + P*C is the same ranking as
+    # loss + (P*s^2)*C, since selection is invariant to a positive global scale -- but it
+    # would leave the EMITTED EXPRESSION in standardised units, and
+    # compute_marker_integration re-parses that string to integrate the law. Scaling
+    # parsimony by var(y) gets the identical trade-off with the formula, the target and
+    # every downstream consumer untouched.
+    #
+    # Note this addresses the parsimony term only. The constraint penalties
+    # (MISSING_PENALTY/REDUNDANT_PENALTY = 1000.0, stability penalties) remain absolute,
+    # but they fire only on constraint violation and so act as hard filters rather than as
+    # gradient pressure among feasible expressions.
+    parsimony_scale = 1.0
+    if standardise_target and run_pysr:
+        var = float(np.var(y_train.values))
+        if np.isfinite(var) and var > 0:
+            parsimony_scale = var
+            if log_prefix:
+                LOGGER.info(
+                    "%s: scaling parsimony by target var=%.5g", log_prefix, var
+                )
+
     results: List[GroupResult] = []
 
     def _record_preds(frame: pd.DataFrame, preds: np.ndarray, model_name: str, phase: str) -> None:
@@ -716,6 +821,10 @@ def train_group_models(
         from pysr import PySRRegressor
 
         sr_kwargs_local = dict(sr_kwargs or {})
+        if parsimony_scale != 1.0 and "parsimony" in sr_kwargs_local:
+            sr_kwargs_local["parsimony"] = (
+                float(sr_kwargs_local["parsimony"]) * parsimony_scale
+            )
         if perk_idx_1b is not None and "loss_function" in sr_kwargs_local:
             loss_fn = sr_kwargs_local["loss_function"]
             if isinstance(loss_fn, str) and "REQUIRED_IDX" in loss_fn:
@@ -1113,6 +1222,12 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         LOGGER.info("Retained %d/%d rows after target drop", len(data), before_rows)
 
         marker_list = sorted(data["marker"].dropna().unique().tolist())
+        if getattr(args, "markers", None):
+            wanted = set(args.markers)
+            missing = wanted - set(marker_list)
+            if missing:
+                LOGGER.warning("requested markers not present: %s", sorted(missing))
+            marker_list = [m for m in marker_list if m in wanted]
         if not marker_list:
             LOGGER.warning("No markers available after preprocessing for mode %s.", run_mode)
             continue
@@ -1152,6 +1267,9 @@ def run_pipeline(args: argparse.Namespace) -> Path:
 
             const REQUIRED_IDX = 2
             const REQUIRED_IDX_GFP = 1
+            const COND_THRESH = __COND_THRESH__
+            const COND_PENALTY = 100.0
+            const REQUIRE_GFP = __REQUIRE_GFP__
             const MISSING_PENALTY = 1000.0
 
             const DEP_TOL = 1e-4
@@ -1175,7 +1293,7 @@ def run_pipeline(args: argparse.Namespace) -> Path:
 
                 has_required = any(n -> n.degree == 0 && !n.constant && n.feature == REQUIRED_IDX, tree)
                 has_gfp = any(n -> n.degree == 0 && !n.constant && n.feature == REQUIRED_IDX_GFP, tree)
-                if !has_required || !has_gfp
+                if !has_required || (REQUIRE_GFP && !has_gfp)
                     return base + eltype(y)(MISSING_PENALTY)
                 end
 
@@ -1218,12 +1336,28 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 delta_g = abs.(fplus_g .- fminus_g)
                 rel_g = delta_g ./ (abs.(f0) .+ 1.0)
                 dep_g = sum(rel_g) / length(rel_g)
-                if dep_g < DEP_TOL
+                if REQUIRE_GFP && dep_g < DEP_TOL
                     return base + eltype(y)(REDUNDANT_PENALTY)
                 end
 
                 # Rule A: penalise positive slope in roughly-linear p direction
                 slope_p = (fplus .- fminus) ./ (2 .* eps)
+                # Conditioning check. DUSP16's recovered family expresses a +0.02 rate as the
+                # difference of two O(0.5) terms; that cancellation is tuned to the training
+                # range and inverts when a driver drifts out of distribution. A law built this
+                # way has a response to p-ERK far larger than its own output. Flag it by the
+                # ratio of typical response-swing to output magnitude: ~25 for that family,
+                # ~1 when well conditioned. Uses slope_p, already computed above.
+                if COND_THRESH > 0.0
+                    absf = sum(abs.(f0)) / length(f0) + 1e-9
+                    pbar = sum(p) / length(p)
+                    sdp = sqrt(max(sum((p .- pbar) .^ 2) / length(p), 0.0))
+                    ratio = ((sum(abs.(slope_p)) / length(slope_p)) * sdp) / absf
+                    if ratio > COND_THRESH
+                        return base + eltype(y)(COND_PENALTY * (ratio - COND_THRESH))
+                    end
+                end
+
                 fmid_p = 0.5 .* (fplus .+ fminus)
                 lin_err_p = abs.(f0 .- fmid_p)
                 scale_p = abs.(f0) .+ abs.(fmid_p) .+ 1.0
@@ -1276,7 +1410,19 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 return L(_loss_core(tree, X, y, options))
             end
             """
+            # The loss MANDATES GFP in every expression (+1000 if absent, +1000 again if
+            # present but numerically inert). Per-input network sensitivities say that is
+            # misspecified for some contexts: GFP ranks 9/10 for EGFR (0.099 of max) and 8/10
+            # for MAP2K2 (0.070), so the search is forced to make the rate depend on a
+            # variable the dynamics barely use, and any correct GFP-free law is eliminated.
+            # Where GFP IS a driver (PTPN7, DUSP7: rank 3, ~0.25) the search keeps it without
+            # being told to -- which is the control for this flag.
+            # p-ERK stays mandatory: it is the state and ranks 1.000 for every marker.
             loss_required_pERK = loss_required_pERK.replace(
+                "__REQUIRE_GFP__", "false" if args.no_require_gfp else "true"
+            ).replace(
+                "__COND_THRESH__", format(float(args.conditioning_threshold), ".16g")
+            ).replace(
                 "__WRONGSIGN_P_LINEAR__", format(linear_penalty, ".16g")
             ).replace(
                 "__WRONGSIGN_INV_LINEAR__", format(inverse_penalty, ".16g")
@@ -1291,6 +1437,28 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             pysr_search_dir = output_dir / "pysr_search"
             pysr_search_dir.mkdir(parents=True, exist_ok=True)
 
+            binary_operators = list(args.binary_operators)
+            extra_sympy_mappings: Dict[str, object] = {}
+            if args.hill_operator:
+                import sympy as _sp
+
+                binary_operators.append("hill(x, k) = x / (k*k + abs(x))")
+                # Without the mapping PySR leaves `hill(...)` as an unknown sympy
+                # Function, which sympifies but does not lambdify -- every downstream
+                # consumer (compute_marker_integration.py, the figure scripts) would
+                # die on the emitted formula. With it, model.sympy() returns the
+                # expanded rational form and nothing downstream has to change.
+                extra_sympy_mappings["hill"] = lambda x, k: x / (k**2 + _sp.Abs(x))
+
+            serial = args.pysr_parallelism == "serial"
+            if not serial:
+                LOGGER.warning(
+                    "PySR parallelism=%s: deterministic=False, so this fit is NOT "
+                    "reproducible from --random-state %s. Exploratory use only.",
+                    args.pysr_parallelism,
+                    args.random_state,
+                )
+
             sr_kwargs = {
                 "output_directory": str(pysr_search_dir),
                 "niterations": args.max_iterations,
@@ -1298,23 +1466,27 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 "populations": args.populations,
                 "maxsize": args.max_size,
                 "parsimony": args.parsimony,
-                "binary_operators": list(args.binary_operators),
+                "binary_operators": binary_operators,
                 "unary_operators": list(args.unary_operators),
                 "batching": args.batching,
                 "annealing": args.annealing,
                 "verbosity": args.verbosity,
                 "random_state": args.random_state,
-                # Force deterministic evolution (single-process, no multithreading).
-                "deterministic": True,
-                # PySR >=0.16: prefer explicit serial execution to avoid nondeterminism.
-                "parallelism": "serial",
-                "procs": 0,
+                # Deterministic evolution requires single-process, single-thread
+                # execution; PySR rejects deterministic=True under any other mode.
+                "deterministic": serial,
+                # PySR >=0.16: explicit serial execution is what removes the
+                # nondeterminism, so the two settings move together.
+                "parallelism": args.pysr_parallelism,
+                "procs": 0 if serial else args.pysr_procs,
 
                 # 👇 New bits
                 "loss_function": """println(">>> Custom loss LOADED")""" + loss_required_pERK,
                 # optional but a bit safer / clearer for custom loss:
                 "loss_scale": "log",
             }
+            if extra_sympy_mappings:
+                sr_kwargs["extra_sympy_mappings"] = extra_sympy_mappings
 
         total_modes = len(args.feature_modes)
         for mode_idx, feature_mode in enumerate(args.feature_modes, start=1):
@@ -1349,6 +1521,7 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                     test_split_policy=args.test_split_policy,
                     pysr_sample_weighting=args.pysr_sample_weighting,
                     pysr_sample_weight_max=args.pysr_sample_weight_max,
+                    standardise_target=args.standardise_target,
                     sr_kwargs=sr_kwargs,
                     trajectory_records=trajectories_by_mode[run_mode],
                     log_prefix=f"{run_mode}/{feature_mode}/{marker}",

@@ -73,6 +73,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument(
+        "--test-split-policy",
+        choices=("random_bins", "top_gfp_bins"),
+        default="random_bins",
+        help=(
+            "Passed through to run_markers.py. The paper's ERK results are all "
+            "on top_gfp_bins, so use that for anything meant to sit alongside "
+            "them; the random_bins default is in-distribution and its R2 values "
+            "are not comparable."
+        ),
+    )
+    parser.add_argument(
         "--measured-timepoints",
         nargs="*",
         type=float,
@@ -171,6 +182,8 @@ def _build_command(
         str(args.seed),
         "--test-size",
         str(args.test_size),
+        "--test-split-policy",
+        str(args.test_split_policy),
         "--measured-timepoints",
         *[str(t) for t in args.measured_timepoints],
         "--per-minute-max-time",

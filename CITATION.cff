@@ -10,9 +10,11 @@ type: software
 authors:
   - given-names: Theodore
     family-names: "de Pomereu"
+    orcid: "https://orcid.org/0009-0009-9197-8795"
     affiliation: "The Francis Crick Institute, London, UK; Department of Mathematics, Imperial College London, London, UK"
   - given-names: Fabian
     family-names: "Fröhlich"
+    orcid: "https://orcid.org/0000-0002-5360-4292"
     affiliation: "The Francis Crick Institute, London, UK"
     email: fabian.frohlich@crick.ac.uk
 repository-code: "https://github.com/frohlich-lab/symbolic_regression_signalling"

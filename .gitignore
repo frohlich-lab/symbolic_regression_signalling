@@ -31,3 +31,14 @@ outputs/
 !results/
 results/*
 !results/published/
+
+# Local agent tooling config, not research output
+.claude/
+
+# Exploratory notebooks: kept locally, not archived
+notebooks/*.ipynb
+
+# Manuscript drafts live outside the code repo
+docs/*.docx
+__pycache__/
+*.pyc

@@ -194,8 +194,13 @@ def load_dataset(file_path: str, dataset_size: Optional[int] = None, features: O
     if features and features != "all":
         cols = [c.strip() for c in features.split(",") if c.strip()]
         data = data[cols]
-    # Source is log-space → map back to linear
-    return data.map(np.exp)
+    # Source is log-space → map back to linear. Restrict to numeric columns so
+    # that features="all" does not try to exponentiate identifier columns.
+    numeric = data.select_dtypes(include=[np.number])
+    dropped = [c for c in data.columns if c not in numeric.columns]
+    if dropped:
+        _emit(f"Ignoring non-numeric column(s) before exponentiation: {', '.join(dropped)}")
+    return numeric.map(np.exp)
 
 def preprocess_data(X: np.ndarray):
     X = np.asarray(X, dtype=float)

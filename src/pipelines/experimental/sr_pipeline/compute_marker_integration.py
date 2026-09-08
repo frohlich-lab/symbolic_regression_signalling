@@ -143,6 +143,12 @@ def parse_args() -> argparse.Namespace:
         default="snapshot",
     )
     parser.add_argument(
+        "--raw-dataset",
+        default=None,
+        help="Raw binned measurements (marker, GFP_bin, timepoint, p-ERK1-2). When given, "
+             "the integrated trajectory is scored against these rather than the fitted curve.",
+    )
+    parser.add_argument(
         "--measured-timepoints",
         nargs="*",
         type=float,
@@ -291,6 +297,37 @@ def _pick_column(df: pd.DataFrame, candidates: Sequence[str]) -> str:
 # Dataset prep
 # -----------------------------------------------------------------------------
 
+RAW_PERK_COL = "p_ERK1_2_raw"
+
+
+def attach_raw_perk(df: pd.DataFrame, raw_path: str) -> pd.DataFrame:
+    """Join the raw binned p-ERK1-2 measurements onto the per-minute frame.
+
+    Scoring compares the integrated trajectory with what was measured, not with the
+    parametric curve fitted to it -- the fit supplies the training target and the
+    per-minute grid, and reusing it for evaluation would score the model against a
+    smoothed version of its own supervision. Raw values exist only at the acquired
+    timepoints, so the column is NaN elsewhere and the measured-timepoint mask that
+    already governs scoring selects exactly the rows that carry data.
+    """
+    raw = pd.read_csv(raw_path)
+    needed = {"marker", "GFP_bin", "timepoint", "p-ERK1-2"}
+    missing = needed - set(raw.columns)
+    if missing:
+        raise SystemExit(f"{raw_path}: missing column(s) {sorted(missing)}")
+    raw = raw[["marker", "GFP_bin", "timepoint", "p-ERK1-2"]].rename(
+        columns={"p-ERK1-2": RAW_PERK_COL})
+    raw["marker"] = raw["marker"].astype(str)
+    raw["GFP_bin"] = pd.to_numeric(raw["GFP_bin"], errors="coerce")
+    raw["timepoint"] = pd.to_numeric(raw["timepoint"], errors="coerce")
+    out = df.merge(raw, on=["marker", "GFP_bin", "timepoint"], how="left")
+    if out[RAW_PERK_COL].notna().sum() == 0:
+        raise SystemExit(
+            f"{raw_path}: no rows matched on (marker, GFP_bin, timepoint); "
+            "the raw table and the per-minute grid do not share keys")
+    return out
+
+
 def prepare_sr_dataset(dataset: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
     """
     Mirror the training-time sanitisation (strip `_fit`, normalise names).
@@ -375,6 +412,10 @@ def integrate_single_marker(
         except KeyError:
             obs_pe = np.full_like(t, np.nan, dtype=float)
             integ[0] = 0.0
+        eval_pe = (
+            g.loc[g.index[mask], RAW_PERK_COL].to_numpy(dtype=float)[order]
+            if RAW_PERK_COL in g.columns else obs_pe.copy()
+        )
 
         # Simple forward Euler integration on predicted dt
         for j in range(1, len(t)):
@@ -408,29 +449,29 @@ def integrate_single_marker(
         if (
             meas_mask.sum() > 1
             and np.isfinite(integ[meas_mask]).sum() > 1
-            and np.isfinite(obs_pe[meas_mask]).sum() > 1
+            and np.isfinite(eval_pe[meas_mask]).sum() > 1
         ):
             try:
-                r2 = coefficient_of_determination(obs_pe[meas_mask], integ[meas_mask])
+                r2 = coefficient_of_determination(eval_pe[meas_mask], integ[meas_mask])
                 if np.isfinite(r2):
                     integ_r2_vals.append(float(r2))
                     integrated_bins += 1
             except Exception:
                 pass
 
-        rel_mask = meas_mask & np.isfinite(integ) & np.isfinite(obs_pe)
+        rel_mask = meas_mask & np.isfinite(integ) & np.isfinite(eval_pe)
         if np.any(rel_mask):
             try:
-                denom = np.maximum(np.abs(obs_pe[rel_mask]), REL_MAE_EPS)
-                rel_mae = float(np.mean(np.abs(integ[rel_mask] - obs_pe[rel_mask]) / denom))
+                denom = np.maximum(np.abs(eval_pe[rel_mask]), REL_MAE_EPS)
+                rel_mae = float(np.mean(np.abs(integ[rel_mask] - eval_pe[rel_mask]) / denom))
                 if np.isfinite(rel_mae):
                     integ_rel_mae_vals.append(rel_mae)
             except Exception:
                 pass
 
         if include_trajectories:
-            for ti, pred_dt_i, obs_dt_i, integ_i, obs_pe_i in zip(
-                t, dt_pred, obs_dt, integ, obs_pe
+            for ti, pred_dt_i, obs_dt_i, integ_i, obs_pe_i, eval_pe_i in zip(
+                t, dt_pred, obs_dt, integ, obs_pe, eval_pe
             ):
                 traj_records.append(
                     {
@@ -440,7 +481,8 @@ def integrate_single_marker(
                         "pred_dt": pred_dt_i,
                         "obs_dt": obs_dt_i,
                         "pred_integrated": integ_i,
-                        "obs_pERK1_2": obs_pe_i,
+                        "obs_pERK1_2": eval_pe_i,
+                        "fit_pERK1_2": obs_pe_i,
                     }
                 )
 
@@ -637,12 +679,14 @@ def integrate_marker_ode(
         t = g["timepoint"].to_numpy(dtype=float)
         obs_dt = g[target_col].to_numpy(dtype=float)
 
-        # observed p-ERK
+        # observed p-ERK: fitted curve drives the integration, raw measurements score it
         try:
             obs_pe_col = _pick_column(g, obs_pe_candidates)
             obs_pe = g[obs_pe_col].to_numpy(dtype=float)
         except KeyError:
             obs_pe = np.full_like(t, np.nan, dtype=float)
+        eval_pe = (g[RAW_PERK_COL].to_numpy(dtype=float)
+                   if RAW_PERK_COL in g.columns else obs_pe.copy())
 
         mask = np.isfinite(t) & np.isfinite(obs_dt)
         if mask.sum() < 2:
@@ -651,11 +695,13 @@ def integrate_marker_ode(
         t = t[mask]
         obs_dt = obs_dt[mask]
         obs_pe = obs_pe[mask]
+        eval_pe = eval_pe[mask]
 
         order = np.argsort(t)
         t = t[order]
         obs_dt = obs_dt[order]
         obs_pe = obs_pe[order]
+        eval_pe = eval_pe[order]
 
         # Ensure time grid matches the canonical grid; if not, skip ODE for this bin
         if t.shape != t_grid_np.shape or not np.allclose(t, t_grid_np):
@@ -716,21 +762,21 @@ def integrate_marker_ode(
         if (
             meas_mask.sum() > 1
             and np.isfinite(integ[meas_mask]).sum() > 1
-            and np.isfinite(obs_pe[meas_mask]).sum() > 1
+            and np.isfinite(eval_pe[meas_mask]).sum() > 1
         ):
             try:
-                r2 = coefficient_of_determination(obs_pe[meas_mask], integ[meas_mask])
+                r2 = coefficient_of_determination(eval_pe[meas_mask], integ[meas_mask])
                 if np.isfinite(r2):
                     integ_r2_vals.append(float(r2))
                     integrated_bins += 1
             except Exception:
                 pass
 
-        rel_mask = meas_mask & np.isfinite(integ) & np.isfinite(obs_pe)
+        rel_mask = meas_mask & np.isfinite(integ) & np.isfinite(eval_pe)
         if np.any(rel_mask):
             try:
-                denom = np.maximum(np.abs(obs_pe[rel_mask]), REL_MAE_EPS)
-                rel_mae = float(np.mean(np.abs(integ[rel_mask] - obs_pe[rel_mask]) / denom))
+                denom = np.maximum(np.abs(eval_pe[rel_mask]), REL_MAE_EPS)
+                rel_mae = float(np.mean(np.abs(integ[rel_mask] - eval_pe[rel_mask]) / denom))
                 if np.isfinite(rel_mae):
                     integ_rel_mae_vals.append(rel_mae)
             except Exception:
@@ -755,8 +801,8 @@ def integrate_marker_ode(
                 dt_preds.append(deriv_eval)
 
             dt_preds_arr = np.asarray(dt_preds, dtype=float)
-            for ti, pred_dt_i, obs_dt_i, integ_i, obs_pe_i in zip(
-                t_grid_np, dt_preds_arr, obs_dt, integ, obs_pe
+            for ti, pred_dt_i, obs_dt_i, integ_i, obs_pe_i, eval_pe_i in zip(
+                t_grid_np, dt_preds_arr, obs_dt, integ, obs_pe, eval_pe
             ):
                 traj_records.append(
                     {
@@ -766,7 +812,8 @@ def integrate_marker_ode(
                         "pred_dt_ode": pred_dt_i,
                         "obs_dt": obs_dt_i,
                         "pred_integrated_ode": integ_i,
-                        "obs_pERK1_2": obs_pe_i,
+                        "obs_pERK1_2": eval_pe_i,
+                        "fit_pERK1_2": obs_pe_i,
                     }
                 )
 
@@ -803,6 +850,8 @@ def main() -> None:
 
     raw_dataset = pd.read_csv(args.dataset)
     dataset, target_col = prepare_sr_dataset(raw_dataset)
+    if args.raw_dataset:
+        dataset = attach_raw_perk(dataset, args.raw_dataset)
 
     summary = pd.read_csv(args.summary)
     summary = summary[summary["model"].isin(args.models)]

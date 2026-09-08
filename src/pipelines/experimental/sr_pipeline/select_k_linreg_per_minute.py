@@ -35,13 +35,22 @@ from sklearn.feature_selection import SelectKBest, f_regression
 from sklearn.preprocessing import StandardScaler
 from scipy.optimize import lsq_linear
 
-from pipelines.experimental.sr_pipeline.metrics import binwise_r2
+# Register src/ on the path the way the sibling scripts do, rather than relying on
+# PYTHONPATH being set by the caller: without it the rule that runs this script
+# fails at import unless it happens to be launched from a shell that exports it.
+_repo_src = Path(__file__).resolve().parents[3]
+if str(_repo_src) not in sys.path:
+    sys.path.insert(0, str(_repo_src))
+
+from pipelines.experimental.sr_pipeline.metrics import binwise_r2  # noqa: E402
 
 from pipelines.experimental.sr_pipeline.compute_marker_integration import (
     evaluate_formula,
     integrate_marker_ode,
     integrate_single_marker,
     make_formula_function,
+    RAW_PERK_COL,
+    attach_raw_perk,
     prepare_sr_dataset,
 )
 from pipelines.experimental.sr_pipeline.run_markers import (
@@ -71,6 +80,11 @@ sns.set_style("whitegrid")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SelectKBest sweep for per-minute linear regression.")
+    parser.add_argument(
+        "--raw-dataset", default=None,
+        help="Raw binned measurements; when given the integrated trajectory is scored "
+             "against these rather than the fitted curve.",
+    )
     parser.add_argument(
         "--dataset",
         type=Path,
@@ -301,6 +315,8 @@ def main() -> None:
 
     raw = pd.read_csv(args.dataset)
     full_data, target_col = prepare_sr_dataset(raw)
+    if getattr(args, "raw_dataset", None):
+        full_data = attach_raw_perk(full_data, args.raw_dataset)
     metrics_rows: List[Dict[str, object]] = []
     importance_rows: List[Dict[str, object]] = []
 
@@ -319,7 +335,8 @@ def main() -> None:
         # assert consistent target column naming
         target_col = target_col_sampled
         data = data.dropna(subset=[target_col])
-        feature_cols = [c for c in data.columns if c not in EXCLUDE_COLUMNS and c != target_col]
+        feature_cols = [c for c in data.columns
+                    if c not in EXCLUDE_COLUMNS and c != target_col and c != RAW_PERK_COL]
         if len(feature_cols) < 2:
             continue
         max_k = min(args.max_k or len(feature_cols), len(feature_cols))
@@ -353,7 +370,8 @@ def main() -> None:
         )
         data, target_col = prepare_sr_dataset(sampled)
         data = data.dropna(subset=[target_col])
-        feature_cols = [c for c in data.columns if c not in EXCLUDE_COLUMNS and c != target_col]
+        feature_cols = [c for c in data.columns
+                    if c not in EXCLUDE_COLUMNS and c != target_col and c != RAW_PERK_COL]
         if len(feature_cols) < 2:
             continue
         max_k = min(args.max_k or len(feature_cols), len(feature_cols))

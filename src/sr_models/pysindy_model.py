@@ -20,7 +20,7 @@ from tqdm import tqdm
 
 TARGET_COLUMN = 'kcat_cg'
 
-from sympy import symbols, diff, symbols, Derivative, Eq, simplify, solve
+from sympy import symbols, diff, Derivative, Eq, simplify, solve
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication_application
 import re
 

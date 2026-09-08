@@ -3,7 +3,7 @@
 For each method's _seeds_ood directory (3 seeds), reports per-method:
   - best-of-seed mean and median OOD test R²
   - number of markers with R² > threshold
-  - mean and median PR (effective non-GFP drivers) on those markers
+  - mean and median PR (effective drivers over the ten inputs) on those markers
 
 Renders one figure with three boxplots: best-of-seed R² (left), PR on R²>θ
 markers (right). Saves PNG + PDF.
@@ -62,9 +62,8 @@ def collect_method(directory: Path, seeds: list[int],
             continue
         meta, model, train = loaded
         causal = _per_marker_causal(meta, model, train)
-        non_gfp_idx = [i for i, f in enumerate(meta["feature_cols"]) if f != "GFP"]
         rows.append(dict(marker=marker, best_r2=best_r2,
-                         pr=pr_of(causal["mean_signed_jac"][non_gfp_idx])))
+                         pr=pr_of(causal["mean_abs_jac"])))
     return pd.DataFrame(rows)
 
 
@@ -162,7 +161,7 @@ def main() -> None:
         ax_pr.scatter(jitter, working.pr, s=20, c=palette[i], alpha=0.5, edgecolors="none")
     ax_pr.set_xticks(range(len(method_data)))
     ax_pr.set_xticklabels([m for m, _ in method_data], fontsize=10)
-    ax_pr.set_ylabel("Effective non-GFP drivers (PR)", fontsize=12)
+    ax_pr.set_ylabel("Effective drivers (PR)", fontsize=12)
     ax_pr.set_title(f"B.  Parsimony on R² > {args.r2_threshold} markers",
                     loc="left", fontsize=11.5)
     ax_pr.set_ylim(0, max(np.max(p) for p in pr_data if len(p)) + 0.5)

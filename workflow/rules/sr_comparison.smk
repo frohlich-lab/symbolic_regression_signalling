@@ -346,8 +346,15 @@ if enzyme_model != "experimental":
         if model == "aifeynman":
             suffix = f"_{variant}" if variant else ""
             work_dir_flag = f" --work_dir $(dirname {temp_file})/aifeynman_work{suffix}"
+        # Guarantee the temp file exists even if the method crashes or produces
+        # nothing (e.g. AI-Feynman finding an empty Pareto front): run the method
+        # tolerantly, then ensure a (possibly empty) temp file so the DAG proceeds
+        # to get_best_formula instead of aborting with MissingOutputException. An
+        # empty temp -> get_best_formula reports "no formula" and that method is
+        # simply absent from the comparison.
         return f"""
-            {env_path_fix} {install_command}{separator} timeout {config["timeout_duration"]} python src/sr_models/{model}_model.py --dataset {dataset} --dataset_size {dataset_size} --features {features} --temp_file {temp_file}{variant_flag}{seed_flag}{work_dir_flag} || test -s {temp_file}
+            {env_path_fix} {install_command}{separator} timeout {config["timeout_duration"]} python src/sr_models/{model}_model.py --dataset {dataset} --dataset_size {dataset_size} --features {features} --temp_file {temp_file}{variant_flag}{seed_flag}{work_dir_flag} || true
+            test -s {temp_file} || : > {temp_file}
         """
 
     # Rules for symbolic regression for each model

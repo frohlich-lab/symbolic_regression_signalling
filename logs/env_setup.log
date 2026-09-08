@@ -1,2 +1,0 @@
-[2025-09-19T09:59:03Z] Launching sweep (expects envs pysr_env, pysindy_env, dso_env, kan_env, aifeynman_env to exist)
-[2025-09-19T09:59:03Z] Configuration: workers=10 cpus_per_run=2 max_trials=118

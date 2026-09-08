@@ -298,13 +298,11 @@ select_k_dir = f"{exp_runs_root}/linreg_ood"
 select_k_split_policy = "top_gfp_bins"
 select_k_metrics = f"{select_k_dir}/select_k_metrics.csv"
 select_k_metrics_agg = f"{select_k_dir}/select_k_metrics_agg.csv"
-select_k_importance = f"{select_k_dir}/select_k_importance.csv"
-select_k_importance_agg = f"{select_k_dir}/select_k_importance_agg.csv"
+# The linear baseline is fitted on all ten inputs; the k sweep it used to run is not
+# reported anywhere, so the per-K importance artefacts are no longer produced.
 select_k_boxplot_dt = f"{select_k_dir}/boxplot_dt_r2.png"
 select_k_boxplot_integ = f"{select_k_dir}/boxplot_integ_r2.png"
 select_k_boxplot_ode = f"{select_k_dir}/boxplot_ode_r2.png"
-select_k_ribbon_coef = f"{select_k_dir}/ribbon_coef_importance.png"
-select_k_ribbon_variance = f"{select_k_dir}/ribbon_variance_importance.png"
 select_k_panel_a = f"{select_k_dir}/pysr_selectk_panel_a.png"
 select_k_panel_b = f"{select_k_dir}/pysr_selectk_panel_b.png"
 select_k_panel_a_box = f"{select_k_dir}/pysr_selectk_panel_a_box.png"
@@ -372,6 +370,16 @@ neural_ode_quadrant_bar_matched = f"{neural_ode_matched_dir}/pysr_neuralode_quad
 # choice of penalty.
 sparse_node_dir = f"{exp_runs_root}/sparse_neural_ode"
 sparse_node_l21_dir   = f"{sparse_node_dir}/l21_lam3"
+
+# Four-layer L21 (lambda=3) neural ODEs -- the architecture and penalty strength the
+# calibration sweep jointly selected, and the models every complexity number in the
+# Results is computed from. Kept distinct from sparse_node_l21_dir (three layers), which
+# the earlier drafts used.
+node_hl4_dir          = f"{exp_runs_root}/reducibility/l21_hl4_local"
+# Off-diagonal-normalised interaction counts: scoring cross-terms against the
+# global Hessian maximum is not comparable across function classes (symbolic laws
+# with divisions have diagonal curvature that swamps their interactions).
+node_hl4_interactions = f"{exp_runs_root}/reducibility/interactions_offnorm.csv"
 sparse_node_l1_dir    = f"{sparse_node_dir}/l1"
 sparse_node_cnode_dir = f"{sparse_node_dir}/pathreg"
 sparse_node_seeds = [42, 43, 44]
@@ -422,6 +430,18 @@ pysr_final_metrics   = [
     f"marker_integration_metrics_per_minute.csv"
     for s in pysr_final_seeds
 ]
+pysr_final_traj      = [
+    f"{pysr_final_dir}/seeds/seed_{s}/metrics/"
+    f"marker_integration_trajectories_per_minute.csv"
+    for s in pysr_final_seeds
+]
+# The per-(context, seed) tree this run was recovered from: one directory per context,
+# each holding the trajectory CSV that Fig. 5 and Fig. S2 draw individual bins from.
+# scripts/migrate_v5_layout.py rescued it from a cluster scratchpad and derived seeds/
+# by concatenation, so no rule produces it -- the figure rules below take it as an
+# ancient() input for the same reason the sweep config is ancient(): it is a recorded
+# run, and a timestamp must not re-trigger 70 CPU-hours.
+pysr_final_fits_dir  = f"{pysr_final_dir}/fits"
 pysr_final_per_fit   = f"{pysr_final_dir}/metrics/integrated_r2_per_fit.csv"
 pysr_final_summary   = f"{pysr_final_dir}/metrics/success_rate_summary.csv"
 pysr_final_exemplars = f"{pysr_final_dir}/metrics/exemplar_ranking.csv"
@@ -435,9 +455,17 @@ exp_r2_threshold = 0.6
 # dose-response and "extrapolating to an unseen dose" reduces to predicting the same
 # trajectory again. They score a median 0.85 and are excluded from the comparison
 # panels; including them would lift the headline rate from 8/32 to 15/40 with no
-# dose-response biology behind it. untransfected1 is already excluded by default.
+# dose-response biology behind it.
+#
+# All eight are listed. This used to omit untransfected1 on the grounds that it was
+# "already excluded by default", but that default was an argparse bug -- a non-empty
+# default on an action="append" option, which the command line then could not override
+# (docs/experimental_provenance.md, corrections of 6 Aug 2026). It is the origin of v4's
+# "39 overexpression contexts". plot_parsimony_tradeoff.py has since been fixed to
+# default to [], so leaning on it left the sparsity panel on 33 contexts rather than the
+# 32 the denominator convention calls for.
 exp_control_contexts = [
-    "untransfected2", "untransfected3", "untransfected4",
+    "untransfected1", "untransfected2", "untransfected3", "untransfected4",
     "FLAG-GFP1", "FLAG-GFP2", "FLAG-GFP3", "FLAG-GFP4",
 ]
 exp_exclude_flags = " ".join(
@@ -454,6 +482,140 @@ sr_vs_linreg_dir  = f"{exp_comparisons_dir}/sr_vs_linreg"
 sr_vs_linreg_k10  = f"{sr_vs_linreg_dir}/heldout_r2_k10.png"
 sr_vs_linreg_k4   = f"{sr_vs_linreg_dir}/heldout_r2_k4.png"
 
+# The one bucket named after where a figure is printed rather than what it asks, because
+# the manuscript panels have to be collectable as a set. Everything here must also be a
+# rule output: these were hand-run for the v5 draft, which is how the printed panel and
+# the pipeline's own version drifted apart in the first place.
+exp_paper_figures_dir = f"{exp_runs_root}/paper_figures"
+exp_supplementary_dir = f"{exp_paper_figures_dir}/supplementary"
+# Same comparison as sr_vs_linreg_k10, minus the control contexts -- see
+# exp_control_contexts for why the printed panel drops them.
+fig_4d_sr_vs_linreg = f"{exp_paper_figures_dir}/fig_4d_sr_vs_linreg.png"
+# Fig. 4E/F as printed. Identical arguments to sr_vs_node_panel; the second output
+# exists so the panel can be collected with the rest of the figure rather than copied
+# out of comparisons/ by hand.
+fig_4ef_parsimony = f"{exp_paper_figures_dir}/fig_4ef_accuracy_and_parsimony.png"
+
+# Both baselines and the parsimony panel on one row: linear regression, the Neural
+# ODE, and the driver counts. Same script and same numbers as fig_4ef_parsimony,
+# with the linreg scatter added as a third panel -- a rule output rather than a
+# hand-run command, so it cannot drift from the panels it is assembled next to.
+fig_4_joint_baselines = f"{exp_paper_figures_dir}/fig_4_joint_linreg_parsimony.png"
+
+# Closure cost: the dependency count and the interacting-pair count collapsed into one box
+# column, C = k + rho*pairs, beside the curve of the contrast against rho. The two counts
+# are not independent (pairs are bounded by C(k,2) and the networks sit at ~0.98 of that
+# bound), so two boxes and two tests report close to one fact; the curve is what shows the
+# result does not depend on the price assigned to an interaction.
+fig_4_closure_cost = f"{exp_paper_figures_dir}/fig_4_closure_cost.png"
+
+# Two variants of Fig. 4E kept as rule outputs because the draft chooses between them:
+# _nointeractions drops the third box column, for the layout that reports the dependency
+# count alone; _srquadrant restricts the SR box to the scatter's top-right quadrant, so it
+# covers the same nine contexts as the neural-ODE box and the bracket between them is a
+# paired comparison rather than one across two different context sets.
+fig_4ef_parsimony_nointeractions = (
+    f"{exp_paper_figures_dir}/fig_4ef_accuracy_and_parsimony_nointeractions.png")
+fig_4ef_parsimony_srquadrant = (
+    f"{exp_paper_figures_dir}/fig_4ef_accuracy_and_parsimony_srquadrant.png")
+
+# The per-context panel values both Fig. 4E variants are drawn from, written by the same
+# rule that draws them so the closure-cost figure cannot be computed from a different
+# selection than the panel it replaces.
+fig_4_panel_inputs = f"{exp_runs_root}/reducibility/panel_inputs_fig4.csv"
+
+# Fig. 5 exemplars: per-GFP-bin trajectories for the two best perturbation contexts.
+# Pinned here so the rule's outputs are static rather than depending on a ranking file's
+# row order (see docs/experimental_provenance.md).
+#
+# The CONTEXTS are unchanged and not close: PIP5K3 (0.928) and PTPN7 (0.910) lead the
+# perturbations, with ALPK2 third at 0.729.
+#
+# The SEEDS changed on 2026-08-12, from s43/s42 to s44/s43. Both were previously chosen by
+# best held-out R2, which is selection on the test set; every other figure and Table S8 now
+# retain the seed with the best TRAINING integrated R2, and these two must match or the
+# manuscript shows one seed's equation beside another seed's statistics. The earlier comment
+# here defended PTPN7 s42 on the grounds that s42 and s43 tie within noise (0.9071 vs
+# 0.9097) and s42 was already printed -- true, but the tie is not the reason to choose: s43
+# is what the training rule selects, and it happens to be best held-out as well.
+# Accuracy is essentially unaffected (PIP5K3 0.937 -> 0.928, PTPN7 0.907 -> 0.910) and both
+# laws keep the same variable sets, so only the displayed expressions change.
+fig5_exemplars = [("PIP5K3", 44), ("PTPN7", 43)]
+fig5_perbin = [
+    f"{exp_paper_figures_dir}/fig_5_perbin_{marker}_s{seed}.png"
+    for marker, seed in fig5_exemplars
+]
+# Fig. 5 centre panel: the fitted fan beside the integrated law, across all GFP bins. Built
+# from the same per-fit trajectory table as fig5_perbin so the two panels of one figure
+# cannot come from different fits -- the superseded fans under exemplar_fans/ were produced
+# from a sweep directory that no longer exists.
+fig5_fans = [
+    f"{exp_paper_figures_dir}/fig_5_fan_{marker}_s{seed}.png"
+    for marker, seed in fig5_exemplars
+]
+
+# Supplementary panels. The manuscript cites exactly Figures S1-S3 and Tables S8-S10;
+# anything the draft dropped is still built, but into archive/ so a full run cannot
+# repopulate the clean supplementary folder with figures no caption refers to.
+exp_supplementary_archive_dir = f"{exp_supplementary_dir}/archive"
+
+fig_s1_loss_ablation      = f"{exp_supplementary_dir}/fig_s1_loss_ablation.png"
+fig_s2_threshold_examples = f"{exp_supplementary_dir}/fig_s2_threshold_examples.png"
+fig_s3_node_selection     = f"{exp_supplementary_dir}/fig_s3_neural_ode_selection.png"
+
+# Retired 2026-08-12 with the SI reorganisation: the threshold-calibration trio compared
+# the dependency count against the participation ratio (a measure the draft no longer
+# reports), the matched-k linreg panel and the all-40 sparsity panel lost their citations
+# when Fig. 4 absorbed both comparisons. Kept reproducible, kept out of the way.
+fig_s4_sr_vs_linreg       = f"{exp_supplementary_archive_dir}/fig_s4_sr_vs_linreg_matched.png"
+fig_s5_parsimony_all40    = f"{exp_supplementary_archive_dir}/fig_s5_parsimony_all40.png"
+fig_threshold_calibration = f"{exp_supplementary_archive_dir}/fig_threshold_calibration.png"
+fig_threshold_error_tradeoff = f"{exp_supplementary_archive_dir}/fig_threshold_error_tradeoff.png"
+fig_threshold_intuition = f"{exp_supplementary_archive_dir}/fig_threshold_intuition.png"
+
+# Per-context symbolic-regression results: the table the Results text points at for the
+# seed retained, its accuracy, the variables used and the recovered law. Its own rule,
+# because it reads the integrated per-fit table and the Fig. 4 panel values rather than
+# the neural-ODE sweeps the batch below summarises.
+table_s8_sr_per_context = f"{exp_supplementary_dir}/table_s8_sr_per_context.csv"
+
+# Tables S9-S10, written as one batch because they share the run artefacts they read.
+# The two *_full.csv are the complete grids, deposited rather than typeset. S9 is the
+# PySR configuration sweep and S10 the neural-ODE architecture search -- that order is
+# fixed by the order the main text cites them, and the two were swapped until
+# 2026-08-12; do not renumber them back without also fixing the captions.
+supp_tables = [
+    f"{exp_supplementary_dir}/table_s9_pysr_config_marginals.csv",
+    f"{exp_supplementary_dir}/table_s10_neural_ode_arch_marginals.csv",
+    f"{exp_supplementary_dir}/neural_ode_arch_grid_full.csv",
+    f"{exp_supplementary_dir}/pysr_config_sweep_full.csv",
+]
+
+# Tables S12-S14: the threshold sensitivities of the two complexity contrasts, and the
+# lambda calibration behind Fig. S3A. Wired 2026-08-17 -- all three were hand-built until
+# then, which meant the numbers the SI quotes as robustness evidence were the only ones in
+# the paper that a full run could not regenerate. S12/S13 come from one rule because a
+# single pass over the checkpoints serves both sweeps; S14 is a deposit of the lambda
+# sweep summary the calibration rule already writes.
+table_s12_threshold_sensitivity = (
+    f"{exp_supplementary_dir}/table_s12_threshold_sensitivity.csv")
+table_s13_interaction_sensitivity = (
+    f"{exp_supplementary_dir}/table_s13_interaction_threshold_sensitivity.csv")
+table_s14_lambda_calibration = (
+    f"{exp_supplementary_dir}/table_s14_lambda_calibration.csv")
+# Per-(marker, seed) counts behind S12/S13, deposited so the two tables are auditable
+# without rerunning the Jacobian and Hessian passes.
+node_hl4_threshold_per_fit = (
+    f"{exp_runs_root}/reducibility/threshold_sensitivity_per_fit.csv")
+
+# Dropped from the manuscript, still built into archive/: the regulariser comparison went
+# when the draft kept only the L21 lambda calibration sweep, and the readout key was never
+# cited. They remain rule outputs so the numbers stay reproducible.
+supp_tables_retired = [
+    f"{exp_supplementary_archive_dir}/table_regulariser_comparison.csv",
+    f"{exp_supplementary_archive_dir}/table_readout_key.csv",
+]
+
 # SR against the sparse Neural ODE: held-out accuracy plus effective driver counts.
 sr_vs_node_dir    = f"{exp_comparisons_dir}/sr_vs_neural_ode"
 sr_vs_node_panel  = f"{sr_vs_node_dir}/accuracy_and_drivers.png"
@@ -468,6 +630,12 @@ node_regulariser_comp = f"{sparse_node_dir}/regulariser_comparison/l21_vs_l1_vs_
 # univariate F-test while SR picks its own subset by search.
 linreg_k_full = 10
 linreg_k_matched = 4
+# The select-k sweep must cover every k any figure asks for -- Fig. 4D reads k=10
+# and Fig. S4 reads k=4 -- plus the smaller k the boxplots sweep over. Emitting only
+# linreg_k_full silently produces a metrics file that the k=4 panels cannot be built
+# from, and rebuilding the file overwrites the wider sweep.
+linreg_k_min = 2
+linreg_k_max = linreg_k_full
 
 # Fig. S3B: the lambda_jac elbow sweep. One subdirectory per lambda, all markers.
 sparse_node_lambda_sweep_dir = f"{sparse_node_dir}/lambda_sweep"
@@ -476,7 +644,28 @@ sparse_node_lambda_values = [1.0, 2.0, 3.0, 5.0, 8.0, 15.0, 30.0]
 
 # Table S9 / Fig. S3C: architecture + optimisation grid, scored on in-distribution
 # validation R2 only, so the held-out highest-dose bins play no part in the choice.
+# The 54 cells are the product below; naming follows the lambda sweep's `lam_3p0`
+# convention, with `.` written as `p`.
+sparse_node_arch_grid_dir = f"{sparse_node_dir}/arch_grid"
 sparse_node_arch_grid_csv = f"{sparse_node_dir}/arch_grid.csv"
+sparse_node_arch_widths      = [32, 64, 128]
+sparse_node_arch_depths      = [2, 3, 4]
+sparse_node_arch_lrs         = [0.001, 0.003, 0.01]
+sparse_node_arch_activations = ["tanh", "softplus"]
+# One seed only. The grid answers "which architecture", and the reported models are
+# retrained at three seeds afterwards; a 3-seed grid would triple 54 GPU-hours to
+# sharpen a choice the lambda sweep shows is insensitive at this resolution.
+sparse_node_arch_grid_seed = 42
+# CAUTION: re-running the grid rule will NOT reproduce the checked-in arch_grid.csv
+# row for row. That file records 1 to 39 contexts per cell -- the cells were not all
+# run over the same contexts -- so its cells are not strictly comparable to each other.
+# The rule below runs every cell over every context, which is the comparison Table S9
+# claims to report; expect the marginals to move when it is next run. The rule takes
+# ancient() inputs so a timestamp cannot trigger 54 GPU-hours by accident.
+
+# Table S8's dependency-count column: participation ratio of the input Jacobian with
+# GFP excluded, read off the saved checkpoints of all three regulariser variants.
+sparse_node_participation_csv = f"{sparse_node_dir}/participation_ratio_variants.csv"
 
 # Aliases kept because the surviving rules and helper below were written against the
 # older names.
@@ -634,13 +823,9 @@ if enzyme_model == "experimental":
         integration_per_minute_traj,
         select_k_metrics,
         select_k_metrics_agg,
-        select_k_importance,
-        select_k_importance_agg,
         select_k_boxplot_dt,
         select_k_boxplot_integ,
         select_k_boxplot_ode,
-        select_k_ribbon_coef,
-        select_k_ribbon_variance,
         # The PySR-vs-linreg comparison is experimental_compare_sr_vs_linreg, on
         # the OOD split. There is no in-distribution equivalent by design.
         metrics_models_r2,
@@ -681,6 +866,17 @@ if enzyme_model == "experimental":
         sr_vs_linreg_k4,
         node_regulariser_comp,
         node_driver_readout,
+        # Printed panels and supplementary tables. Listed individually rather than by
+        # pulling in `experimental_results`, because a rule cannot be an input.
+        fig_4d_sr_vs_linreg,
+        fig_4ef_parsimony,
+        fig_s2_threshold_examples,
+        fig_s3_node_selection,
+        fig_s4_sr_vs_linreg,
+        fig_s5_parsimony_all40,
+        sparse_node_participation_csv,
+        *fig5_perbin,
+        *supp_tables,
     ])
 
     # Must stay the FIRST rule in the workflow: Snakemake takes the first rule it parses

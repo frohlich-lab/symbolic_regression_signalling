@@ -151,29 +151,40 @@ def main() -> None:
     ap.add_argument("--table-s10", type=Path,
                     default=Path("data/experimental/runs/pysr_config_sweep/"
                                  "metrics/table_s10_config_sweep.csv"))
+    ap.add_argument("--with-regulariser-panel", action="store_true",
+                    help="Restore the L1-vs-L21 boxplot as panel A. Off by default: the "
+                         "comparison is no longer in the manuscript.")
     ap.add_argument("--output", type=Path,
                     default=Path("data/experimental/runs/paper_figures/"
                                  "supplementary/fig_s3_neural_ode_selection.png"))
     args = ap.parse_args()
 
     st.apply()
-    fig, axes = plt.subplots(1, 3, figsize=(7.09, 2.15))
+    # The regulariser comparison was dropped from the manuscript: its L1 arm has no
+    # surviving per-fit metrics, so it cannot be put on the same validation-selected
+    # seed rule as everything else. Keep the panel behind a flag rather than delete it.
+    n_panels = 3 if args.with_regulariser_panel else 2
+    fig, axes = plt.subplots(1, n_panels, figsize=(6.27 * n_panels / 3, 2.0))
     fig.subplots_adjust(wspace=0.42)
 
-    df = panel_a(axes[0], args.nde_root)
-    panel_b(axes[1], args.nde_root / "lambda_sweep_summary.csv")
-    rho, p, n = panel_c(axes[2], args.table_s10)
+    df = None
+    k = 0
+    if args.with_regulariser_panel:
+        df = panel_a(axes[k], args.nde_root); k += 1
+    panel_b(axes[k], args.nde_root / "lambda_sweep_summary.csv"); k += 1
+    rho, p, n = panel_c(axes[k], args.table_s10)
 
     for ax, letter in zip(axes, "ABC"):
         st.panel_letter(ax, letter)
 
     st.save(fig, args.output)
 
-    print("\nPanel A summary (best of 3 seeds, n = %d contexts):" % len(df))
-    for c in df.columns:
-        print(f"  {c:8s} median {df[c].median():.3f}  mean {df[c].mean():.3f}  "
-              f"n>=0.6 {(df[c] >= 0.6).sum()}")
-    print(f"Panel C: Spearman rho = {rho:.3f}, P = {p:.3g}, n = {n}")
+    if df is not None:
+        print("\nRegulariser panel (best of 3 seeds, n = %d contexts):" % len(df))
+        for c in df.columns:
+            print(f"  {c:8s} median {df[c].median():.3f}  mean {df[c].mean():.3f}  "
+                  f"n>=0.6 {(df[c] >= 0.6).sum()}")
+    print(f"Config-grid panel: Spearman rho = {rho:.3f}, P = {p:.3g}, n = {n}")
 
 
 if __name__ == "__main__":

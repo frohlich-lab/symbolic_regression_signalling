@@ -21,6 +21,7 @@ from scipy.stats import wilcoxon
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import supp_style as st  # noqa: E402
+from display_names import gene_labels  # noqa: E402
 
 CONTROL_PREFIXES = ("FLAG-GFP", "untransfected")
 
@@ -94,7 +95,7 @@ def main() -> None:
     w = wilcoxon(pert.sr, pert.lin)
 
     st.apply()
-    fig, ax = plt.subplots(figsize=(3.5, 3.5))
+    fig, ax = plt.subplots(figsize=(3.4, 3.4))
     ax.set_aspect("equal", adjustable="box")
     ax.fill_between([0, 1], [0, 1], 1, facecolor=st.GREEN_FILL,
                     edgecolor="none", zorder=0)
@@ -109,9 +110,11 @@ def main() -> None:
         ax.scatter(s.lin, s.sr, s=22, marker=mk, facecolors=fc,
                    edgecolors=st.INK, linewidths=0.7, zorder=3)
 
-    ax.text(0.035, 0.965, "SR outperforms\nlinear regression", fontsize=st.FS_TICK,
-            color="#4a7358", transform=ax.transAxes, va="top",
-            linespacing=1.2)
+    # Sits just above the diagonal in the empty mid-left of the green region;
+    # the top-left corner is taken by the marker labels.
+    ax.text(0.30, 0.40, "SR outperforms\nlinear regression", fontsize=st.FS_TICK,
+            color="#4a7358", transform=ax.transAxes, va="bottom", ha="left",
+            rotation=45, rotation_mode="anchor", linespacing=1.2)
     ax.text(0.97, 0.03,
             f"SR higher: {n_sr}/{len(df)}\nlinear higher: {n_lin}   tied at 0: {n_tie}\n"
             f"above R² = {th:g}: {int((df.sr >= th).sum())} vs {int((df.lin >= th).sum())}\n"
@@ -121,7 +124,7 @@ def main() -> None:
             ha="right", va="bottom", linespacing=1.35)
 
     lab = df[df[["lin", "sr"]].max(axis=1) >= th]
-    label_points(ax, lab.lin.values, lab.sr.values, lab.marker.values,
+    label_points(ax, lab.lin.values, lab.sr.values, gene_labels(lab.marker).values,
                  st.FS_TICK - 0.5)
 
     handles = [plt.Line2D([], [], ls="none", marker="o", mfc=st.INK,

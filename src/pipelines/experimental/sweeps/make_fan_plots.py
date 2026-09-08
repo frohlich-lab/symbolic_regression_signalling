@@ -12,10 +12,20 @@ With no shard list, plots every shard that clears a basic quality bar.
 import os
 import sys
 import glob
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+# Helvetica proper (weights 300/400/700 are registered on this machine, so bold does not
+# silently fall back); Arial and DejaVu kept as fallbacks for other systems.
+matplotlib.rcParams.update({
+    "font.family": ["Helvetica", "Arial", "DejaVu Sans"],
+    "pdf.fonttype": 42, "ps.fonttype": 42,
+    "font.size": 16, "axes.labelsize": 16, "axes.titlesize": 16,
+    "xtick.labelsize": 15, "ytick.labelsize": 15,
+})
 import numpy as np
 import pandas as pd
 
@@ -41,21 +51,34 @@ def plot_shard(path, arm, slug, seed):
     cmap = plt.get_cmap("viridis")
     norm = plt.Normalize(vmin=min(bins), vmax=max(bins))
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2), sharey=True)
+    # layout="compressed": set_box_aspect below forces a square box inside each subplot cell, and
+    # tight_layout leaves the leftover width *inside* the cells -- so shrinking wspace does nothing
+    # to the visible gap. The compressed engine shrinks the cells onto the fixed-aspect boxes.
+    fig, axes = plt.subplots(1, 2, figsize=(9.2, 4.8), sharey=True, layout="compressed")
     for b in bins:
         h = d[d["GFP_bin"] == b].sort_values("timepoint")
         c = cmap(norm(b))
-        axes[0].plot(h["timepoint"], h["pred_integrated_ode"], color=c, lw=1.2)
-        axes[1].plot(h["timepoint"], h["obs_pERK1_2"], color=c, lw=1.2)
-    axes[0].set_title("ODE integrated pred")
-    axes[1].set_title("Observed p-ERK1-2")
+        # data on the left, model on the right: the reader sees what was measured first
+        axes[0].plot(h["timepoint"], h["obs_pERK1_2"], color=c, lw=1.2)
+        axes[1].plot(h["timepoint"], h["pred_integrated_ode"], color=c, lw=1.2)
+    axes[0].set_title("Observed p-ERK1-2")
+    axes[1].set_title("ODE integrated pred")
     for ax in axes:
         ax.set_xlabel("time (min)")
-    axes[0].set_ylabel("pERK")
-    fig.suptitle(f"{slug} | {arm} | seed {seed}", fontsize=11)
-    fig.tight_layout()
+        ax.set_box_aspect(1)   # square plotting area, independent of the data ranges
+        ax.set_xticks([0, 20, 40, 60])
+    axes[0].set_ylabel("p-ERK (a.u.)")   # same wording as the per-bin panels
+    # the right panel's outward y ticks would collide with the left panel's frame once the two
+    # sit flush, and they carry no labels under sharey, so drop them
+    axes[1].tick_params(axis="y", length=0)
+    fig.suptitle(f"{slug} | {arm} | seed {seed}", fontsize=17)
+    fig.get_layout_engine().set(w_pad=0.02, h_pad=0.02, wspace=0.03, hspace=0.0)
     out = f"{OUTDIR}/{arm}__{slug}__s{seed}.png"
-    fig.savefig(out, dpi=130)
+    # bbox_inches=tight: set_box_aspect leaves tight_layout unable to account for the axis
+    # labels, which were being clipped at the bottom edge.
+    fig.savefig(out, dpi=200, bbox_inches="tight")
+    # vector alongside the raster, as every other paper-figure script does
+    fig.savefig(Path(out).with_suffix(".pdf"), bbox_inches="tight")
     plt.close(fig)
     return out
 

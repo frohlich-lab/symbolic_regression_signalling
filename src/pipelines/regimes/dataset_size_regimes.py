@@ -153,7 +153,13 @@ def load_dataset(path: str, features: Optional[str] = None) -> pd.DataFrame:
     if features and features != "all":
         cols = [col.strip() for col in features.split(",") if col.strip()]
         data = data[cols]
-    return data.map(np.exp)
+    # Values are logs; map back to linear. Restrict to numeric columns so that
+    # features="all" does not try to exponentiate identifier columns.
+    numeric = data.select_dtypes(include=[np.number])
+    dropped = [c for c in data.columns if c not in numeric.columns]
+    if dropped:
+        _emit(f"Ignoring non-numeric column(s) before exponentiation: {', '.join(dropped)}")
+    return numeric.map(np.exp)
 
 
 def run_pysr(
@@ -217,29 +223,6 @@ def run_pysr(
         except Exception:
             pass
     return model
-
-
-def _cache_path(regime_dir: Path) -> Path:
-    return regime_dir / "processed" / "predictions_cache.json"
-
-
-def load_prediction_cache(regime_dir: Path) -> dict:
-    cache_file = _cache_path(regime_dir)
-    if not cache_file.exists():
-        return {}
-    try:
-        with cache_file.open("r") as handle:
-            raw = json.load(handle)
-        return raw if isinstance(raw, dict) else {}
-    except Exception:
-        return {}
-
-
-def save_prediction_cache(regime_dir: Path, cache: dict) -> None:
-    cache_file = _cache_path(regime_dir)
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
-    with cache_file.open("w") as handle:
-        json.dump(cache, handle)
 
 
 def _cache_path(regime_dir: Path) -> Path:

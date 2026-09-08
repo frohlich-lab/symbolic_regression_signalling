@@ -37,6 +37,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -61,6 +62,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from pipelines.experimental.sr_pipeline.compute_marker_integration import (
+    attach_raw_perk,
     prepare_sr_dataset,
 )
 from pipelines.experimental.sr_pipeline.run_markers import (
@@ -76,6 +78,7 @@ from pipelines.experimental.sr_pipeline.metrics import (
 
 MEASURED_TIMEPOINTS = (0.0, 5.0, 10.0, 15.0, 30.0, 60.0)
 PERK_NAME = sanitize_feature_names(["p-ERK1-2"])[0]  # "p_ERK1_2"
+RAW_PERK_COL = "p_ERK1_2_raw"
 
 
 # -----------------------------------------------------------------------------
@@ -107,6 +110,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--measured-timepoints", nargs="*", type=float,
                    default=MEASURED_TIMEPOINTS)
     # Split
+    p.add_argument("--eval-only", default=None, metavar="MODELS_DIR",
+                   help="Skip training: reload the checkpoints written by a previous run with "
+                        "--save-models and re-score them. The split is deterministic, so the "
+                        "rebuilt bundle is the one the model was trained on; use this to "
+                        "re-evaluate under a changed metric without retraining.")
+    p.add_argument("--raw-dataset", default=None,
+                   help="Raw binned measurements; when given the rollout is scored against "
+                        "these rather than the fitted curve.")
     p.add_argument("--test-size", type=float, default=0.2)
     p.add_argument("--val-size", type=float, default=0.2)
     # Model / training
@@ -225,6 +236,10 @@ def _build_bin_trajectory(
     g = g.sort_values("timepoint").copy()
     t = pd.to_numeric(g["timepoint"], errors="coerce").to_numpy(dtype=float)
     y = pd.to_numeric(g[PERK_NAME], errors="coerce").to_numpy(dtype=float)
+    # The fitted curve drives the rollout; the raw measurements score it. Absent the raw
+    # column the two coincide, so behaviour without --raw-dataset is unchanged.
+    y_eval = (pd.to_numeric(g[RAW_PERK_COL], errors="coerce").to_numpy(dtype=float)
+              if RAW_PERK_COL in g.columns else y.copy())
     dt_obs = pd.to_numeric(g[target_col], errors="coerce").to_numpy(dtype=float)
     if len(exo_cols) > 0:
         U = g[list(exo_cols)].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
@@ -237,17 +252,18 @@ def _build_bin_trajectory(
     t, y, U = t[mask], y[mask], U[mask]
     dt_obs = dt_obs[mask]
     order = np.argsort(t)
-    t, y, U, dt_obs = t[order], y[order], U[order], dt_obs[order]
+    t, y, U, dt_obs, y_eval = t[order], y[order], U[order], dt_obs[order], y_eval[order]
 
     # Need strictly increasing t for diffrax interpolation.
     keep = np.concatenate([[True], np.diff(t) > 0])
-    t, y, U, dt_obs = t[keep], y[keep], U[keep], dt_obs[keep]
+    t, y, U, dt_obs, y_eval = t[keep], y[keep], U[keep], dt_obs[keep], y_eval[keep]
     if len(t) < 3:
         return None
 
     return {
         "t": t.astype(np.float64),
         "y": y.astype(np.float64),
+        "y_eval": y_eval.astype(np.float64),
         "U": U.astype(np.float64),
         "dt_obs": dt_obs.astype(np.float64),
     }
@@ -346,13 +362,18 @@ def _adam_init(params):
     leaves = jax.tree_util.tree_leaves(eqx.filter(params, eqx.is_inexact_array))
     m = jax.tree_util.tree_map(jnp.zeros_like, leaves)
     v = jax.tree_util.tree_map(jnp.zeros_like, leaves)
-    return {"step": 0, "m": m, "v": v}
+    # `step` must be a traced array, not a Python int. As a Python int it is a
+    # STATIC argument to eqx.filter_jit, so incrementing it invalidates the
+    # compile cache on every call and the whole diffrax solve is re-traced each
+    # gradient step (measured: 6 calls -> 6 traces). As an array it compiles
+    # once. The arithmetic below is unchanged, bias correction included.
+    return {"step": jnp.zeros((), dtype=jnp.int32), "m": m, "v": v}
 
 
 def _adam_apply(params, grads, state, lr=1e-3, b1=0.9, b2=0.999, eps=1e-8, wd=0.0):
     state = dict(state)
-    state["step"] += 1
-    step = state["step"]
+    step = state["step"] + 1
+    state["step"] = step
 
     p_arrays, p_treedef = jax.tree_util.tree_flatten(
         eqx.filter(params, eqx.is_inexact_array)
@@ -370,8 +391,9 @@ def _adam_apply(params, grads, state, lr=1e-3, b1=0.9, b2=0.999, eps=1e-8, wd=0.
             continue
         m_new = b1 * m_i + (1 - b1) * g
         v_new = b2 * v_i + (1 - b2) * (g * g)
-        m_hat = m_new / (1 - b1 ** step)
-        v_hat = v_new / (1 - b2 ** step)
+        s_f = step.astype(m_new.dtype) if hasattr(step, "astype") else step
+        m_hat = m_new / (1 - b1 ** s_f)
+        v_hat = v_new / (1 - b2 ** s_f)
         update = lr * (m_hat / (jnp.sqrt(v_hat) + eps) + wd * p)
         new_p.append(p - update)
         new_m.append(m_new)
@@ -403,6 +425,8 @@ def _per_minute_split(
         random_state=seed,
     )
     data, target_col = prepare_sr_dataset(sampled)
+    if getattr(args, "raw_dataset", None):
+        data = attach_raw_perk(data, args.raw_dataset)
     data = data[data["marker"] == marker].copy()
     if data.empty:
         return None
@@ -410,7 +434,8 @@ def _per_minute_split(
     if data.empty:
         return None
 
-    feature_cols = [c for c in data.columns if c not in EXCLUDE_COLUMNS and c != target_col]
+    feature_cols = [c for c in data.columns
+                    if c not in EXCLUDE_COLUMNS and c != target_col and c != RAW_PERK_COL]
     if PERK_NAME not in feature_cols:
         return None
     exo_cols = [c for c in feature_cols if c != PERK_NAME]
@@ -763,6 +788,28 @@ def _train_marker(
 # Eval (rebuilds frames with predicted dt, runs same metrics as pipeline)
 # -----------------------------------------------------------------------------
 
+def _load_trained_rhs(
+    models_root: Path, marker: str, seed: int, bundle: Dict[str, object],
+) -> Optional[RHS]:
+    """Reload a checkpoint written with --save-models, shaped by its own metadata."""
+    base = models_root / f"seed_{seed}" / "models"
+    if not base.exists():
+        base = models_root / "models"
+    stem = re.sub(r"[^A-Za-z0-9_\-]+", "_", str(marker)).strip("_")
+    weights, meta_path = base / f"{stem}.eqx", base / f"{stem}.json"
+    if not (weights.exists() and meta_path.exists()):
+        return None
+    meta = json.loads(meta_path.read_text())
+    if int(meta["in_dim"]) != len(bundle["feature_cols"]):
+        raise SystemExit(
+            f"{marker} seed {seed}: checkpoint expects {meta['in_dim']} inputs but the rebuilt "
+            f"split has {len(bundle['feature_cols'])}; the two do not describe the same run")
+    skeleton = RHS(in_dim=int(meta["in_dim"]), hidden_dim=int(meta["hidden_dim"]),
+                   hidden_layers=int(meta["hidden_layers"]),
+                   activation=str(meta["activation"]), key=jax.random.PRNGKey(0))
+    return eqx.tree_deserialise_leaves(str(weights), skeleton)
+
+
 def _predict_dt_at_rows(
     rhs: RHS, bundle: Dict[str, object], trajs: List[Dict[str, np.ndarray]],
 ) -> List[np.ndarray]:
@@ -831,6 +878,7 @@ def _split_metrics(
     for tr, dt_p, roll in zip(trajs, dt_preds, rollouts):
         t = tr["t"]
         y = tr["y"]
+        y_eval = tr.get("y_eval", y)
         dt_obs = tr["dt_obs"]
         meas_mask = np.isin(t, measured)
         if meas_mask.sum() >= 2:
@@ -838,11 +886,11 @@ def _split_metrics(
             if np.isfinite(r2):
                 dt_r2_vals.append(max(0.0, r2))
             # Trajectory R² (Neural ODE rollout vs observed p-ERK)
-            r2_t = coefficient_of_determination(y[meas_mask], roll[meas_mask])
+            r2_t = coefficient_of_determination(y_eval[meas_mask], roll[meas_mask])
             if np.isfinite(r2_t):
                 traj_r2_vals.append(max(0.0, r2_t))
                 ode_r2_vals.append(max(0.0, r2_t))
-            rmse = float(np.sqrt(np.mean((y[meas_mask] - roll[meas_mask]) ** 2)))
+            rmse = float(np.sqrt(np.mean((y_eval[meas_mask] - roll[meas_mask]) ** 2)))
             if np.isfinite(rmse):
                 rmse_vals.append(rmse)
 
@@ -856,7 +904,7 @@ def _split_metrics(
                 state = state + dt_step * float(dt_p[j])
                 integ[j + 1] = state
             if meas_mask.sum() >= 2:
-                r2_i = coefficient_of_determination(y[meas_mask], integ[meas_mask])
+                r2_i = coefficient_of_determination(y_eval[meas_mask], integ[meas_mask])
                 if np.isfinite(r2_i):
                     integ_r2_vals.append(max(0.0, r2_i))
 
@@ -942,7 +990,15 @@ def main() -> None:
                 flush=True,
             )
             try:
-                rhs, info, history = _train_marker(marker, seed, args, bundle)
+                if args.eval_only:
+                    rhs = _load_trained_rhs(Path(args.eval_only), marker, seed, bundle)
+                    if rhs is None:
+                        print(f"[skip] seed={seed} marker={marker}: no checkpoint", flush=True)
+                        continue
+                    info, history = {"best_val_loss": float("nan"), "epochs_run": 0,
+                                     "wall_seconds": 0.0}, []
+                else:
+                    rhs, info, history = _train_marker(marker, seed, args, bundle)
             except Exception as exc:
                 import traceback
                 print(f"[err] seed={seed} marker={marker} training failed: {exc}", flush=True)

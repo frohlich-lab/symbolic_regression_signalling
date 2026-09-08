@@ -7,7 +7,7 @@ dependencies:
   - pandas
   - sympy
   - tqdm
-  - pysr
+  - pysr=1.5.9  # see RECORDED_VERSIONS.md; Julia backend pinned by envs/julia/Manifest.toml
   - matplotlib
   - scipy
   - pytorch # required for NN in pysr_regimes.py
