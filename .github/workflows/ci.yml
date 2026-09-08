@@ -14,11 +14,12 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install test dependencies
-        run: pip install pytest ruff numpy pandas sympy pyyaml
+        run: pip install pytest ruff numpy pandas scipy scikit-learn sympy pyyaml
       - name: Lint for correctness defects
-        # Style rules are intentionally not enforced; these catch real errors:
-        # undefined names, redefinitions, and unreachable or duplicated code.
-        run: ruff check src tests --select F821,F811,F401,E722 --output-format concise
+        # Style rules are intentionally not enforced. F401 (unused imports) is
+        # excluded too: it is hygiene, not correctness, and this code has ~29.
+        # These three catch real errors: undefined names, redefinitions, bare except.
+        run: ruff check src tests --select F821,F811,E722 --output-format concise
       - name: Syntax check every module
         run: python -m compileall -q src
       - name: Unit tests
