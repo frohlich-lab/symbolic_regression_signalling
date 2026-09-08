@@ -1,0 +1,36 @@
+{
+  "upload_type": "software",
+  "title": "symbolic_regression_signalling: code for \"Symbolic regression enables coarse-grained model discovery of intracellular signalling dynamics\"",
+  "description": "<p>Pipeline for discovering coarse-grained models of intracellular signalling dynamics by symbolic regression: synthetic enzyme-kinetics benchmarks, data degradation experiments, and symbolic-regression and sparse neural ODE models of ERK phosphorylation across cancer-relevant overexpression contexts.</p><p>Hyperparameter grids and per-context metrics reported in the paper are under <code>results/published/</code>. The experimental measurements analysed are not redistributed here; they are the mass cytometry data of Lun et al., available from Mendeley Data at https://doi.org/10.17632/3kh7ypz232.1 (CC BY 4.0).</p>",
+  "license": "MIT",
+  "access_right": "open",
+  "creators": [
+    {
+      "name": "de Pomereu, Theodore",
+      "affiliation": "The Francis Crick Institute, London, UK; Imperial College London, London, UK"
+    },
+    {
+      "name": "Fröhlich, Fabian",
+      "affiliation": "The Francis Crick Institute, London, UK"
+    }
+  ],
+  "keywords": [
+    "symbolic regression",
+    "coarse-graining",
+    "model discovery",
+    "intracellular signalling dynamics",
+    "cancer biology"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "10.64898/2026.08.20.745973",
+      "relation": "isSupplementTo",
+      "scheme": "doi"
+    },
+    {
+      "identifier": "10.17632/3kh7ypz232.1",
+      "relation": "references",
+      "scheme": "doi"
+    }
+  ]
+}

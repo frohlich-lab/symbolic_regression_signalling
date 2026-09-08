@@ -1,0 +1,13 @@
+Hyperparameter,Value,Arms,Median training R2,Median held-out R2,Contexts >= 0.6,Selected
+Max iterations,700,36,0.764,0.220,6,
+Max iterations,1400,36,0.795,0.305,6,yes
+Populations,30,36,0.721,0.186,6,yes
+Populations,60,36,0.801,0.345,6,
+Population size,30,36,0.776,0.182,6,yes
+Population size,60,36,0.778,0.327,6,
+Max complexity,18,24,0.733,0.146,6,
+Max complexity,22,24,0.776,0.287,6,
+Max complexity,26,24,0.819,0.349,7,yes
+Parsimony,0.1,24,0.821,0.235,6,
+Parsimony,0.8,24,0.817,0.330,6,yes
+Parsimony,3,24,0.652,0.172,6,

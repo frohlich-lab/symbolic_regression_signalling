@@ -5,7 +5,7 @@ data_old/
 # Superseded run outputs moved out of the gitignored data/ tree by
 # scripts/migrate_v5_layout.py. Multi-GB and not used by the manuscript; the
 # manifest at archive/superseded/README.md says what each directory was.
-archive/superseded/
+archive/
 .snakemake/
 model/
 src/dso
@@ -26,3 +26,8 @@ wandb/
 simulation_venv/
 **/__pycache__/
 outputs/
+# Curated result artefacts cited in the manuscript are version controlled even
+# though the rest of results/ is not (see results/published/README.md).
+!results/
+results/*
+!results/published/

@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite both the software and the paper."
+title: "symbolic_regression_signalling"
+abstract: >-
+  Pipeline for discovering coarse-grained models of intracellular signalling
+  dynamics by symbolic regression: synthetic enzyme-kinetics benchmarks, data
+  degradation experiments, and symbolic-regression and sparse neural ODE models
+  of ERK phosphorylation across cancer-relevant overexpression contexts.
+type: software
+authors:
+  - given-names: Theodore
+    family-names: "de Pomereu"
+    affiliation: "The Francis Crick Institute, London, UK; Department of Mathematics, Imperial College London, London, UK"
+  - given-names: Fabian
+    family-names: "Fröhlich"
+    affiliation: "The Francis Crick Institute, London, UK"
+    email: fabian.frohlich@crick.ac.uk
+repository-code: "https://github.com/frohlich-lab/symbolic_regression_signalling"
+license: MIT
+keywords:
+  - symbolic regression
+  - coarse-graining
+  - model discovery
+  - intracellular signalling dynamics
+  - cancer biology
+preferred-citation:
+  type: article
+  title: >-
+    Symbolic regression enables coarse-grained model discovery of intracellular
+    signalling dynamics
+  authors:
+    - given-names: Theodore
+      family-names: "de Pomereu"
+    - given-names: Fabian
+      family-names: "Fröhlich"
+  doi: "10.64898/2026.08.20.745973"
+  year: 2026
+  notes: "Preprint, bioRxiv"
