@@ -28,6 +28,8 @@ symbolic-regression and sparse neural ODE models of ERK phosphorylation across
 | `src/sr_models/` | Thin wrappers giving each SR method a common interface |
 | `envs/` | Conda environments, one per method (methods have conflicting dependencies) |
 | `results/published/` | Hyperparameter grids and per-context metrics reported in the paper — see the README there |
+| `sweeps/` | Search-space definitions for the W&B hyperparameter sweeps |
+| `simulation_requirements.txt` | pip requirements for the AMICI simulation stack used to generate the synthetic data; not installed by the workflow |
 | `tests/` | Unit tests |
 
 ## Data
@@ -54,6 +56,13 @@ regression backends have mutually incompatible dependencies:
 conda install -n base -c conda-forge mamba snakemake-minimal
 git clone https://github.com/frohlich-lab/symbolic_regression_signalling
 cd symbolic_regression_signalling
+```
+
+Generating the synthetic enzyme datasets additionally needs AMICI, which the
+workflow does not install. Create that environment separately:
+
+```bash
+pip install -r simulation_requirements.txt
 ```
 
 Julia is not installed separately — PySR provisions it through `juliapkg`. The
