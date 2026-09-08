@@ -31,6 +31,7 @@ symbolic-regression and sparse neural ODE models of ERK phosphorylation across
 | `sweeps/` | Search-space definitions for the W&B hyperparameter sweeps |
 | `simulation_requirements.txt` | pip requirements for the AMICI simulation stack used to generate the synthetic data; not installed by the workflow |
 | `tests/` | Unit tests |
+| `docs/` | Figure-and-table map, preregistration, cluster runbook — see `docs/README.md` |
 
 ## Data
 
@@ -105,6 +106,12 @@ SymbolicRegression.jl, pinned exactly by `envs/julia/Manifest.toml`. The conda
 environment files specify Python dependencies loosely, so
 `envs/RECORDED_VERSIONS.md` records the versions actually installed when the
 published results were produced, and how to export exact locks.
+
+## Which code made which figure
+
+`docs/FIGURE_MAP.md` maps every figure and table in the paper to the rule or
+script that produces it, and notes which panels are drawn by hand rather than
+generated.
 
 ## Citing
 
