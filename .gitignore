@@ -48,3 +48,8 @@ docs/experimental_provenance.md
 docs/CHANGELOG_v5_to_new.md
 docs/sr_comparison_results.md
 docs/figures/
+
+# Manuscript prose drafts: kept locally, never archived
+docs/draft_*.md
+docs/RESULTS_paragraph_final.md
+docs/WRITING_PACKET_frozen_config.md
