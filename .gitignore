@@ -42,3 +42,9 @@ notebooks/*.ipynb
 docs/*.docx
 __pycache__/
 *.pyc
+
+# Superseded analysis notes: kept locally, not archived
+docs/experimental_provenance.md
+docs/CHANGELOG_v5_to_new.md
+docs/sr_comparison_results.md
+docs/figures/

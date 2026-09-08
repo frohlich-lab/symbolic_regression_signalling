@@ -1,7 +1,9 @@
 # Figure and table map
 
 Which code produces each figure and table in the paper. Compiled by tracing the
-Snakemake rules and figure scripts in this repository.
+Snakemake rules and figure scripts in this repository. Nothing here is taken
+from earlier analysis notes; where a mapping could not be established from the
+code it is not listed.
 
 Figures 1–5 are **composites assembled by hand** from the component plots listed
 below; the panel schematics (Fig. 1A, Fig. 2A–B/D, Fig. 4A–B, the Fig. 3C table)
@@ -12,7 +14,7 @@ are drawn in a vector editor, not generated. Only the data panels come from code
 | Paper item | Produced by | Component outputs |
 |---|---|---|
 | Fig. 1A | drawn by hand | — |
-| Fig. 1B | `workflow/rules/sr_comparison.smk` → `src/pipelines/sr_comparison/` | `integrated_results_plot.png`, complexity-vs-accuracy plot (`docs/figures/sr_complexity_vs_accuracy_two_step_enzyme.png`) |
+| Fig. 1B | `workflow/rules/sr_comparison.smk` → `src/pipelines/sr_comparison/` | `integrated_results_plot.png` |
 | Fig. 2A, 2B, 2D | drawn by hand | — |
 | Fig. 2C | `sr_comparison.smk` across enzyme mechanisms and settings | `all_pysr_formulas.txt` per mechanism |
 | Fig. 3A | `src/pipelines/regimes/{noise,dataset_size,mm_deviation}_regimes.py` | `log_mae_*_lineplot.png`, `error_landscape.png` |

@@ -1,27 +1,16 @@
 # docs
 
-## Current
+| File | Contents | Basis |
+|---|---|---|
+| `FIGURE_MAP.md` | Which rule or script produces each figure and table in the manuscript | Traced from the Snakemake rules and figure scripts in this repository |
+| `preregistration/2026-08-11_gated_complexity_test.md` | Pre-registered specification of the gated complexity comparison (Fig. 4E–F) | Written before the analysis was run |
+| `nemo_sr_benchmark_runbook.md` | Operational notes for running the benchmark on the NEMO cluster | Operational only; makes no claims about results |
 
-| File | Contents |
-|---|---|
-| `FIGURE_MAP.md` | Which code produces each figure and table in the submitted manuscript |
-| `preregistration/2026-08-11_gated_complexity_test.md` | Pre-registered specification of the gated complexity comparison (Fig. 4E–F) |
-| `nemo_sr_benchmark_runbook.md` | Running the symbolic-regression benchmark on the NEMO cluster |
-| `sr_comparison_results.md` | Recorded results of the four-method benchmark |
+Earlier analysis notes written against draft v5 are deliberately **not** kept
+here. They recorded interpretations that the final analysis superseded — context
+counts and benchmark errors that do not match the submitted manuscript — and a
+reader finding them alongside the paper would be misled about which numbers
+stand.
 
-## Historical
-
-Written against **draft v5**, kept for provenance. Figure and table numbers in
-these files do not match the submitted manuscript — `experimental_provenance.md`
-refers to a `Fig. S4` and `Fig. S5` that the current SI does not contain. Use
-`FIGURE_MAP.md` for the current mapping.
-
-| File | Contents |
-|---|---|
-| `experimental_provenance.md` | How the v5 experimental results were produced, the frozen configuration, and corrections applied during analysis |
-| `CHANGELOG_v5_to_new.md` | What changed between v5 and the current analysis |
-
-## Figures
-
-`figures/` holds two plots referenced from the benchmark results notes, not
-manuscript figures.
+The authoritative sources are the preregistration, the code in this repository,
+and the result artefacts under `results/published/`.
