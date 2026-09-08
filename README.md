@@ -59,6 +59,20 @@ git clone https://github.com/frohlich-lab/symbolic_regression_signalling
 cd symbolic_regression_signalling
 ```
 
+### Platform requirements
+
+The PySR and neural ODE strands run on any platform. The **four-method benchmark
+(Fig. 1) requires x86 Linux** and will not build on Apple Silicon: AI-Feynman
+compiles Fortran extensions through `numpy.distutils` (removed in numpy 2.x, so
+that environment also needs `numpy<2`), and DSO depends on TensorFlow 1.14 with
+Python 3.7. Both build cleanly on x86 Linux only.
+
+DSO additionally needs its source fetched before the run:
+
+```bash
+bash scripts/setup_dso.sh
+```
+
 Generating the synthetic enzyme datasets additionally needs AMICI, which the
 workflow does not install. Create that environment separately:
 
