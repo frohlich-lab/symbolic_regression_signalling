@@ -126,9 +126,11 @@ if enzyme_model != "experimental":
             valid=f"data/{enzyme_model}/{data_type}/raw/val_data.csv"
         shell:
             """
-            source amici_env/bin/activate 
+            # amici_env/ is a local virtualenv and is not in the repository.
+            # Use it when present; otherwise rely on the ambient interpreter,
+            # which needs simulation_requirements.txt installed (see README).
+            if [ -f amici_env/bin/activate ]; then . amici_env/bin/activate; fi
             python src/synthetic/generate_data.py {enzyme_model} {data_type}
-            deactivate
             """
 
     rule preprocessing_model:
@@ -577,7 +579,8 @@ rule nn_grid_search:
         echo "Using previously determined NN hyperparameters." > {output.report}
         """
 
-PAN_PLOT_VARIANTS = ["sqssa", "tqssa"]
+# Must match variant_keys (from SR_VARIANTS), which the default targets use.
+PAN_PLOT_VARIANTS = list(variant_keys)
 
 rule pan_enzyme_model_plots:
     input:

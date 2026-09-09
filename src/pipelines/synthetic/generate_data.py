@@ -12,7 +12,6 @@ import bionetgen as bng
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src' / 'utils'))
 from seeding import seed_everything
 
 from data_conf import N_SAMPLES, N_T, PAR_LB, PAR_UB
