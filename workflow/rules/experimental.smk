@@ -195,9 +195,10 @@ if enzyme_model == "experimental":
 
     rule experimental_pysr_ood_summary:
         # The reported success rates and the Fig. 5 exemplar ranking. A context counts
-        # as solved only if the same fit clears the threshold on both the training doses
-        # and the held-out ones -- see the module docstring for why the "both" clause
-        # does real work.
+        # as solved when the retained fit clears R2 >= 0.6 on the held-out GFP bins;
+        # the training bins are not part of the criterion. The seed is chosen on
+        # training R2, so seed selection never touches held-out data. This matches
+        # Table S8 and the manuscript, which score the median across test bins.
         input:
             metrics=pysr_final_metrics
         output:
