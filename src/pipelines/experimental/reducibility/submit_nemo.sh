@@ -31,7 +31,9 @@
 set -euo pipefail
 
 STEP="${1:-all}"
-REPO="${REPO:-/nemo/lab/froehlichf/home/users/pomeret/symbolic_regression_signalling}"
+# Repository root: derived from this script's own location, so the script is
+# portable. Override with REPO=... to run against a different checkout.
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)}"
 # sr_metrics2 is the env built for the ODE metrics work: jax[cpu] + diffrax +
 # equinox + scikit-learn. pysr_env predates those and cannot run these scripts.
 ENV_NAME="${ENV_NAME:-sr_metrics2}"
